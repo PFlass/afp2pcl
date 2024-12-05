@@ -1,0 +1,339 @@
+//FLASSW   JOB  (),'WIDTAB',CLASS=J,MSGCLASS=Z,                         00000113
+//         NOTIFY=$                                                     00000200
+//*                                                                     00000300
+//*                                                                     00000400
+//********************************************************************* 00000500
+//*                PL/I COMPILE AND LINK                              * 00000600
+//********************************************************************* 00000700
+// EXEC PLIXCL,                                                         00000800
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,NEST,LANGLVL(SPROG)',              00001013
+//   PARM.LKED='LIST,MAP,XREF,RENT,NCAL'                                00001103
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00001200
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00001303
+//PLI.SYSIN    DD *                                                     00001600
+ /* WIDTAB - Font Library Process                                    */ 00001700
+                                                                        00001800
+ /********************************************************************/ 00001900
+ /*                                                                  */ 00002000
+ /*    Module ID: WIDTAB                                             */ 00002100
+ /*                                                                  */ 00002200
+ /*    Author:    Peter Flass                                        */ 00002300
+ /*               NYS LBDC                                           */ 00002400
+ /*               Dec 1997                                           */ 00002500
+ /*                                                                  */ 00002600
+ /*    Function:  Read width tables for AFP 300-pel font.            */ 00002700
+ /*                                                                  */ 00002800
+ /*    Modifications:                                                */ 00002900
+ /*      27 Sep 2002 - Add max descender.                         PRF*/ 00003016
+ /*      15 Jul 1998 - Add maximum baseline extent                PRF*/ 00003116
+ /*      14 Jul 1998 - Fix maximum baseline offset                PRF*/ 00003216
+ /*       4 May 1998 - Add maximum baseline offset                PRF*/ 00003316
+ /*      16 Apr 1998 - Add 'display' point size                   PRF*/ 00003416
+ /*                                                                  */ 00003516
+ /********************************************************************/ 00003616
+                                                                        00003716
+ WIDTAB: proc(aparm,fname) options( reentrant ) returns( ptr );         00003816
+                                                                        00003916
+ dcl     fname               char(8);                                   00004016
+                                                                        00004116
+ dcl    (has_ext,has_pad)    bit(1);                                    00004300
+                                                                        00004400
+ dcl     rc                  fixed bin(31);                             00004500
+ dcl     rec_length          fixed bin(15);                             00004600
+ dcl     save_sf_len         fixed bin(15);                             00004700
+ dcl    (j,k,l)              fixed bin(15);                             00004800
+ dcl    (xs,xe,xc)           ptr;                                       00004900
+ dcl     re                  ptr;                                       00005000
+ dcl     done                bit(1)              init( '0'b );          00005100
+ dcl     psz                 pic'Z9';                                   00005206
+                                                                        00005300
+ dcl   1 codepg       (0:255)char(8);                                   00005400
+                                                                        00006000
+ dcl     wtp                 ptr;                                       00006200
+                                                                        00006400
+ dcl     oneb                bit(8)              based,                 00006500
+         twob                bit(16)             based,                 00006600
+         threeb              bit(24)             based,                 00006700
+         fourb               bit(32)             based;                 00006800
+ dcl     zovl                char(32767)         based;                 00006900
+                                                                        00007000
+ /* --------------------------------- */                                00007100
+ /*  Structured field identification  */                                00007200
+ /* --------------------------------- */                                00007300
+ dcl   sfid                  char(3);                                   00007400
+ dcl 1 save_sf_desc_info     char(48),                                  00007500
+     1 fil                   defined save_sf_desc_info,                 00007600
+       5 save_sf_id          char(5),                                   00007700
+       5 fil                 char(1),                                   00007800
+       5 save_sf_desc        char(42);                                  00007900
+                                                                        00008000
+ dcl   afptrace              entry( char(3) ) returns( char(48) );      00012000
+                                                                        00012400
+ %include pclincl;                                                      00012500
+                                                                        00012600
+ %include builtins;                                                     00012700
+                                                                        00012800
+ %page;                                                                 00012900
+ %include(afpsf);                                                       00013000
+ %page;                                                                 00013100
+                                                                        00014300
+ rc = widthtab_read( 'F', addr(fname) ); /* Find PDS member for font */ 00014500
+ if rcª=0 then return( null() );                                        00014700
+                                                                        00014800
+ call load_codepage;                   /* EBCDIC Codepage 1047       */ 00014900
+ allocate widths set(wtp);             /* Allocate width tbl storage */ 00015000
+ substr( wtp->zovl, 1, cstg(wtp->widths) ) =                            00015100
+     repeat( '00'x, cstg(wtp->widths)-1 );                              00015200
+                                                                        00015300
+ call read_f300;                       /* Read first font AFP record */ 00015400
+ if xs = null() then return( null() ); /* Read error - no data       */ 00015500
+                                                                        00015600
+ do while(done='0'b);                                                   00015700
+                                                                        00015800
+   save_sf_len = sff.sf_len;                                            00015900
+   sfid        = sff.sf_id;                                             00016000
+   save_sf_desc_info = afptrace(sfid);                                  00016100
+   has_ext = substr(sf_flag,1,1);                                       00016200
+   has_pad = substr(sf_flag,5,1);                                       00016300
+                                                                        00016400
+   /*---------------------------------*/                                00016500
+   /*    Point to data start and end  */                                00016600
+   /*---------------------------------*/                                00016700
+   xe = sfp + save_sf_len - 1;                                          00016800
+   sfp = addr(sff_end);                                                 00016900
+   if has_ext then sfp = sfp + sfel;                                    00017000
+   if has_pad then do;                                                  00017100
+     if xe->onebª='00'X then xe = xe - xe->oneb;                        00017200
+     else do;                                                           00017300
+       xe = xe - 1;                                                     00017400
+       xe = xe - xe->twob;                                              00017500
+       end; /* else */                                                  00017600
+     end; /* has_pad */                                                 00017700
+                                                                        00018000
+   if save_sf_id = 'FND  '             /* Font Descriptor            */ 00018507
+   then call process_fnd;                                               00018607
+   if save_sf_id = 'FNI  '             /* Font Index                 */ 00019100
+   then call process_fni;                                               00019200
+   if save_sf_id = 'FNO  '             /* Font Orientation           */ 00019307
+   then call process_fno;                                               00019407
+   if save_sf_id = 'FNP  '             /* Font Orientation     020927*/ 00019516
+   then call process_fnp;              /*                      020927*/ 00019616
+                                                                        00019716
+   /*---------------------------------*/                                00019816
+   /*    Point to next struc. field   */                                00019916
+   /*---------------------------------*/                                00020016
+   xc = xc + save_sf_len;                                               00020116
+   sfp = xc;                                                            00020216
+   if xc>=re then do;                                                   00020316
+     call read_f300;                                                    00020416
+     if xs = null() then done='1'b;                                     00020516
+     end; /* do */                                                      00020616
+                                                                        00020716
+   end; /* do while */                                                  00020816
+                                                                        00025300
+ return( wtp );                                                         00025400
+                                                                        00030007
+ %page;                                                                 00031007
+ /********************************************************************/ 00032007
+ /*   Process FND structured field ('D3A689'x)                       */ 00033007
+ /*          "Font Descriptor"                                       */ 00034007
+ /********************************************************************/ 00035007
+                                                                        00036007
+ process_fnd: procedure;                                                00037007
+   dcl   weight           (9)char(12)            static                 00038007
+         init(                                                          00038107
+              'Ultra_Light',                                            00038207
+              'Extra-Light',                                            00038307
+              'Light',                                                  00038407
+              'Semi-Light',                                             00038507
+              'Medium',                                                 00038607
+              'Semi-Bold',                                              00038707
+              'Bold',                                                   00038807
+              'Extra-Bold',                                             00038907
+              'Ultra-Bold'                                              00039007
+             );                                                         00039107
+                                                                        00039207
+   wtp->w_facename   = fnd_face;                                        00039307
+   wtp->w_size = floor(fnd_nps / 10);                                   00039407
+   psz = wtp->w_size;                                      /*PF980416*/ 00039507
+   wtp->w_size_c = psz;                                    /*PF980416*/ 00039607
+   wtp->w_weight     = weight(fnd_wgt);                                 00039707
+   if substr(fnd_flags1,1,1)='1'b                                       00039807
+   then wtp->w_style = 'Italic  ';                                      00039907
+   else wtp->w_style = 'Roman   ';                                      00040007
+                                                                        00040107
+ end process_fnd;                                                       00040207
+                                                                        00041000
+ %page;                                                                 00043000
+ /********************************************************************/ 00043100
+ /*   Process FNO structured field ('D3AE89'x)                       */ 00043200
+ /*          "Font Orientation"                                      */ 00043300
+ /********************************************************************/ 00043400
+                                                                        00043500
+ process_fno: procedure;                                                00043600
+ dcl     rot                 fixed bin(15);                             00043800
+                                                                        00044600
+   do while('1'b);                                                      00044700
+     if sfp>xe then leave;                                              00044800
+     rot = (addr(fno_rot)->oneb)*2;                                     00045000
+     if      rot=0   then rot=1;                                        00045100
+     else if rot=90  then rot=2;                                        00045200
+     else if rot=180 then rot=3;                                        00045300
+     else if rot=270 then rot=4;                                        00045400
+     wtp->w_baseline_offset(rot) =                         /*PF980504*/ 00045507
+         R2P( (fno_blo), (wtp->w_size) );                  /*PF980714*/ 00045710
+     wtp->w_baseline_extent(rot) =                         /*PF980715*/ 00045811
+         R2P( (fno_mbe), (wtp->w_size) );                  /*PF980715*/ 00045911
+     wtp->w_char_incr(rot)       =                                      00046007
+         R2P( (fno_inc), (wtp->w_size) );                               00046109
+     wtp->w_var_space(rot)       =                                      00046207
+         R2P( (fno_vsi), (wtp->w_size) );                               00046309
+     wtp->w_em_space(rot)        =                                      00046407
+         R2P( (fno_em),       (wtp->w_size) );                          00046509
+     wtp->w_fig_space(rot)       =                                      00046607
+         R2P( (fno_fsp), (wtp->w_size) );                               00046709
+     if substr(fno_flags,8,1)='1'b                                      00046800
+     then wtp->w_flags(rot) = '81'bx;                                   00046900
+     else wtp->w_flags(rot) = '01'bx;                                   00047000
+     sfp = addr(fno_next);                                              00047100
+   end; /* do while */                                                  00047200
+                                                                        00048000
+ end process_fno;                                                       00048400
+                                                                        00048516
+ %page;                                                                 00048616
+ /********************************************************************/ 00048716
+ /*   Process FNP structured field ('D3AC89'x)                       */ 00048816
+ /*          "Font Position"                                         */ 00048916
+ /*   (Procedure added 27 Sep, 2002)                                 */ 00049016
+ /********************************************************************/ 00049116
+                                                                        00049216
+ process_fnp: procedure;                                                00049316
+                                                                        00052016
+   wtp->w_max_descender = fnp_mxd;                                      00052116
+                                                                        00052216
+ end process_fnp;                                                       00052316
+                                                                        00052416
+ %page;                                                                 00052516
+ /********************************************************************/ 00052616
+ /*   Process FNI structured field ('D38C89'x)                       */ 00052716
+ /*          "Font Index"                                            */ 00052816
+ /********************************************************************/ 00052916
+                                                                        00053016
+ process_fni: procedure;                                                00053116
+ dcl     code                fixed bin(15);                             00053216
+                                                                        00053316
+   if wtp->w_num>=4 then return;       /* *** Invalid FNI index      */ 00053416
+   wtp->w_num = wtp->w_num + 1;                                         00053516
+                                                                        00053616
+   do while('1'b);                                                      00053716
+     if sfp>xe then leave;                                              00053816
+     code = gcid_lookup(fni_gcid);                                      00053916
+     if code>=0 then wtp->width(wtp->w_num,code) =                      00054016
+         R2P( (fni_chi), (wtp->w_size) );                               00054116
+     sfp = addr(fni_next);                                              00054500
+   end; /* do while */                                                  00054600
+                                                                        00054900
+ end process_fni;                                                       00055000
+                                                                        00108400
+ %page;                                                                 00108500
+ /********************************************************************/ 00108600
+ /*   Find GCID in codepage                                          */ 00108700
+ /********************************************************************/ 00108800
+                                                                        00108900
+ gcid_lookup: proc(g) returns( fixed bin(15) )                          00109000
+                      options( reentrant );                             00109100
+ dcl     g                   char(8);                                   00109200
+ dcl     i                   fixed bin(15);                             00109900
+                                                                        00111800
+   do i=1 to hbound(codepg,1);                                          00111900
+     if g=codepg(i) then return(i);                                     00112000
+     end;                                                               00112100
+   return( lbound(codepg,1) - 1 );                                      00113300
+                                                                        00113500
+ end gcid_lookup;                                                       00113600
+                                                                        00113700
+ /********************************************************************/ 00113800
+ /*   Convert relative font metrics to pels at 300DPI                */ 00113900
+ /*   Pels = (relative_metric * pels_per_inch * point_size)/72000    */ 00114015
+ /********************************************************************/ 00114100
+                                                                        00114200
+ R2P: proc(m,p) returns( fixed bin(15) );                               00114309
+ dcl    (m,p,r)              fixed bin(15);                             00114400
+ dcl     z                   fixed bin(31);                             00114500
+                                                                        00114600
+   z = m * p * 300;                                                     00114700
+   r = floor( z / 72000 );             /* Was 'ceil()'       PF000121*/ 00114815
+   return(r);                                                           00114900
+                                                                        00115000
+ end R2P;                                                               00116009
+                                                                        00117800
+ %page;                                                                 00117900
+ /********************************************************************/ 00118000
+ /*   Load Codepage Data                                             */ 00118100
+ /********************************************************************/ 00118200
+                                                                        00118300
+ load_codepage: proc;                                                   00118400
+ dcl     i                   fixed bin(15);                             00118500
+ dcl     p                   ptr,                                       00118600
+       1 cpe                 unaligned based(p),                        00118700
+         5 gcid              char(8),                                   00118800
+         5 codepoint         bit(8);                                    00118900
+                                                                        00119000
+ codepg = ' ';                                                          00119100
+ do i=1 to hbound(codepage_1047,1);                                     00119200
+   p = addr(codepage_1047(i));                                          00119300
+   codepg(codepoint) = gcid;                                            00119400
+   end; /* do i */                                                      00119600
+                                                                        00119700
+ %include CP1047;                                                       00119800
+ %include CP219;                                                        00119900
+                                                                        00120000
+ end load_codepage;                                                     00120100
+                                                                        00120200
+ %page;                                                                 00120300
+ /*-----------------------------------*/                                00120400
+ /*    Read record from f300          */                                00120500
+ /*-----------------------------------*/                                00121000
+ read_f300: procedure;                                                  00130000
+ dcl     cc                  char(1)             based(xs);             00140000
+ dcl     vrlp                ptr,                                       00140100
+       1 vrl                 unaligned based(vrlp),                     00140200
+         5 vrl_ll            fixed bin(15),                             00140300
+         5 vrl_bb            fixed bin(15);                             00140400
+                                                                        00141000
+ rc = widthtab_read( 'R', xs );                                         00141100
+ if rc = -1 then do;                                                    00141200
+   done='1'b;                                                           00141400
+   return;                                                              00141500
+   end; /* do */                                                        00141600
+ if rc ª= 0 then do;                                                    00141700
+   xs = null() ;                                                        00141900
+   return;                                                              00142000
+   end; /* do */                                                        00142100
+ vrlp = xs - 4;                                                         00142200
+ rec_length = vrl_ll - 4;                                               00143000
+ if cc ª= '5A'x then do;                                                00144000
+   xs = null() ;                                                        00145000
+   return;                                                              00147100
+   end; /* do */                                                        00147200
+ re = xs + rec_length - 1;                                              00147300
+ xc = xs;                                                               00147400
+ sfp = xs + 1;                                                          00147500
+                                                                        00147600
+ end read_f300;                                                         00147700
+                                                                        00147800
+ %include hex;                                                          00148400
+                                                                        00148500
+ end WIDTAB;                                                            00148700
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00148800
+//LKED.SYSLIB DD                                                        00148900
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    00149103
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        00149203
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      00149300
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       00149403
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00149500
+//LKED.SYSIN DD *                                                       00149600
+ MODE AMODE(31)                                                         00149700
+ MODE RMODE(ANY)                                                        00149800
+ NAME WIDTAB(R)                                                         00149900
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00150000

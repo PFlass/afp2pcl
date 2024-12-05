@@ -1,0 +1,1063 @@
+//FLASSF   JOB  (),'P3002PCL',CLASS=J,MSGCLASS=Z,                       00010035
+//         NOTIFY=$                                                     00020000
+//*                                                                     00030000
+//*                                                                     00040000
+//********************************************************************* 00050000
+//*                PL/I COMPILE AND LINK                              * 00060000
+//********************************************************************* 00070000
+// EXEC PLIXCL,                                                         00080000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00090004
+//   PARM.LKED='LIST,MAP,XREF'                                          00100000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120036
+//PLI.SYSIN    DD *                                                     00130000
+ /* P3002PCL - Font Library Process                                  */ 00140035
+                                                                        00150000
+ /********************************************************************/ 00160000
+ /*                                                                  */ 00170000
+ /*    Module ID: P3002PCL                                           */ 00180035
+ /*                                                                  */ 00190001
+ /*    Author:    Peter Flass                                        */ 00200004
+ /*               NYS LBDC                                           */ 00210004
+ /*               April, 1992 - May, 1996                            */ 00220004
+ /*                                                                  */ 00230001
+ /*    Function:  AFP font interpretation/manipulation.              */ 00240004
+ /*               Convert AFP 300-pel font to PCL.                   */ 00250025
+ /*                                                                  */ 00260029
+ /*    Modifications:                                                */ 00270029
+ /*         5 Jun 2000 - Fix character pattern print.             PRF*/ 00280041
+ /*        26 Apr 1998 - Name changes in FNC_BB and HPFONT.       PRF*/ 00290041
+ /*        30 Oct 1996 - Fix problems with kerned fonts.          PRF*/ 00300041
+ /*                                                                  */ 00310041
+ /********************************************************************/ 00320041
+                                                                        00330041
+ P3002PCL: proc(parm) options(main);                                    00340041
+                                                                        00350041
+ dcl     parm                char(100)           varying;               00360041
+                                                                        00370041
+ dcl     fontlib             record input;                              00380041
+ dcl     sysprint            print;                                     00390041
+                                                                        00400041
+ dcl     eof                 bit(1)              init('0'b);            00410041
+ dcl     pchar               bit(1)              init('0'b);            00420041
+                                                                        00430041
+ dcl    (has_ext,has_pad)    bit(1);                                    00440041
+                                                                        00450041
+ dcl     rec_length          fixed bin(15);                             00460004
+ dcl     save_sf_len         fixed bin(15);                             00470004
+ dcl     j                   fixed bin(15);                             00480004
+ dcl    (xs,xe,xc)           ptr;                                       00490008
+ dcl     re                  ptr;                                       00500008
+                                                                        00510011
+ dcl   1 codepg       (0:255)char(8);                                   00520023
+                                                                        00530023
+ dcl     oneb                bit(8)              based,                 00540011
+         twob                bit(16)             based,                 00550011
+         threeb              bit(24)             based,                 00560011
+         fourb               bit(32)             based;                 00570011
+ dcl     zovl                char(32767)         based;                 00580020
+                                                                        00590011
+ /* --------------------------------- */                                00600028
+ /*  Structured field identification  */                                00610028
+ /* --------------------------------- */                                00620028
+ dcl   sfid                  char(3);                                   00630028
+ dcl 1 save_sf_desc_info     char(48),                                  00640028
+     1 fil                   defined save_sf_desc_info,                 00650028
+       5 save_sf_id          char(5),                                   00660028
+       5 fil                 char(1),                                   00670028
+       5 save_sf_desc        char(42);                                  00680028
+                                                                        00690011
+ /*-----------------------------------*/                                00700008
+ /* pointers to in-storage font data  */                                00710008
+ /*-----------------------------------*/                                00720008
+ dcl     fcp                 ptr; /* -> font control data       */      00730019
+ dcl     fcl                 fixed bin(31);      /* # pages     */      00740019
+ dcl     fdp                 ptr; /* -> font descriptor data    */      00750019
+ dcl     fdl                 fixed bin(31);      /* # pages     */      00760019
+ dcl     fmp                 ptr; /* -> font patterns map data  */      00770019
+ dcl     fml                 fixed bin(31);      /* # pages     */      00780019
+ dcl    (fni0p,fni90p,fni180p,fni270p)                                  00790008
+                             ptr; /* -> fni groups              */      00800008
+ dcl     fnl                 fixed bin(31);      /* # pages     */      00810010
+ dcl     fop                 ptr; /* -> font orientation        */      00820009
+ dcl     fol                 fixed bin(31);      /* # pages     */      00830010
+ dcl     fpp                 ptr; /* -> font position           */      00840009
+ dcl     fpl                 fixed bin(31);      /* # pages     */      00850010
+ dcl    (rpp,rpx)            ptr; /* -> raster pattern storage  */      00860019
+ dcl     rpl                 fixed bin(31);      /* bytes       */      00870029
+ dcl     tol                 fixed bin(31)       init(0);               00880028
+                                                                        00890001
+ /*-----------------------------------*/                                00900011
+ /*    Miscellaneous font data        */                                00910011
+ /*-----------------------------------*/                                00920011
+ dcl 1 font_data             unaligned,                                 00930004
+       5 pdaa      fixed bin(15)  init(0),       /* pattern alignment*/ 00940009
+       5 patt_cnt  fixed bin(15)  init(0),       /* # of patterns    */ 00950011
+       5 nom_pt_sz fixed bin(15)  init(0),       /* Nominal point sz */ 00960017
+       5 flags     unaligned,                                           00970011
+         10 relative                             /* relative metrics */ 00980017
+                   bit(1)         init('0'b),                           00990017
+         10 uniform_baseline_offset                                     01000017
+                   bit(1)         init('0'b),                           01010011
+         10 fil0   bit(6)         init( (6)'0'b );                      01020020
+                                                                        01030001
+ dcl   afptrace              entry( char(3) ) returns( char(48) );      01040028
+ dcl   recl                  entry(*) returns( fixed bin(31) );         01050004
+ dcl   pgalloc               entry( fixed bin(31) )                     01060008
+                             returns( ptr );                            01070008
+                                                                        01080008
+ %include builtins;                                                     01090028
+                                                                        01100000
+ %page;                                                                 01110004
+ %include(afpsf);                                                       01120004
+ %page;                                                                 01130004
+ on endfile(fontlib) eof='1'b;                                          01140004
+                                                                        01150000
+ if index(parm,'patterns')>0 | index(parm,'PATTERNS')>0                 01160028
+ then pchar='1'b;                                                       01170028
+                                                                        01180028
+ call load_codepage;         /* ASCII Code Page to use               */ 01190023
+                                                                        01200023
+ open file(fontlib) input;                                              01210004
+ call read_fontlib;          /* Read first fontlib record            */ 01220004
+                                                                        01230000
+ do while(eof='0'b);                                                    01240004
+                                                                        01250001
+   save_sf_len = sff.sf_len;                                            01260004
+   sfid        = sff.sf_id;                                             01270028
+   save_sf_desc_info = afptrace(sfid);                                  01280028
+   put skip edit(save_sf_desc_info)(a);                                 01290028
+   has_ext = substr(sf_flag,1,1);                                       01300004
+   has_pad = substr(sf_flag,5,1);                                       01310004
+                                                                        01320004
+   /*---------------------------------*/                                01330004
+   /*    Point to data start and end  */                                01340004
+   /*---------------------------------*/                                01350004
+   xe = sfp + save_sf_len - 1;                                          01360004
+   sfp = addr(sff_end);                                                 01370004
+   if has_ext then sfp = sfp + sfel;                                    01380004
+   if has_pad then do;                                                  01390004
+     if xe->onebª='00'X then xe = xe - xe->oneb;                        01400004
+     else do;                                                           01410004
+       xe = xe - 1;                                                     01420004
+       xe = xe - xe->twob;                                              01430004
+       end; /* else */                                                  01440004
+     end; /* has_pad */                                                 01450004
+                                                                        01460004
+   /* -------------------------------------------------------------     01470004
+   put skip edit('----> ',save_sf_desc)(a);                             01480004
+   put skip edit( 'Start ', quothex(hex(addr(xc),4)) )(a);              01490004
+   put skip edit( 'End   ', quothex(hex(addr(xe),4)) )(a);              01500004
+   put skip edit( 'Len   ', quothex(hex(addr(save_sf_len),2)) )(a);     01510004
+   put      edit( ' (',save_sf_len,')')(a,p'zzz9',a);                   01520004
+   put skip;                                                            01530004
+   ------------------------------------------------------------- */     01540004
+                                                                        01550004
+   if save_sf_id = 'FND  '             /* Font Descriptor            */ 01560028
+   then call process_fnd;                                               01570006
+   if save_sf_id = 'FNC  '             /* Font Control               */ 01580028
+   then call process_fnc;                                               01590006
+   if save_sf_id = 'FNM  '             /* Font Patterns Map          */ 01600028
+   then call process_fnm;                                               01610006
+   if save_sf_id = 'FNO  '             /* Font Orientation           */ 01620028
+   then call process_fno;                                               01630006
+   if save_sf_id = 'FNP  '             /* Font Position              */ 01640028
+   then call process_fnp;                                               01650006
+   if save_sf_id = 'FNI  '             /* Font Index                 */ 01660028
+   then call process_fni;                                               01670006
+   if save_sf_id = 'FNG  '             /* Font Raster Patterns       */ 01680028
+   then call process_fng;                                               01690006
+                                                                        01700000
+   /*---------------------------------*/                                01710004
+   /*    Point to next struc. field   */                                01720004
+   /*---------------------------------*/                                01730004
+   xc = xc + save_sf_len;                                               01740004
+   sfp = xc;                                                            01750004
+   if xc>=re then call read_fontlib;                                    01760004
+                                                                        01770001
+   end; /* do while */                                                  01780004
+                                                                        01790000
+ put skip(2) edit( 'Total dynamic storage required ',tol*4096,          01800020
+                   ' bytes.' )                                          01810011
+                 (a,f(9),a);                                            01820011
+                                                                        01830025
+ call build_font;                                                       01840025
+                                                                        01850008
+ return;                                                                01860008
+                                                                        01870008
+ %page;                                                                 01880004
+ /********************************************************************/ 01890004
+ /*   Process FND structured field ('D3A689'x)                       */ 01900006
+ /*          "Font Descriptor"                                       */ 01910006
+ /********************************************************************/ 01920004
+                                                                        01930004
+ process_fnd: procedure;                                                01940006
+   dcl   weight           (9)char(12)  varying static                   01950006
+         init(                                                          01960006
+              'Ultra_Light',                                            01970006
+              'Extra-Light',                                            01980006
+              'Light',                                                  01990006
+              'Semi-Light',                                             02000006
+              'Medium',                                                 02010006
+              'Semi-Bold',                                              02020006
+              'Bold',                                                   02030006
+              'Extra-Bold',                                             02040006
+              'Ultra-Bold'                                              02050006
+             );                                                         02060006
+   dcl   width            (9)char(16)  varying static                   02070006
+         init(                                                          02080006
+              'Ultra-Condensed',                                        02090006
+              'Extra-Condensed',                                        02100006
+              'Condensed',                                              02110006
+              'Semi-Condensed',                                         02120006
+              'Medium',                                                 02130006
+              'Semi-Expanded',                                          02140006
+              'Expanded',                                               02150006
+              'Extra-Expanded',                                         02160006
+              'Ultra-Expanded'                                          02170006
+             );                                                         02180006
+                                                                        02190006
+   nom_pt_sz = floor(fnd_nps / 10);                                     02200017
+                                                                        02210019
+   j   = xe-sfp+1;                                                      02220028
+   fdl = (j+4095)/4096;                                                 02230028
+   tol = tol + fdl;                                                     02240020
+                                                                        02250019
+   put skip edit('   Requesting ',fdl*4096,                             02260019
+                 ' bytes of Descriptor storage.')                       02270019
+                (a,f(7),a);                                             02280019
+   fdp = pgalloc(fdl);                                                  02290019
+   substr(fdp->zovl,1,j) = substr(sfp->zovl,1,j);                       02300028
+                                                                        02310017
+   put skip edit('   Typeface:   ',fnd_face)(a);                        02320008
+   put skip edit('   Weight:     ',weight(fnd_wgt))(a);                 02330008
+   put skip edit('   Width:      ',width(fnd_wid))(a);                  02340020
+   put skip edit('   Point Size: ',nom_pt_sz)(a,p'zz9');                02350017
+   put skip edit('   Attributes: ')(a);                                 02360008
+   if substr(fnd_flags1,1,1)='1'b then put edit('Italic ')(a);          02370006
+   if substr(fnd_flags1,2,1)='1'b then put edit('Underscore ')(a);      02380006
+   if substr(fnd_flags1,4,1)='1'b then put edit('Outline ')(a);         02390006
+   if substr(fnd_flags1,5,1)='1'b then put edit('Overstrike ')(a);      02400006
+   put skip;                                                            02410009
+                                                                        02420006
+ end process_fnd;                                                       02430006
+                                                                        02440006
+ %page;                                                                 02450008
+ /********************************************************************/ 02460006
+ /*   Process FNC structured field ('D3A789'x)                       */ 02470019
+ /*          "Font Control"                                          */ 02480006
+ /********************************************************************/ 02490006
+                                                                        02500006
+ process_fnc: procedure;                                                02510006
+   dcl  (boxh,boxw)          fixed bin(15);                             02520020
+                                                                        02530019
+   if      fnc_bb.fnc_pdaa='00'bx then pdaa=1;                          02540011
+   else if fnc_bb.fnc_pdaa='02'bx then pdaa=4;                          02550011
+   else if fnc_bb.fnc_pdaa='03'bx then pdaa=8;                          02560011
+   else                                pdaa=0;                          02570011
+                                                                        02580011
+   if substr(fnc_bb.fnc_um,1,1)='02'x                      /*PF980426*/ 02590037
+   then relative = '1'b;                                                02600017
+   boxw = fnc_bb.fnc_mcbw+1;                                            02610018
+   boxh = fnc_bb.fnc_mcbh+1;                                            02620018
+                                                                        02630019
+   j   = xe-sfp+1;                                                      02640028
+   fcl = (j+4095)/4096;                                                 02650028
+   tol = tol + fcl;                                                     02660020
+   put skip edit('   Requesting ',fcl*4096,                             02670019
+                 ' bytes of Control storage.')                          02680019
+                (a,f(7),a);                                             02690019
+   fcp = pgalloc(fcl);                                                  02700019
+   substr(fcp->zovl,1,j) = substr(sfp->zovl,1,j);                       02710028
+                                                                        02720017
+   put skip edit('   Font Type: ')(a);                                  02730004
+   if fnc_bb.fnc_pti='05'x                                              02740020
+   then put edit('Bounded Box')(a);                                     02750009
+   else put edit('Unbounded Box')(a);                                   02760009
+   if substr(fnc_bb.fnc_flags,1,1)='1'b                                 02770004
+   then put      edit(' MICR')(a);                                      02780005
+   if substr(fnc_bb.fnc_flags,6,1)='1'b                                 02790004
+   then put      edit(' Kerning')(a);                                   02800005
+   if substr(fnc_bb.fnc_flags,7,1)='1'b                                 02810004
+   then put      edit(' Non-proportional')(a);                          02820005
+   else put      edit(' Proportional')(a);                              02830005
+   if substr(fnc_bb.fnc_um,1,1)='00'x                      /*PF980426*/ 02840037
+   then put skip edit('   X-base  10in    ')(a);                        02850009
+   if substr(fnc_bb.fnc_um,1,1)='02'x                      /*PF980426*/ 02860037
+   then put skip edit('   X-base  relative')(a);                        02870009
+   if substr(fnc_bb.fnc_um,2,1)='00'x                      /*PF980426*/ 02880037
+   then put      edit('   Y-base  10in    ')(a);                        02890009
+   if substr(fnc_bb.fnc_um,2,1)='02'x                      /*PF980426*/ 02900037
+   then put      edit('   Y-base  relative')(a);                        02910009
+   put skip edit('   X-value ')(a);                                     02920008
+   put      edit(unspec( substr(fnc_bb.fnc_um,3,2) ) )     /*PF980426*/ 02930037
+                (p'zzz9');                                              02940008
+   put      edit('       Y-value ')(a);                                 02950009
+   put      edit(unspec( substr(fnc_bb.fnc_um,5,2) ) )     /*PF980426*/ 02960037
+                (p'zzz9');                                              02970008
+   put skip edit('   Character box size (WxH):',                        02980009
+                 boxw,boxh)                                             02990020
+                (a,f(4),f(4));                                          03000009
+                                                                        03010008
+   /*---------------------------------*/                                03020020
+   /* allocate raster pattern storage */                                03030020
+   /*---------------------------------*/                                03040020
+   if fnc_bb.fnc_pdc > 0 then do;                                       03050020
+     rpl = fnc_bb.fnc_pdc;                                              03060029
+     j   = (rpl+4095)/4096;                                             03070029
+     tol = tol + j;                                                     03080029
+     put skip edit('   Requesting ',j*4096,                             03090029
+                   ' bytes of Raster storage.')                         03100010
+                  (a,f(7),a);                                           03110020
+     rpp,rpx = pgalloc(j);                                              03120029
+     end;                                                               03130020
+   else rpl=0;                                                          03140020
+                                                                        03150006
+   end; /* font control */                                              03160004
+                                                                        03170003
+ %page;                                                                 03180006
+ /********************************************************************/ 03190006
+ /*   Process FNM structured field ('D3A289'x)                       */ 03200006
+ /*          "Font Patterns Map"                                     */ 03210006
+ /********************************************************************/ 03220006
+                                                                        03230006
+ process_fnm: procedure;                                                03240006
+                                                                        03250020
+ j   = xe-sfp+1;                                                        03260028
+ patt_cnt = j / cstg(fnm);             /* Number of raster patterns  */ 03270028
+ put skip edit('   Number of raster patterns: ',patt_cnt)               03280010
+              (a,f(7.0));                                               03290008
+                                                                        03300028
+ /*-----------------------------------*/                                03310008
+ /* allocate storage and              */                                03320008
+ /* stow font map data.               */                                03330008
+ /*-----------------------------------*/                                03340008
+ fml = (j+4095)/4096;                                                   03350028
+ tol = tol + fml;                                                       03360020
+ put skip edit('   Requesting ',fml*4096,' bytes of map storage.')      03370010
+              (a,f(7),a);                                               03380010
+ fmp = pgalloc(fml);                                                    03390008
+ substr(fmp->zovl,1,j) = substr(sfp->zovl,1,j);                         03400028
+                                                                        03410008
+ /*-----------------------------------*/                                03420008
+ /* allocate storage for fni data     */                                03430008
+ /*-----------------------------------*/                                03440008
+ fnl = patt_cnt * cstg(fni);         /* compute fni storage req    */   03450008
+ fnl = fnl * 4;                      /*          "                 */   03460008
+ fnl = (fnl+4095)/4096;              /* round up to # pages        */   03470008
+ tol = tol + fnl;                                                       03480020
+ put skip edit('   Requesting ',fnl*4096,' bytes of index storage.')    03490010
+              (a,f(7),a);                                               03500010
+ fni0p   = pgalloc(fnl);                                                03510009
+ fni90p  = fni0p   + ( patt_cnt * cstg(fni) );                          03520009
+ fni180p = fni90p  + ( patt_cnt * cstg(fni) );                          03530009
+ fni270p = fni180p + ( patt_cnt * cstg(fni) );                          03540009
+ put skip;                                                              03550009
+                                                                        03560008
+ end process_fnm;                                                       03570006
+                                                                        03580006
+ %page;                                                                 03590011
+ /********************************************************************/ 03600006
+ /*   Process FNO structured field ('D3AE89'x)                       */ 03610006
+ /*          "Font Orientation"                                      */ 03620006
+ /********************************************************************/ 03630006
+                                                                        03640006
+ process_fno: procedure;                                                03650006
+ dcl     nrg                 fixed bin(15);                             03660008
+ dcl     rot                 fixed bin(15);                             03670009
+ dcl     blo                 fixed bin(15);                             03680020
+ dcl     chi                 fixed bin(15);                             03690020
+ dcl     mbe                 fixed bin(15);                             03700020
+ dcl     vsi                 fixed bin(15);                             03710020
+                                                                        03720008
+ j   = xe-sfp+1;                                                        03730028
+ nrg = j / cstg(fno);                                                   03740028
+                                                                        03750009
+ /*-----------------------------------*/                                03760009
+ /* allocate storage for FNO data     */                                03770009
+ /*-----------------------------------*/                                03780009
+ fol = (j+4095)/4096;                  /* round up to # pages        */ 03790028
+ tol = tol + fol;                                                       03800020
+ fop = pgalloc(fol);                                                    03810028
+                                                                        03820011
+ substr(fop->zovl,1,j) = substr(sfp->zovl,1,j);                         03830028
+ uniform_baseline_offset = substr(fno_flags,7,1);                       03840011
+ blo = fno_blo;                                                         03850011
+ chi = fno_inc;                                                         03860018
+ vsi = fno_vsi;                                                         03870018
+ mbe = fno_mbe;                                                         03880011
+ rot = (addr(fno_rot)->oneb)*2;                                         03890011
+ if relative then do;                                                   03900017
+   blo = conv_rel(blo,nom_pt_sz);                                       03910017
+   chi = conv_rel(chi,nom_pt_sz);                                       03920018
+   vsi = conv_rel(vsi,nom_pt_sz);                                       03930018
+   mbe = conv_rel(mbe,nom_pt_sz);                                       03940017
+   end;                                                                 03950017
+                                                                        03960009
+ put skip edit('   Data for 0 degrees rotation')(a);                    03970009
+ put skip edit('    baseline offset: ',blo)(a,f(5));                    03980017
+ put skip edit('    char increment:  ',chi)(a,f(5));                    03990018
+ put skip edit('    variable space:  ',vsi)(a,f(5));                    04000018
+ put skip edit('    max baseline ext:',mbe)(a,f(5));                    04010017
+ put skip edit('    flags: ')(a);                                       04020009
+ if substr(fno_flags,5,1)='1'b then put edit('Kerning ')(a);            04030009
+ if substr(fno_flags,6,1)='1'b then put edit('Unif A-space ')(a);       04040009
+ if substr(fno_flags,7,1)='1'b then put edit('Unif Baseline ')(a);      04050009
+ if substr(fno_flags,8,1)='1'b then put edit('Unif char inc ')(a);      04060009
+ put skip edit('    em-space:        ',fno_em)(a,f(5));                 04070009
+ put skip edit('    figure-space:    ',fno_fsp)(a,f(5));                04080009
+ put skip edit('    default baseline:',fno_dbi)(a,f(5));                04090009
+ put skip;                                                              04100009
+                                                                        04110008
+ end process_fno;                                                       04120006
+                                                                        04130006
+ %page;                                                                 04140011
+ /********************************************************************/ 04150006
+ /*   Process FNP structured field ('D3AC89'x)                       */ 04160006
+ /*          "Font Position"                                         */ 04170006
+ /********************************************************************/ 04180006
+                                                                        04190028
+ process_fnp: procedure;                                                04200006
+ dcl     nrg                 fixed bin(15);                             04210008
+                                                                        04220008
+ j   = xe-sfp+1;                                                        04230028
+ nrg = j / cstg(fnp);                                                   04240028
+                                                                        04250009
+ /*-----------------------------------*/                                04260009
+ /* allocate storage for FNP data     */                                04270009
+ /*-----------------------------------*/                                04280009
+ fpl = (j+4095)/4096;                /* round up to # pages        */   04290028
+ tol = tol + fpl;                                                       04300028
+ put skip edit('   Requesting ',fpl*4096,' bytes of position storage.') 04310028
+              (a,f(7),a);                                               04320010
+ fpp = pgalloc(fpl);                                                    04330028
+ substr(fpp->zovl,1,j) = substr(sfp->zovl,1,j);                         04340028
+                                                                        04350009
+ put skip edit('   Data for 0 degrees rotation')(a);                    04360009
+ put skip edit('    x-height:        ',fnp_lch)(a,f(5));                04370009
+ put skip edit('    cap height:      ',fnp_uch)(a,f(5));                04380009
+ put skip edit('    max ascender:    ',fnp_mxa)(a,f(5));                04390009
+ put skip edit('    max descender:   ',fnp_mxd)(a,f(5));                04400009
+ put skip edit('    underscore width:',fnp_usw)(a,f(5));                04410009
+ put skip;                                                              04420009
+                                                                        04430008
+ end process_fnp;                                                       04440006
+                                                                        04450006
+ %page;                                                                 04460011
+ /********************************************************************/ 04470006
+ /*   Process FNI structured field ('D38C89'x)                       */ 04480006
+ /*          "Font Index"                                            */ 04490006
+ /********************************************************************/ 04500006
+                                                                        04510006
+ process_fni: procedure;                                                04520006
+ dcl     fnix                fixed bin(15) static init(0);              04530008
+                                                                        04540008
+ j   = xe-sfp+1;                                                        04550028
+ if fnix = 0 then                                                       04560008
+    substr(fni0p->zovl,1,j)   = substr(sfp->zovl,1,j);                  04570028
+ else if fnix = 1 then                                                  04580008
+    substr(fni90p->zovl,1,j)  = substr(sfp->zovl,1,j);                  04590028
+ else if fnix = 2 then                                                  04600008
+    substr(fni180p->zovl,1,j) = substr(sfp->zovl,1,j);                  04610028
+ else if fnix = 3 then                                                  04620008
+    substr(fni270p->zovl,1,j) = substr(sfp->zovl,1,j);                  04630028
+ else put skip edit('   *** Invalid FNM Index ',fnix)                   04640008
+                   (a,f(7));                                            04650008
+ fnix = fnix + 1;                                                       04660008
+ end process_fni;                                                       04670006
+                                                                        04680006
+ %page;                                                                 04690011
+ /********************************************************************/ 04700006
+ /*   Process FNG structured field ('D3EE89'x)                       */ 04710006
+ /*          "Font Patterns"                                         */ 04720006
+ /********************************************************************/ 04730006
+                                                                        04740006
+ process_fng: procedure;                                                04750006
+                                                                        04760008
+ j   = xe-sfp+1;                                                        04770028
+ substr(rpx->zovl,1,j) = substr(fng_raster,1,j);                        04780029
+ rpx = rpx+j;                                                           04790030
+ end process_fng;                                                       04800006
+                                                                        04810008
+ %page;                                                                 04820011
+ /********************************************************************/ 04830008
+ /*   Build PCL font for characters in codepage                      */ 04840025
+ /********************************************************************/ 04850008
+                                                                        04860008
+ build_font: procedure;                                                 04870025
+                                                                        04880008
+ dcl     hpfont              record output;                             04890019
+ dcl     hpbuf               char(80);                                  04900019
+ dcl    (j,k)                fixed bin(15);                             04910019
+                                                                        04920019
+                                                                        04930019
+ /*-------------------------*/                                          04940020
+ /* Font Metrics            */                                          04950020
+ /*-------------------------*/                                          04960020
+ dcl     baseline            fixed bin(15);      /* Baseline row     */ 04970019
+ dcl     mxd                 fixed bin(15);      /* Font max descendr*/ 04980019
+ dcl    (boxh,boxw)          fixed bin(15);      /* Char box size    */ 04990020
+ dcl     chi                 fixed bin(15);      /* Char increment   */ 05000019
+                                                                        05010019
+ %include pclfdesc;                                                     05020019
+ %include pclcdesc;                                                     05030020
+ %page;                                                                 05040020
+                                                                        05050019
+ if pdaa=0 then do;                                                     05060019
+   put skip edit('*** Error: Invalid Raster pattern align')(a);         05070019
+   return;                                                              05080019
+   end;                                                                 05090019
+                                                                        05100019
+ sfp = fcp;                  /* Font Control                         */ 05110020
+ boxw = fnc_bb.fnc_mcbw+1;                                              05120020
+ boxh = fnc_bb.fnc_mcbh+1;                                              05130020
+                                                                        05140020
+ sfp = fpp;                  /* Font position - 0 deg rotation       */ 05150019
+ mxd = fnp_mxd;                                                         05160020
+                                                                        05170019
+ sfp = fop;                  /* Point to FNO for 0 degrees rot       */ 05180019
+ chi = fno_vsi;              /* Default variable space increment     */ 05190019
+                                                                        05200019
+ if relative then do;                  /* Convert relative metrics   */ 05210020
+   chi = conv_rel(chi,nom_pt_sz);                                       05220019
+   mxd = conv_rel(mxd,nom_pt_sz);                                       05230019
+   end;                                                                 05240019
+ baseline = boxh - mxd;                /* Baseline row #              */05250020
+                                                                        05260019
+ put skip edit(' Font metrics:')(a);                                    05270023
+ put skip edit('   Nominal point sz: ',nom_pt_sz)(a,p'zz9');            05280023
+ put skip edit('   Max descender:    ',mxd      )(a,p'zz9');            05290023
+ put skip edit('   Baseline at:      ',baseline)(a,p'zz9');             05300023
+ put skip edit('   Character incr:   ',chi)(a,p'zz9');                  05310023
+ put skip edit('   Max Character Box size (pels): ',                    05320023
+               boxw,boxh)(a,p'zzzz9',p'zzzz9');                         05330020
+                                                                        05340019
+ open file(hpfont) output;                                              05350020
+ hpbuf = repeat( '00'x, 79 );                                           05360019
+ substr(hpbuf,1,6) = '27'x || ')s64W';           /* <ESC>)s64W       */ 05370020
+ substr(hpbuf,1,6) = translate( substr(hpbuf,1,6), ascii );             05380020
+ fp = addr(hpbuf) + 6;                                                  05390019
+ font_desc.size          = hpwrd( cstg(font_desc) ); /* Len of Hdr   */ 05400028
+ font_desc.type          = '02'x;                /* Type=PC-8        */ 05410020
+ font_desc.baseline      = hpwrd(baseline);                             05420028
+ font_desc.cell_width    = hpwrd(boxw*4);                               05430028
+ font_desc.cell_height   = hpwrd(boxh*4);                               05440028
+ font_desc.orientation   = '00'x;                /* Portrait         */ 05450020
+ font_desc.spacing       = hpbyt( 1 );           /* Proportional     */ 05460028
+ font_desc.symbol_set    = hpwrd( 341 );         /* 341=PC-8         */ 05470028
+ font_desc.pitch         = hpwrd( chi*4 );                              05480028
+ font_desc.height        = hpwrd( (nom_pt_sz * 1200) / 72 );            05490028
+ font_desc.xheight       = font_desc.height;     /* Temp ***         */ 05500023
+ font_desc.width_type    = '00'x;                /* (not used)       */ 05510023
+ font_desc.sty_lsb       = '00'x;                /* Roman ***PF980426*/ 05520037
+ font_desc.stroke_weight = '00'x;                /* Medium ***       */ 05530023
+ font_desc.typ_lsb       = '00'x;                /* Temp *** PF980426*/ 05540037
+ font_desc.serif_style   = '00'x;                /* ???              */ 05550023
+ font_desc.ul_distance   = '00'x;                /* Temp ***         */ 05560023
+ font_desc.ul_height     = '00'x;                /* Temp ***         */ 05570023
+ font_desc.text_height   = '00'x;                /*                  */ 05580023
+ font_desc.text_width    = '00'x;                /*                  */ 05590023
+ font_desc.font_name     = fdp->fnd.fnd_face;    /* Typeface         */ 05600023
+ font_desc.font_name     = translate( font_desc.font_name,              05610020
+                                      ascii );                          05620020
+ call write_hp_rec;                                                     05630019
+                                                                        05640019
+ do j=0 to 255;                                                         05650023
+   if codepg(j)ª=' ' then do;                                           05660028
+     call gen_char( codepg(j), j );                                     05670028
+     if pchar then call print_char( codepg(j) );                        05680028
+     end; /* do */                                                      05690028
+   end; /* do j */                                                      05700023
+                                                                        05710019
+ close file(hpfont);                                                    05720019
+                                                                        05730020
+ return;                                                                05740020
+                                                                        05750020
+ /*-----------------------------------*/                                05760020
+ /* Generate HP Raster Pattern        */                                05770020
+ /*-----------------------------------*/                                05780020
+ gen_char: proc(gcid,code);                                             05790023
+ dcl     gcid                char(8);                                   05800020
+ dcl     code                fixed bin(15);                             05810023
+ dcl     fnip                ptr;                /* -> FNI entry     */ 05820023
+ dcl     fnmp                ptr;                /* -> FNM entry     */ 05830023
+ dcl     fngp                ptr;                /* -> Raster pattern*/ 05840023
+ dcl     fnm_offset          fixed bin(31);      /* Offset of FNM ent*/ 05850023
+ dcl    (s,e)                fixed bin(15);      /* Row positions    */ 05860020
+ dcl     j                   fixed bin(15);                             05870020
+ dcl     pos                 fixed bin(15);                             05880020
+ dcl     total               pic'99999';         /* Total char bytes */ 05890023
+ dcl     codept              pic'999';           /* ASCII CodePoint  */ 05900023
+ dcl     found               bit(1) init('0'b);                         05910020
+                                                                        05920020
+ /*-------------------------*/                                          05930020
+ /* Character Metrics       */                                          05940020
+ /*-------------------------*/                                          05950020
+ dcl    (w,h)                fixed bin(15);      /* Toned-pel area   */ 05960023
+ dcl     bytes               fixed bin(15);      /* Raster bytes/row */ 05970020
+ dcl    (asp,bsp,csp)        fixed bin(15);      /* A-space, C-space */ 05980020
+ dcl     cw                  fixed bin(15);      /* Character Width  */ 05990023
+ dcl    (cha,chd)            fixed bin(15);      /* Char asc and desc*/ 06000020
+                                                                        06010020
+ sfp = fni0p;                /* point to FNI's for 0 degrees rot     */ 06020020
+ do j=1 to patt_cnt;                                                    06030020
+   if fni_gcid = gcid then do;                                          06040020
+     found='1'b;                                                        06050020
+     fnip = sfp;                                                        06060020
+     leave;                                                             06070020
+     end; /* gcid */                                                    06080020
+   sfp = addr(fni_next);                                                06090020
+   end; /* do j */                                                      06100020
+ if ªfound then do;                                                     06110020
+   put skip edit('*** Error: ',gcid,' not found in font')(a);           06120027
+   return;                                                              06130020
+   end;                                                                 06140020
+                                                                        06150020
+ sfp = fnip;                                                            06160023
+ asp = fni_asp;                                                         06170020
+ bsp = fni_bsp;                                                         06180020
+ csp = fni_csp;                                                         06190020
+ cha = fni_cha;                                                         06200020
+ chd = fni_chd;                                                         06210020
+ fnm_offset = fni_idx * cstg(fnm);                                      06220020
+ fnmp = fmp + fnm_offset;                                               06230020
+ if relative then do;                  /* Convert relative metrics    */06240020
+   asp = conv_rel(asp,nom_pt_sz);                                       06250020
+   bsp = conv_rel(bsp,nom_pt_sz);                                       06260020
+   csp = conv_rel(csp,nom_pt_sz);                                       06270020
+   cha = conv_rel(cha,nom_pt_sz);                                       06280020
+   chd = conv_rel(chd,nom_pt_sz);                                       06290020
+   end;                                                                 06300020
+ cw = asp + bsp + csp;                 /* Character Box Width         */06310023
+                                                                        06320020
+ sfp = fnmp;                           /* -> Font Patterns Map        */06330023
+ w = fnm_boxw+1;                       /* Toned-pel box width  (pels) */06340020
+ h = fnm_boxh+1;                       /* Toned-pel box height (pels) */06350020
+     /*put skip edit(' Toned pel Box size (pels):     ', */             06360025
+     /*              w,h)(a,p'zzzz9',p'zzzz9');          */             06370025
+ bytes = (w+7)/8;                      /* Raster bytes/row            */06380020
+ s = baseline - cha + 1;               /* Start of toned-pel box      */06390020
+ e = baseline + chd;                   /* End of toned-pel box        */06400020
+                                                                        06410020
+ sfp = fnip;                                                            06420023
+ put skip edit(fni_gcid,' (',code,')')                                  06430026
+              (a,a,p'zz9',a);                                           06440025
+ put      edit(' A-space:',asp)(a,p'---9');                             06450028
+ put      edit(' B-space:',bsp)(a,p'---9');                             06460028
+ put      edit(' C-space:',csp)(a,p'---9');                             06470028
+     /*                                                                 06480025
+     put skip edit('Character metrics - ',fni_gcid,' ',code)            06490025
+                  (a,a,a,p'zz9');                                       06500025
+     put skip edit(' A-space:   ',asp)(a,p'---9');                      06510028
+     put skip edit(' B-space:   ',bsp)(a,p'---9');                      06520028
+     put skip edit(' C-space:   ',csp)(a,p'---9');                      06530028
+     put skip edit(' Ascender:  ',cha)(a,p'---9');                      06540028
+     put skip edit(' Descender: ',chd)(a,p'---9');                      06550028
+                                                                        06560025
+     put skip edit(' Character Box size (pels):     ',                  06570025
+                   cw,boxh)(a,p'zzzz9',p'zzzz9');                       06580025
+     put skip edit(' Toned pel Box size (pels):     ',                  06590025
+                   w,h)(a,p'zzzz9',p'zzzz9');                           06600025
+     put skip edit(' Toned pel position (pels):     ',                  06610025
+                   asp,s)(a,p'----9',p'zzzz9');                         06620028
+     put skip;                                                          06630025
+     */                                                                 06640025
+                                                                        06650020
+ /*-------------------------*/                                          06660020
+ /* Generate Char Hdr       */                                          06670020
+ /*-------------------------*/                                          06680020
+ codept = code;                                                         06690023
+ total  = cstg(char_desc) + bytes * h;                                  06700023
+ cp = addr(hpbuf);                                                      06710020
+ pos = 1;                                                               06720020
+ substr(cp->zovl,1,7) = '27'x || '*c' || codept || 'E';                 06730023
+ substr(cp->zovl,1,7) = translate( substr(cp->zovl,1,7), ascii );       06740020
+ cp  = cp  + 7;                                                         06750020
+ pos = pos + 7;                                                         06760020
+ substr(cp->zovl,1,9) = '27'x || '(s' || total || 'W';                  06770020
+ substr(cp->zovl,1,9) = translate( substr(cp->zovl,1,9), ascii );       06780020
+ cp  = cp  + 9;                                                         06790020
+ pos = pos + 9;                                                         06800020
+ char_desc.format        = '04'x;                                       06810020
+ char_desc.continuation  = '00'x;                                       06820020
+ char_desc.desc_size     =  hpbyt(14);/* Desc Len=14                  */06830028
+ char_desc.class         = '01'x;                                       06840020
+ char_desc.orientation   = '00'x;      /* Portrait                    */06850020
+ char_desc.left_offset   =  hpwrd(asp);                                 06860028
+ char_desc.top_offset    =  hpwrd(cha);                                 06870028
+ char_desc.char_width    =  hpwrd(w);                                   06880028
+ char_desc.char_height   =  hpwrd(h);                                   06890028
+ char_desc.delta_x       =  hpwrd(cw*4);                                06900028
+ pos = pos + cstg(char_desc);                                           06910020
+ cp  = cp  + cstg(char_desc);                                           06920020
+                                                                        06930020
+ /*-------------------------*/                                          06940020
+ /* Generate Raster         */                                          06950020
+ /*-------------------------*/                                          06960020
+ sfp = fnmp;                           /* -> Font Patterns Map        */06970023
+ fngp = rpp + (fnm_pda*pdaa);          /* Compute A(Raster Pattern)   */06980020
+ do j=1 to h*bytes;                    /* Move Raster Pattern         */06990020
+   if pos>80 then do;                                                   07000020
+     call write_hp_rec;                                                 07010020
+     pos=1;                                                             07020020
+     cp=addr(hpbuf);                                                    07030020
+     end;                                                               07040020
+   cp->oneb = fngp->oneb;                                               07050020
+   fngp = fngp + 1;                                                     07060020
+   cp   = cp   + 1;                                                     07070020
+   pos  = pos  + 1;                                                     07080020
+   end; /* do j */                                                      07090020
+                                                                        07100020
+ if pos>1 then call write_hp_rec;                                       07110020
+                                                                        07120020
+ return;                                                                07130020
+                                                                        07140020
+ end gen_char;                                                          07150020
+                                                                        07160019
+ /*-----------------------------------*/                                07170020
+ /* Write HP font record              */                                07180020
+ /*-----------------------------------*/                                07190020
+ write_hp_rec: procedure;                                               07200019
+ write file(hpfont) from(hpbuf);                                        07210019
+ hpbuf = repeat( '00'x, 79 );                                           07220019
+ end write_hp_rec;                                                      07230019
+                                                                        07240019
+ /*-----------------------------------*/                                07250020
+ /* Generate two-byte HP binary value */                                07260020
+ /*-----------------------------------*/                                07270020
+ hpwrd: proc(val) returns( char(2) );                                   07280028
+ dcl     val                 fixed bin(15);                             07290020
+ dcl     h                   char(2) based;                             07300023
+ return( addr(val)->h );                                                07310023
+ end hpwrd;                                                             07320028
+                                                                        07330020
+ /*-----------------------------------*/                                07340020
+ /* Generate one-byte HP binary value */                                07350020
+ /*-----------------------------------*/                                07360020
+ hpbyt: proc(val) returns( char(1) );                                   07370028
+ dcl     val                 fixed bin(15);                             07380020
+ dcl     h                   char(2) based;                             07390023
+ return( substr(addr(val)->h,2,1) );                                    07400023
+ end hpbyt;                                                             07410028
+                                                                        07420019
+ %page;                                                                 07430019
+ /*---------------------------------------------*/                      07440009
+ /*      Print one character raster pattern     */                      07450009
+ /*---------------------------------------------*/                      07460009
+ print_char: procedure(gcid);                                           07470009
+ dcl     gcid                char(8);            /* Char to print    */ 07480013
+ dcl     fnip                ptr;                /* -> FNI entry     */ 07490013
+ dcl     fnmp                ptr;                /* -> FNM entry     */ 07500013
+ dcl     fngp                ptr;                /* -> Raster pattern*/ 07510013
+ dcl     fnm_offset          fixed bin(31);      /* Offset of FNM ent*/ 07520013
+ dcl    (j,k)                fixed bin(15);                             07530009
+ dcl    (boxw,boxh)          fixed bin(15);      /* Character Box    */ 07540023
+ dcl     found               bit(1)              init('0'b);            07550009
+ dcl     b                (1)bit(1)              /* Raster overlay   */ 07560013
+                                    unaligned    based(fngp);           07570013
+ dcl     line                char(*)             controlled;            07580033
+ dcl     linew               fixed bin(15);                             07590033
+ dcl     offset              char(32) varying;                          07600032
+                                                                        07610013
+ /*-------------------------*/                                          07620013
+ /* Character Metrics       */                                          07630013
+ /*-------------------------*/                                          07640013
+ dcl     bytes               fixed bin(15);      /* Raster bytes/row */ 07650013
+ dcl    (w,h)                fixed bin(15);      /* Toned-pel area   */ 07660013
+ dcl     cw                  fixed bin(15);      /* Char box width   */ 07670028
+ dcl    (s,e)                fixed bin(15);      /* Row positions    */ 07680013
+ dcl    (f,l)                fixed bin(15);      /* Col positions    */ 07690028
+ dcl    (asp,bsp,csp)        fixed bin(15);      /* a-space, c-space */ 07700020
+ dcl    (cha,chd)            fixed bin(15);      /* Char asc and desc*/ 07710013
+                                                                        07720023
+ sfp = fcp;                  /* Font Control                         */ 07730023
+ boxw = fnc_bb.fnc_mcbw+1;                                              07740023
+ boxh = fnc_bb.fnc_mcbh+1;                                              07750023
+                                                                        07760023
+ sfp = fpp;                  /* Font position - 0 deg rotation       */ 07770023
+ mxd = fnp_mxd;                                                         07780023
+                                                                        07790011
+ sfp = fni0p;                /* point to FNI's for 0 degrees rot     */ 07800020
+ do j=1 to patt_cnt;                                                    07810008
+   if fni_gcid = gcid then do;                                          07820009
+     found='1'b;                                                        07830008
+     fnip = sfp;                                                        07840008
+     leave;                                                             07850008
+     end; /* gcid */                                                    07860009
+   sfp = addr(fni_next);                                                07870008
+   end; /* do j */                                                      07880008
+ if ªfound then do;                                                     07890008
+   put skip edit('*** Error: ',gcid,' not found in font')(a);           07900009
+   return;                                                              07910008
+   end;                                                                 07920008
+                                                                        07930011
+ sfp = fnip;                                                            07940009
+ asp = fni_asp;                                                         07950017
+ bsp = fni_bsp;                                                         07960018
+ csp = fni_csp;                                                         07970017
+ cha = fni_cha;                                                         07980018
+ chd = fni_chd;                                                         07990018
+ fnm_offset = fni_idx * cstg(fnm);                                      08000017
+ sfp = fmp;                                                             08010032
+ fnmp = fmp + fnm_offset;                                               08020017
+ if relative then do;                  /* Convert relative metrics    */08030017
+   asp = conv_rel(asp,nom_pt_sz);                                       08040017
+   bsp = conv_rel(bsp,nom_pt_sz);                                       08050018
+   csp = conv_rel(csp,nom_pt_sz);                                       08060017
+   cha = conv_rel(cha,nom_pt_sz);                                       08070018
+   chd = conv_rel(chd,nom_pt_sz);                                       08080018
+   end; /* relative */                                                  08090028
+                                                                        08100017
+ sfp = fnmp;                                                            08110032
+ w = fnm_boxw;                         /* Toned-pel box width  (pels) */08120028
+ h = fnm_boxh;                         /* Toned-pel box height (pels) */08130028
+ bytes = (w+7)/8;                      /* Raster bytes/row            */08140013
+ s = baseline - cha + 1;               /* start row of toned-pel box  */08150028
+ e = baseline + chd;                   /* end row of toned-pel box    */08160028
+                                                                        08170028
+ cw  = asp + bsp + csp;                                                 08180032
+ linew = bsp;                                                           08190033
+ if asp>0 then do;                                                      08200032
+   linew=linew+asp;                                                     08210033
+   end;                                                                 08220032
+ offset='';                                                             08230032
+ if asp<0 then offset = repeat(' ',-asp);                               08240032
+ if csp>0 then do;                                                      08250032
+   linew=linew+csp;                                                     08260033
+   l=cw-csp;                                                            08270032
+   end;                                                                 08280032
+                                                                        08290013
+ put skip edit('             ',                                         08300028
+               ' Ascender: ',cha,                                       08310028
+               ' Descend: ',chd)( a,(2)(a,p'zz9') );                    08320028
+ put skip edit(' Character Box size (pels):     ',                      08330028
+               cw,boxh)(a,p'zzzz9',p'zzzz9');                           08340028
+ put skip edit(' Toned pel Box size (pels):     ',                      08350011
+               w+1,h+1)(a,p'zzzz9',p'zzzz9');                           08360042
+ put skip edit(' Toned pel box position:        ',                      08370028
+               '(',asp,',',s,') (',l,',',e,')')                         08380041
+              (a,a,p'---9',a,p'---9',a,p'---9',a,p'---9',a);            08390028
+                                                                        08400013
+ /*-------------------------*/                                          08410014
+ /* Print Character in Box  */                                          08420014
+ /*-------------------------*/                                          08430014
+ fngp = rpp + (fnm_pda*pdaa);          /* Compute A(Raster Pattern)   */08440013
+                                                                        08450039
+ call print_raster(fngp,w,h,cw,boxh,asp,s,baseline);                    08460041
+                                                                        08470013
+ return;                                                                08480013
+                                                                        08490013
+ end print_char;                                                        08500009
+                                                                        08510028
+ end build_font;                                                        08520028
+                                                                        08530039
+ /********************************************************************/ 08540039
+ /*   Print Character Raster Pattern                                 */ 08550045
+ /********************************************************************/ 08560039
+                                                                        08570039
+ print_raster: proc(fngp,w,h,cw,ch,asp,to,bl);                          08580041
+   dcl   fngp                ptr;                                       08590039
+   dcl  (w,h,cw,ch,asp,to,bl)                                           08600041
+                             fixed bin(31);                             08610040
+   dcl   ca                  char(*)   ctl       init(' ');             08620040
+   dcl   size                fixed bin(31);                             08630040
+   dcl   lw                  fixed bin(31);                             08640040
+   dcl  (i,j)                fixed bin(31);                             08650040
+   dcl   offset              fixed bin(31);                             08660041
+   dcl  (p,p1,p2)            ptr;                                       08670041
+   dcl   z                   char(32760)         based(p);              08680041
+   dcl   c            (32760)char(1)             based(p);              08690041
+   dcl   b            (32760)bit(1) unaligned    based(p1);             08700041
+                                                                        08710041
+   if asp>=0 then offset=0;                                             08720041
+   else           offset=-asp;                                          08730041
+   lw = cw+2;                                                           08740041
+   size = (lw+offset) * (ch+2);                                         08750041
+   allocate ca char(size);                                              08760041
+                                                                        08770041
+   p = addr(ca);                       /* Draw character box         */ 08780041
+   p1 = p + offset;                                                     08790041
+   substr(p1->z,1,lw) = '+' || repeat('-',lw-3) || '+';                 08800041
+   do i=1 to ch;                                                        08810041
+     p = p+lw+offset;                                                   08820042
+     p1 = p + offset;                                                   08830041
+     substr(p1->z,1,lw) = '|' || repeat(' ',lw-3) || '|';               08840041
+     end; /* do i */                                                    08850041
+   p1 = p + offset;                                                     08860041
+   substr(p1->z,1,lw) = '+' || repeat('-',lw-3) || '+';                 08870041
+                                                                        08880040
+   if bl>0 then do;                    /* Draw baseline              */ 08890041
+     p = addr(ca) + (bl-1)*(lw+offset) + 1;                             08900043
+     p1 = p + offset;                                                   08910041
+     substr(p1->z,1,lw-2) = repeat('_',lw-3);                           08920041
+     end; /* to>0 */                                                    08930040
+                                                                        08940040
+   p1 = fngp;                          /* Draw the Character         */ 08950041
+   p = addr(ca) + (to-1)*(lw+offset) + 1;                               08960043
+   do i=1 to h+1;                                                       08970042
+     p2=p;                                                              08980044
+     if asp>0 then p2 = p2+asp;                                         08990044
+     do j=1 to w+1;                                                     09000042
+       if b(j)='1'b then p2->c(j)='X';                                  09010041
+       else              p2->c(j)='.';                                  09020041
+       end; /* do j */                                                  09030040
+     p1 = p1 + floor(w+8)/8;                                            09040042
+     p = p+lw+offset;                                                   09050043
+     end; /* do i */                                                    09060040
+                                                                        09070040
+   p = addr(ca);                       /* Print character            */ 09080040
+   do i=1 to ch+2;                                                      09090041
+     put skip edit( substr(p->z,1,lw+offset) )(a);                      09100042
+     p = p+lw+offset;                                                   09110042
+     end; /* do i */                                                    09120040
+                                                                        09130040
+   free ca;                                                             09140040
+   return;                                                              09150040
+                                                                        09160040
+   end print_raster;                                                    09170040
+                                                                        09180040
+ %page;                                                                 09190040
+ /********************************************************************/ 09200040
+ /*   Convert relative font metrics to pels at 300DPI                */ 09210040
+ /********************************************************************/ 09220040
+                                                                        09230040
+ conv_rel: proc(m,p) returns( fixed bin(15) );                          09240040
+ dcl    (m,p,r)              fixed bin(15);                             09250040
+ dcl     z                   fixed bin(31);                             09260040
+                                                                        09270040
+ z = m * p * 300;                                                       09280040
+ r = floor( z / 72000 );                                                09290040
+ return(r);                                                             09300040
+                                                                        09310040
+ end conv_rel;                                                          09320040
+                                                                        09330040
+ /********************************************************************/ 09340040
+ /*   Hexadecimal to character conversion                            */ 09350040
+ /********************************************************************/ 09360040
+                                                                        09370040
+ hex: proc(sp,n) returns( char(256) varying );                          09380040
+ dcl  sp                     ptr,                                       09390040
+      s                      char(4096) based(sp);                      09400040
+ dcl  n                      fixed bin(15);                             09410040
+ dcl  j                      fixed bin(15);                             09420040
+ dcl  ret                    char(256) varying   init('');              09430040
+ do j=1 to n;                                                           09440040
+   ret=ret||hexone( substr(s,j,1) );                                    09450040
+   end;                                                                 09460040
+ return(ret);                                                           09470040
+ end hex;                                                               09480040
+                                                                        09490040
+ hexone: proc(c) returns( char(2) );                                    09500040
+ dcl  c                      char;                                      09510040
+ dcl  hextabs                char(16) static     init                   09520040
+                       ('0123456789ABCDEF'),                            09530040
+      hextab           (0:15)char(1) defined hextabs;                   09540040
+ dcl  p                      ptr,                                       09550040
+      x                      bit(8) based(p);                           09560040
+ p = addr(c);                                                           09570040
+ return(                                                                09580040
+        hextab( substr(x,1,4) ) || hextab( substr(x,5,4) )              09590040
+       );                                                               09600040
+ end hexone;                                                            09610040
+                                                                        09620040
+ %page;                                                                 09630040
+ /********************************************************************/ 09640040
+ /*   Load Codepage Data                                             */ 09650040
+ /********************************************************************/ 09660040
+                                                                        09670040
+ load_codepage: proc;                                                   09680040
+ dcl     codepage            record input;                              09690040
+ dcl     card                char(80)  varying;                         09700040
+ dcl     gcid                char(8);                                   09710040
+ dcl     cp                  char(2);                                   09720040
+ dcl   1 cpb                 unaligned based,                           09730040
+         5 cpb1              bit(8),                                    09740040
+         5 cpb2              bit(8);                                    09750040
+ dcl     j                   fixed bin(15);                             09760040
+ dcl     cpeof               bit(1)    init('0'b);                      09770040
+ dcl     hexchar             char(16)  static init                      09780040
+        ('0123456789ABCDEF');                                           09790040
+ dcl     hexdig              char(16)  static init                      09800040
+        ('000102030405060708090A0B0C0D0E0F'x);                          09810040
+ dcl     lc                  char(26)  static init                      09820040
+        ('abcdefghijklmnopqrstuvwxyz');                                 09830040
+ dcl     uc                  char(26)  static init                      09840040
+        ('ABCDEFGHIJKLMNOPQRSTUVWXYZ');                                 09850040
+                                                                        09860040
+ on endfile(codepage) cpeof='1'b;                                       09870040
+                                                                        09880040
+ do j=0 to 255;                                                         09890040
+   codepg(j) = '        ';                                              09900040
+   end; /* do j */                                                      09910040
+                                                                        09920040
+ open file(codepage) input;                                             09930040
+ read file(codepage) into(card);                                        09940040
+                                                                        09950040
+ do while(ªcpeof);                                                      09960040
+   if substr(card,1,1)ª='*' &                                           09970040
+      substr(card,1,72)ª=' ' then do;                                   09980040
+     gcid = word(card,1);                                               09990040
+     gcid = translate(gcid,uc,lc);                                      10000040
+     cp   = word(card,2);                                               10010040
+     cp   = translate(cp,uc,lc);                                        10020040
+     if verify(cp,hexchar)ª=0 then do;                                  10030040
+       put skip edit('Invalid character in codepage: ',                 10040040
+                     gcid,' ',cp)(a);                                   10050040
+       gcid = '        ';                                               10060040
+       cp   = '00';                                                     10070040
+       end; /* verify */                                                10080040
+     cp   = translate(cp,hexdig,hexchar);                               10090040
+     j = (addr(cp)->cpb.cpb1)*16 + addr(cp)->cpb.cpb2;                  10100040
+     codepg(j) = gcid;                                                  10110040
+     end; /* then */                                                    10120040
+                                                                        10130040
+   read file(codepage) into(card);                                      10140040
+   end; /* do while */                                                  10150040
+                                                                        10160040
+ close file(codepage);                                                  10170040
+ return;                                                                10180040
+                                                                        10190040
+ end load_codepage;                                                     10200040
+                                                                        10210040
+ %page;                                                                 10220023
+ /*-----------------------------------*/                                10230004
+ /*    Read record from FONTLIB       */                                10240004
+ /*-----------------------------------*/                                10250004
+ read_fontlib: procedure;                                               10260004
+ dcl     cc                  char(1)             based(xs);             10270004
+                                                                        10280004
+ read file(fontlib) set(xs);                                            10290004
+ rec_length = recl(fontlib);                                            10300034
+ if cc ª= '5A'x then do;                                                10310004
+   put skip edit('Record does not begin with x''5A''')(a);              10320004
+   put skip edit( quothex(hex(xs,8)) )(a);                              10330004
+   call pliretc(8);                                                     10340004
+   stop;                                                                10350004
+   end; /* do */                                                        10360004
+ re = xs + rec_length - 1;                                              10370004
+ xc = xs;                                                               10380004
+ sfp = xs + 1;                                                          10390004
+                                                                        10400004
+ end read_fontlib;                                                      10410004
+                                                                        10420004
+ quothex: proc(s) returns( char(256) varying );                         10430004
+ dcl  s                      char(*) varying;                           10440004
+ return( 'X''' || s || '''' );                                          10450004
+ end quothex;                                                           10460004
+                                                                        10470000
+ %include word;                                                         10480023
+ %include ebcasc;                                                       10490023
+                                                                        10500020
+ end P3002PCL;                                                          10510035
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 10520000
+//LKED.SYSLIB DD                                                        10530000
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    10540036
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        10550036
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      10560000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       10570036
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  10580000
+//LKED.SYSIN DD *                                                       10590000
+ MODE AMODE(31)                                                         10600008
+ MODE RMODE(ANY)                                                        10610008
+ NAME P3002PCL(R)                                                       10620035
+//* -------------- END OF LINKEDIT STEP ------------------------------* 10630000

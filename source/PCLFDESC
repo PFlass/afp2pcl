@@ -1,0 +1,57 @@
+ /*------------------------------------------------------------------*/ 00010000
+ /*                                                                  */ 00020000
+ /*                PCL Font Header Descriptor                        */ 00030000
+ /*                                                                  */ 00040000
+ /*------------------------------------------------------------------*/ 00050000
+                                                                        00060000
+ %dcl HPBIN char;                                                       00070000
+ %HPBIN =  'char(2)';                                                   00071000
+ %dcl HPBYTE char;                                                      00072000
+ %HPBYTE = 'char(1)';                                                   00073000
+ %dcl HPASCII char;                                                     00074000
+ %HPASCII = 'char';                                                     00075000
+                                                                        00076000
+ dcl     fp                  ptr,                                       00077000
+       1 font_desc           unaligned based(fp),                       00078000
+         5 size              HPBIN,                                     00079000
+         5 fil1,                                                        00080000
+           10 format         HPBYTE,                                    00090000
+           10 type           HPBYTE,                                    00100000
+         5 fil2,                                                        00110000
+           10 sty_msb        HPBYTE,                                    00120000
+           10 fil3           HPBYTE,                                    00130000
+         5 baseline          HPBIN,                                     00140000
+         5 cell_width        HPBIN,                                     00150000
+         5 cell_height       HPBIN,                                     00160000
+         5 fil4,                                                        00170000
+           10 orientation    HPBYTE,                                    00180000
+           10 spacing        HPBYTE,                                    00190000
+         5 symbol_set        HPBIN,                                     00200000
+         5 pitch             HPBIN,                                     00210000
+         5 height            HPBIN,                                     00220000
+         5 xheight           HPBIN,                                     00230000
+         5 fil5,                                                        00240000
+           10 width_type     HPBYTE,                                    00250000
+           10 sty_lsb        HPBYTE,                                    00260000
+         5 fil6,                                                        00270000
+           10 stroke_weight  HPBYTE,                                    00280000
+           10 typ_lsb        HPBYTE,                                    00290000
+         5 fil7,                                                        00300000
+           10 typ_msb        HPBYTE,                                    00310000
+           10 serif_style    HPBYTE,                                    00320000
+         5 fil8,                                                        00321000
+           10 quality        HPBYTE,                                    00322000
+           10 placement      HPBYTE,                                    00323000
+         5 fil9,                                                        00324000
+           10 ul_distance    HPBYTE,                                    00325000
+           10 ul_height      HPBYTE,                                    00326000
+         5 text_height       HPBIN,                                     00327000
+         5 text_width        HPBIN,                                     00328000
+         5 first_code        HPBIN,                                     00329000
+         5 last_code         HPBIN,                                     00330000
+         5 fil10,                                                       00340000
+           10 pitch_ext      HPBYTE,                                    00350000
+           10 height_ext     HPBYTE,                                    00360000
+         5 cap_height        HPBIN,                                     00370000
+         5 font_num          HPASCII(4),                                00380000
+         5 font_name         HPASCII(16);                               00390000

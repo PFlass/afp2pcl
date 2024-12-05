@@ -1,0 +1,9 @@
+ /*------------------------------------------------------------------*/ 00001001
+ /*      WORKAREA FOR 'CALDATE0' FUNCTION - 16 DEC 1996              */ 00002001
+ /*------------------------------------------------------------------*/ 00003001
+ DCL     CALDATE0             ENTRY(,) OPTIONS(ASM,INTER);              00010001
+ DCL     JULIAN_DATE               CHAR(4);                             00020001
+ DCL   1 CALDATE_OUTPUT,                                                00030000
+         5 OUTPUT_DATE             CHAR(10),      /* MM/DD/YYYY      */ 00040001
+         5 OUTPUT_DAY_OF_WEEK      CHAR(9),                             00050001
+         5 FIL                     CHAR(5);                             00060002

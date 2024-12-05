@@ -1,0 +1,601 @@
+//FLASS0   JOB  (),'AFP2PCL',CLASS=J,MSGCLASS=Z,                        00010000
+//         NOTIFY=$                                                     00020000
+//*                                                                     00030000
+//*                                                                     00040000
+//********************************************************************* 00050000
+//*                PL/I COMPILE AND LINK                              * 00060000
+//********************************************************************* 00070000
+// EXEC OPLIXCL,                                                        00080021
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00090000
+//   PARM.LKED='LIST,MAP,XREF'                                          00100000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120002
+//PLI.SYSIN    DD *                                                     00140000
+ /* AFP2PCL - Convert AFP data stream to PCL                         */ 00150000
+                                                                        00160000
+ /********************************************************************/ 00170000
+ /*                                                                  */ 00180000
+ /*    Module ID: AFP2PCL                                            */ 00190000
+ /*                                                                  */ 00200000
+ /*    Author:    Peter Flass                                        */ 00210000
+ /*               NYS LBDC                                           */ 00220000
+ /*               Apr, 1997                                          */ 00230000
+ /*                                                                  */ 00240000
+ /*    Function:  Main Program and Initialization for AFP2PCL.       */ 00250000
+ /*               (batch test version)                               */ 00260000
+ /*                                                                  */ 00260100
+ /*    Modifications:                                                */ 00260200
+ /*               18 Jan 2005 - STAPLE parm option.                  */ 00260421
+ /*               15 Mar 2001 - Duplex parm option.                  */ 00260521
+ /*               15 Nov 2000 - Dest override for metacode.          */ 00260621
+ /*               18 Oct 1999 - print version.                       */ 00260721
+ /*                6 Mar 1998 - SEGLIB read.                         */ 00260821
+ /*               15 Dec 1997 - Font widtn tables read.              */ 00260921
+ /*                3 Nov 1997 - Metacode routines.                   */ 00261021
+ /*                                                                  */ 00261121
+ /********************************************************************/ 00261221
+                                                                        00261321
+ %DCL    MCK                 CHAR;     /* Definition of MCK=YES      */ 00261421
+ %DCL    PCL                 CHAR;     /* Definition of PCL=YES      */ 00261521
+ %DCL   (TRUE,FALSE)         CHAR;                                      00261621
+ %MCK   = 'SUBSTR(PR_FLAGS,3,1)';                                       00262000
+ %PCL   = 'SUBSTR(PR_FLAGS,5,1)';                                       00263000
+ %TRUE  = '''1''b';                                                     00264000
+ %FALSE = '''0''b';                                                     00265000
+                                                                        00266000
+ AFP2PCL1: proc(parm) options( main reentrant );                        00267000
+                                                                        00268000
+ dcl     parm                char(100)           varying;               00269000
+                                                                        00270000
+ dcl     SYSPRINT            print;                                     00280000
+ dcl     AFPIN               record input;                              00281000
+ dcl     PCLOUT              record output                              00282000
+                             env(FB recsize(80) );                      00283000
+ dcl     METAOUT             record output                              00284000
+                             env(FB recsize(214) CTLASA );              00285000
+ dcl     FONTLIB             record input;                              00286000
+ dcl     WIDTHTB             record input;                              00287010
+ dcl     SEGLIB              record input;                              00287104
+                                                                        00288000
+ dcl     rc                  fixed bin(31);                             00289214
+ dcl     rcx                 fixed bin(31)       based;                 00290000
+ dcl     zero                fixed bin(31)       init(0);               00300000
+ dcl     dest_override       char(8)  varying    init('');              00310000
+ dcl     dwnld_override      char(1)             init('');              00320000
+ dcl     tray_override       char(1)             init('1');             00330000
+ dcl     pcl_override        char(1)             init('N');             00340000
+ dcl     msg_class           char(1)             init('*');             00350000
+ dcl     dcf_rel             char(8)  varying    init('');              00360000
+ dcl     keep_punch          bit(1)              init('0'b);            00370000
+ dcl     doing_meta          bit(1)              init('0'b);            00380000
+ dcl     raw_pcl             bit(1)              init('0'b);            00381008
+ dcl     duplex_opt          bit(1)              init('0'b); /*010315*/ 00382019
+ dcl     staple_opt          bit(1)              init('0'b); /*050118*/ 00383021
+ dcl     punch_opt           bit(1)              init('0'b); /*050525*/ 00384023
+ dcl     ricoh_opt           bit(1)              init('0'b); /*050607*/ 00385024
+                                                                        00390000
+ dcl   1 alloc_status        unaligned,                                 00400000
+         5 al_dsorg          char(4),                                   00410000
+         5 al_rc             fixed bin(31),                             00420000
+         5 al_s99rc          fixed bin(31),                             00430000
+         5 al_s99rsc         fixed bin(31),                             00440000
+         5 fil               char(32);                                  00450000
+                                                                        00460000
+ dcl     devd_area           char(4096)          based;                 00460206
+                                                                        00461006
+ %page;                                                                 00470000
+ %include pclincl;                                                      00480000
+ %include prtoken;                                                      00490000
+ %page;                                                                 00500000
+                                                                        00510000
+ dcl     numeric             char(10)  static                           00520000
+              init('0123456789');                                       00530000
+                                                                        00540000
+ dcl     AFP2PCL2            entry( ptr );                              00550000
+ dcl     AFP2PCV             entry;                                     00551014
+ dcl     FONTTAB             entry returns( ptr )                       00560000
+                             options( asm retcode );                    00570000
+ dcl     GETSYSI             entry( char(*), char(*) )                  00580000
+                             returns( fixed bin(31) );                  00590000
+ dcl     PDSMEM              entry( char(8), char(8), char(8) )         00600000
+                             returns( fixed bin(31) );                  00610000
+ dcl     RECL                entry( * )                                 00620000
+                             returns( fixed bin(31) );                  00630000
+ dcl     TOKEN               entry( char(8), ptr )                      00640000
+                             returns( fixed bin(31) );                  00650000
+ dcl     AJFCB               entry(*)                                   00660000
+                             returns( ptr );                            00670000
+ dcl     ALLOC               entry( char(*) varying , )                 00680000
+                             options( asm inter retcode );              00690000
+ dcl     HEXDUMP             entry( ptr, fixed bin(15), char(*) );      00691000
+                                                                        00692000
+ %include builtins;                                                     00693000
+                                                                        00694000
+ %page;                                                                 00695000
+                                                                        00696000
+ allocate parmarea set(aparm);                                          00697000
+ allocate prtoken  set(token_addr);                                     00698000
+ call process_parm;                                                     00699000
+ ecb_addr        = addr(zero);                                          00700000
+                                                                        00710000
+ if dest_override = 'LOCAL   ' | dest_override = 'METACODE'             00720011
+ then doing_meta = TRUE;                                                00730000
+                                                                        00740000
+ if ªdoing_meta then do;                                                00750000
+                                                                        00760000
+ /********************************************************************/ 00770000
+ /*      PCL Process                                                 */ 00780000
+ /********************************************************************/ 00790000
+                                                                        00791000
+   /* --------------------------------- */                              00792000
+   /* Get printer token                 */                              00793000
+   /* --------------------------------- */                              00794000
+   rc = token( (dest_override), token_addr );                           00795000
+   if rcª=0 then do;                                                    00796000
+     put skip edit('AFP800 ', dest_override,                            00797000
+                   ' is not a valid printer destination')(a);           00798000
+     call pliretc(12);                                                  00799000
+     return;                                                            00800000
+     end; /* rc */                                                      00810000
+                                                                        00820000
+   if PCL=TRUE | MCK=TRUE                                               00830000
+   then /* okay */ ;                                                    00840000
+   else do;                                                             00850000
+     if pcl_overrideª='Y' then do;                                      00860000
+       put skip edit('AFP8001 ', dest_override,                         00870000
+                     ' is not a PCL-capable printer',                   00880000
+                     ' and PCL(Y) not specified.')(a);                  00890000
+       call pliretc(12);                                                00900000
+       return;                                                          00901000
+       end; /* pcl_override */                                          00901100
+     else MCK=TRUE;            /* Allow override                     */ 00901200
+     end; /* else */                                                    00901300
+                                                                        00901400
+   /* --------------------------------- */                              00901500
+   /* Allocate PCLOUT if required       */                              00901600
+   /* --------------------------------- */                              00901700
+   if AJFCB(PCLOUT) = NULL() then do;    /* PCLOUT not preallocated  */ 00901800
+     call alloc( 'ALLOC FI(PCLOUT) SYSOUT(B) DEST(' ||                  00901900
+                 dest_override || ')',                                  00902000
+                 alloc_status );                                        00902100
+     if al_rcª=0 then do;                                               00902200
+       put skip edit('AFP802 Unable to allocate PCLOUT')(a);            00902300
+       put skip edit('  rc=',al_rc,                                     00902400
+                     '  SVC99rc=',al_s99rc,                             00902500
+                     ', SVC99reas=',al_s99rsc)                          00902600
+                    ((3)(A,P'9999',X(1)));                              00902700
+       call pliretc(12);                                                00902800
+       return;                                                          00902900
+       end; /* al_rc */                                                 00903000
+     end; /* AJFCB */                                                   00904000
+                                                                        00905000
+   end; /* PCL */                                                       00906000
+                                                                        00906100
+   else do;                                                             00906200
+                                                                        00906300
+ /********************************************************************/ 00906400
+ /*      METACODE Process                                            */ 00906500
+ /********************************************************************/ 00906600
+                                                                        00906700
+   /* --------------------------------- */                /* PF110397*/ 00906800
+   /* Allocate METAOUT if required      */                /* PF110397*/ 00906900
+   /* --------------------------------- */                /* PF110397*/ 00907000
+   if AJFCB(METAOUT) = NULL() then do;   /* METAOUT not preallocated7*/ 00908000
+     if dest_override='' then do;                         /* PF001115*/ 00908118
+       CALL ALLOC( 'ALLOC FI(METAOUT) SYSOUT(E) RECFM(F A)',            00909018
+                   alloc_status );                                      00910018
+       end;                                               /* PF001115*/ 00910118
+     else do;                                             /* PF001115*/ 00910218
+       CALL ALLOC( 'ALLOC FI(METAOUT) SYSOUT(E) RECFM(F A)' ||          00910318
+                   'DEST(' || dest_override || ')' ,                    00910418
+                   alloc_status );                                      00910518
+       end;                                               /* PF001115*/ 00910618
+     if al_rcª=0 then do;                                 /* PF110397*/ 00910718
+       put skip edit('AFP803 Unable to allocate METAOUT')(a); /*10397*/ 00910818
+       put skip edit('  rc=',al_rc,                       /* PF110397*/ 00910918
+                     '  SVC99rc=',al_s99rc,               /* PF110397*/ 00911018
+                     ', SVC99reas=',al_s99rsc)            /* PF110397*/ 00911118
+                    ((3)(A,P'9999',X(1)));                /* PF110397*/ 00911218
+       call pliretc(12);                                  /* PF110397*/ 00911318
+       return;                                            /* PF110397*/ 00911418
+       end; /* al_rc */                                   /* PF110397*/ 00911518
+     end; /* AJFCB */                                     /* PF110397*/ 00911618
+                                                                        00911718
+   end; /* METACODE */                                                  00911818
+                                                                        00911918
+ /* --------------------------------- */                                00912018
+ /* Read Font Table                   */                                00912118
+ /* --------------------------------- */                                00912218
+ fetch FONTTAB;                                                         00912318
+ call FONTTAB();                                                        00912418
+ addr(font_addr)->rcx = pliretv();                                      00912518
+ call pliretc(0);                                                       00912618
+ /* call HEXDUMP( (font_addr), 1024, 'FONTTAB' ); */                    00913000
+                                                                        00914000
+ /* --------------------------------- */                  /* PF110397*/ 00915000
+ /* Build parameter areas             */                  /* PF110397*/ 00916000
+ /* --------------------------------- */                  /* PF110397*/ 00917000
+ allocate statarea set(stat_addr);                                      00918000
+ allocate prtarea  set(printer_addr);                                   00919000
+ a2p_return_code = 0;                                                   00920000
+                                                                        00930000
+ print_routine    = print;                                              00940000
+ read_routine     = read;                                               00950000
+ punch_routine    = punch;                                              00960000
+ metacode_routine = wrtmeta;                              /* PF110397*/ 00970000
+ fontlib_routine  = fonts;                                              00980000
+ printer_lookup   = prtr;                                               00990000
+ widthtab_read    = widrtn;                               /* PF012298*/ 01000000
+ seglib_read      = segrtn;                               /* PF030698*/ 01001003
+ alloc devd_area set(devd_storage);                       /* PF990615*/ 01002012
+ /*devd_storage     = null();                             ** PF022598*/ 01010012
+                                                                        01020000
+ dest          = dest_override;                                         01030000
+ p_tray        = tray_override;                                         01040000
+ P_dwnld       = dwnld_override;                                        01050008
+ P_flags       = '0'b;                                                  01060008
+ P_raw         = raw_pcl;                                  /*PF032598*/ 01061008
+ P_duplex      = duplex_opt;                               /*PF010315*/ 01062019
+ P_staple      = staple_opt;                               /*PF050118*/ 01063021
+ P_punch       = punch_opt;                                /*PF050525*/ 01064023
+                                                                        01070000
+ stat_tasktime = (8)'00'x;                                              01080000
+ stat_jobs     = 0;                                                     01090000
+ stat_jobtime  = (8)'00'x;                                              01100000
+ rc = GETSYSI('JOBNAME',stat_jobname);                                  01110000
+ rc = GETSYSI('JOBID',stat_jobid);                                      01120000
+ stat_pages    = 0;                                                     01130000
+ stat_cards    = 0;                                                     01140000
+                                                                        01150000
+ prt_link      = null();                                                01160000
+ prt_id        = dest_override;                                         01170000
+ prt_device    = pr_devt;                                               01180000
+ prt_flags     = pr_flags;                                              01190000
+ prt_model     = pr_model;                                              01200000
+ prt_tray      = tray_override;        /* Don't use pr_tray          */ 01210000
+ prt_flgf      = '80'bx;               /* Download resident fonts    */ 01220000
+ prt_jobs      = 0;                                                     01230000
+ prt_pages     = 0;                                                     01240000
+ prt_fcnt      = 0;                                                     01250000
+ if ricoh_opt then prt_device='20'bx;  /* Force Ricoh/Savin  20050607*/ 01250125
+                                                                        01260000
+ /* --------------------------------- */                                01270000
+ /* Process Document                  */                                01280000
+ /* --------------------------------- */                                01290000
+ open file(afpin) input;                                                01300000
+ if doing_meta then open file(metaout) output;                          01310000
+ else               open file(pclout) output;                           01320000
+                                                                        01330000
+ fetch AFP2PCL2;                                                        01341014
+ call AFP2PCL2( aparm );                                                01350000
+ call pliretc( (a2p_return_code) );                                     01360000
+                                                                        01370000
+ close file(afpin);                                                     01380000
+ if doing_meta then close file(metaout);                                01381000
+ else               close file(pclout);                                 01382000
+                                                                        01383000
+ return;                                                                01384000
+                                                                        01385000
+                                                                        01386000
+ %page;                                                                 01387000
+ /********************************************************************/ 01388000
+ /*   Select output tray                                             */ 01389000
+ /*   Returns current tray if requested tray is invalid.             */ 01390000
+ /********************************************************************/ 01400000
+                                                                        01410000
+ select_tray: proc(tray) options( reentrant )                           01420000
+                         returns( char(1) );                            01430000
+ dcl     tray                char(8) varying;                           01440000
+ dcl     trays           (12)char(9) static      init(                  01450000
+         '1TOP',     '1MAIN',    '4BOTTOM',  '5LARGE',   '7AUTO',       01460000
+         '2MANUAL',  '3ENVELOPE','4MIDDLE',  '0*DUMMY**'                01470000
+         );                                                             01480000
+ dcl    (i,j)                fixed bin;                                 01490000
+                                                                        01500000
+ i = index(tray,' ');                                                   01510000
+ if i>0 then tray=substr(tray,1,i-1);                                   01520000
+ j=length(tray);                                                        01530000
+ if j=0 then return( '1' );                                             01540000
+ if verify(tray,numeric)=0 & j=1                                        01550000
+ then return( substr(tray,1,1) );                                       01560000
+ do i=1 by 1;                                                           01570000
+   if substr(trays(i),2,1)='*' |                                        01580000
+      substr(trays(i),2)=tray                                           01590000
+   then leave;                                                          01600000
+   end; /* do i */                                                      01610000
+                                                                        01620000
+ return( substr(trays(i),1,1) );                                        01630000
+                                                                        01640000
+ end select_tray;                                                       01650000
+                                                                        01660000
+ %page;                                                                 01670000
+ /********************************************************************/ 01680000
+ /*             Conversion Routines                                  */ 01690000
+ /********************************************************************/ 01700000
+                                                                        01710000
+ /********************************************************************/ 01720000
+ /*    Convert Number to Varying Character String                    */ 01730000
+ /********************************************************************/ 01740000
+ toc: procedure(n) options( reentrant )                                 01750000
+                   returns( char(5) varying );                          01760000
+ dcl     n                   fixed bin(15);                             01770000
+ dcl     c                   char(5) varying;                           01780000
+                                                                        01790000
+ select;                                                                01800000
+   when( n>9999 ) put string(c) edit(n)(p'(5)9');                       01810000
+   when( n>999  ) put string(c) edit(n)(p'(4)9');                       01820000
+   when( n>99   ) put string(c) edit(n)(p'(3)9');                       01830000
+   when( n>9    ) put string(c) edit(n)(p'(2)9');                       01840000
+   otherwise      put string(c) edit(n)(p'(1)9');                       01850000
+   end; /* select */                                                    01860000
+                                                                        01870000
+ return(c);                                                             01880000
+                                                                        01890000
+ end toc;                                                               01900000
+                                                                        01910000
+ %page;                                                                 01920008
+ /*-----------------------------------------*/                          01930000
+ /*     Parse PARM information              */                          01940000
+ /*-----------------------------------------*/                          01950000
+ process_parm: procedure;                                               01960008
+ dcl     command_text        char(80)       varying;                    01970000
+ dcl     w                   char(80)       varying;                    01980000
+ dcl     command             char(8)        varying;                    01990000
+ dcl     i                   fixed bin(15);                             02000000
+                                                                        02010000
+ i = index( parm, 'DEST(' );                                            02020000
+ if i>0 then do;                                                        02030000
+   w = substr(parm,i+5);                                                02040000
+   i = index(w,')');                                                    02050000
+   if i>0 then w=substr(w,1,i-1);                                       02060000
+   dest_override = w;                                                   02070000
+   end; /* DEST */                                                      02080000
+                                                                        02090000
+ i = index( parm, 'MSG(' );                                             02100000
+ if i>0 then do;                                                        02110000
+   w = substr(parm,i+4);                                                02120000
+   i = index(w,')');                                                    02130000
+   if i>0 then w=substr(w,1,i-1);                                       02140000
+   msg_class = w;                                                       02150000
+   end; /* MSG */                                                       02160000
+                                                                        02170000
+ i = index( parm, 'KEEP(' );                                            02180000
+ if i>0 then do;                                                        02190000
+   w = substr(parm,i+5);                                                02200000
+   i = index(w,')');                                                    02210000
+   if i>0 then w=substr(w,1,i-1);                                       02220000
+   if w='Y' then keep_punch = '1'b;                                     02230000
+   end; /* KEEP */                                                      02240000
+                                                                        02241008
+ i = index( parm, 'RAW(' );                                             02242008
+ if i>0 then do;                                                        02243008
+   w = substr(parm,i+4);                                                02244008
+   i = index(w,')');                                                    02245008
+   if i>0 then w=substr(w,1,i-1);                                       02246008
+   if w='Y' then raw_pcl = '1'b;                                        02247008
+   end; /* RAW */                                                       02248008
+                                                                        02250000
+ i = index( parm, 'DCF(' );                                             02260000
+ if i>0 then do;                                                        02270000
+   w = substr(parm,i+4);                                                02280000
+   i = index(w,')');                                                    02290000
+   if i>0 then w=substr(w,1,i-1);                                       02300000
+   dcf_rel = w;                                                         02310000
+   end; /* KEEP */                                                      02320000
+                                                                        02330000
+ i = index( parm, 'DL(' );                                              02340000
+ if i>0 then do;                                                        02350000
+   w = substr(parm,i+3);                                                02360000
+   i = index(w,')');                                                    02370000
+   if i>0 then w=substr(w,1,i-1);                                       02380000
+   dwnld_override = w;                                                  02390000
+   end; /* DL */                                                        02400000
+                                                                        02410000
+ i = index( parm, 'TRAY(' );                                            02420000
+ if i>0 then do;                                                        02430000
+   w = substr(parm,i+5);                                                02440000
+   i = index(w,')');                                                    02450000
+   if i>0 then w=substr(w,1,i-1);                                       02460000
+   tray_override = w;                                                   02470000
+   end; /* TRAY */                                                      02480000
+                                                                        02490000
+ i = index( parm, 'PCL(' );                                             02500000
+ if i>0 then do;                                                        02510000
+   w = substr(parm,i+4);                                                02520000
+   i = index(w,')');                                                    02530000
+   if i>0 then w=substr(w,1,i-1);                                       02540000
+   pcl_override = w;                                                    02550000
+   end; /* PCL */                                                       02560000
+                                                                        02561019
+ i = index( parm, 'DUPLEX(' );                               /*010315*/ 02562019
+ if i>0 then do;                                             /*010315*/ 02563019
+   w = substr(parm,i+7);                                     /*010315*/ 02564019
+   i = index(w,')');                                         /*010315*/ 02565019
+   if i>0 then w=substr(w,1,i-1);                            /*010315*/ 02566019
+   if w='Y' then duplex_opt = '1'b;                          /*010315*/ 02567019
+   end; /* DUPLEX */                                         /*010315*/ 02568019
+                                                                        02569021
+ i = index( parm, 'STAPLE(' );                               /*050118*/ 02569121
+ if i>0 then do;                                             /*050118*/ 02569221
+   w = substr(parm,i+7);                                     /*050118*/ 02569321
+   i = index(w,')');                                         /*050118*/ 02569421
+   if i>0 then w=substr(w,1,i-1);                            /*050118*/ 02569521
+   if w='Y' then staple_opt = '1'b;                          /*050124*/ 02569622
+   end; /* STAPLE */                                         /*050118*/ 02569721
+                                                                        02569823
+ i = index( parm, 'PUNCH(' );                                /*050525*/ 02569923
+ if i>0 then do;                                             /*050525*/ 02570023
+   w = substr(parm,i+6);                                     /*050525*/ 02570123
+   i = index(w,')');                                         /*050525*/ 02570223
+   if i>0 then w=substr(w,1,i-1);                            /*050525*/ 02570323
+   if w='Y' then punch_opt = '1'b;                           /*050525*/ 02570423
+   end; /* PUNCH */                                          /*050525*/ 02570523
+                                                                        02570624
+ i = index( parm, 'RICOH' );                                 /*050607*/ 02570724
+ if i>0 then ricoh_opt='1'b;                                 /*050607*/ 02570824
+                                                                        02572024
+   end process_parm;                                                    02580008
+                                                                        02590000
+ %page;                                                                 02600000
+ /*------------------------------------------------------------------*/ 02610000
+ /*      print: called externally by AFP2PCL2                        */ 02620000
+ /*         print a line to SYSPRINT                                 */ 02630000
+ /*------------------------------------------------------------------*/ 02640000
+ print: entry( p_msg );                                                 02650000
+ dcl     p_msg                 char(120);                               02660000
+ begin /* print */ ;                                                    02670000
+   put skip edit(p_msg)(a);                                             02680000
+   return;                                                              02690000
+   end /* print */ ;                                                    02700000
+                                                                        02710000
+ /*------------------------------------------------------------------*/ 02720000
+ /*      read:  called externally by AFP2PCL2                        */ 02730000
+ /*         read a card from AFPIN                                   */ 02740000
+ /*------------------------------------------------------------------*/ 02750000
+ read: entry( r_p ) returns( fixed bin(31) );                           02760000
+ dcl     r_p                 ptr;                                       02770000
+ begin /* read */ ;                                                     02780000
+ dcl     afp_eof             bit(1)              init('0'b);            02790000
+   on endfile(afpin) afp_eof='1'b;                                      02800000
+   read file(afpin) set(r_p);                                           02810000
+   if afp_eof then return( -1 );                                        02820000
+   return( RECL(afpin) );                                               02830000
+   end /* read */ ;                                                     02840000
+                                                                        02850000
+ /*------------------------------------------------------------------*/ 02860000
+ /*      wrtmeta: called externally by AFP2PCL2                      */ 02870000
+ /*         writes a record to METAOUT                               */ 02880000
+ /*------------------------------------------------------------------*/ 02890000
+ wrtmeta: entry( p_mp );                                                02900000
+ dcl     p_mp                 ptr;                                      02910000
+ begin /* wrtmeta */ ;                                                  02920000
+ dcl     metarec             char(214)  based(p_mp);                    02930000
+   write file(metaout) from(metarec);                                   02940000
+   return;                                                              02950000
+   end /* wrtmeta */ ;                                                  02960000
+                                                                        02970000
+ /*------------------------------------------------------------------*/ 02980000
+ /*      punch: called externally by AFP2PCL2                        */ 02990000
+ /*         writes a record to PCLOUT                                */ 03000000
+ /*------------------------------------------------------------------*/ 03010000
+ punch: entry( p_p );                                                   03020000
+ dcl     p_p                 ptr;                                       03030000
+ begin /* punch */ ;                                                    03040000
+ dcl     card                char(80)  based(p_p);                      03050000
+   write file(pclout) from(card);                                       03051000
+   return;                                                              03052000
+   end /* punch */ ;                                                    03053000
+                                                                        03054000
+ /*------------------------------------------------------------------*/ 03055000
+ /*      fonts: called externally by AFP2PCL2                        */ 03056000
+ /*         reads data from a (PCL) fontlib member                   */ 03057000
+ /*------------------------------------------------------------------*/ 03058000
+ fonts: entry( f_f, f_p ) returns( fixed bin(31) );                     03059000
+ dcl     f_f                 char(1);                                   03060000
+ dcl     f_p                 ptr;                                       03070000
+ begin /* fonts */ ;                                                    03080000
+ dcl     rc                  fixed bin(31);                             03090000
+ dcl     font_name           char(8)   based(f_p);                      03100000
+ dcl     fnt_eof             bit(1)              init('0'b);            03110000
+   on endfile(fontlib) fnt_eof='1'b;                                    03120000
+   if f_f='F' then do;                                                  03130000
+     rc = pdsmem( 'READ', 'FONTLIB', font_name );                       03140000
+     if rcª=0 then return(8);                                           03150000
+     open file(fontlib) input;                                          03160000
+     return(0);                                                         03170000
+     end; /* F */                                                       03180000
+   else do; /* R */                                                     03190000
+     read file(fontlib) set(f_p);                                       03200000
+     if fnt_eof then do;                                                03210000
+       close file(fontlib);                                             03220000
+       return( -1 );                                                    03230000
+       end; /* eof */                                                   03240000
+     return(0);                                                         03250000
+     end; /* R */                                                       03260000
+   end /* fonts */ ;                                                    03270000
+                                                                        03280000
+ /*------------------------------------------------------------------*/ 03290000
+ /*      prtr: called externally by AFP2PCL2                         */ 03300000
+ /*         looks up printer information                             */ 03310000
+ /*------------------------------------------------------------------*/ 03320000
+ prtr: entry( l_p );                                                    03330000
+ dcl     l_p                 ptr;                                       03340000
+ begin /* prtr */ ;                                                     03350000
+   return;                                                              03360000
+   end /* prtr */ ;                                                     03370000
+                                                                        03380000
+ /*------------------------------------------------------------------*/ 03390000
+ /*      width: called externally by AFP2PCL2                        */ 03400000
+ /*         reads data from an (AFP) font width table                */ 03410003
+ /*------------------------------------------------------------------*/ 03420000
+ widrtn: entry( w_f, w_p ) returns( fixed bin(31) );                    03430000
+ dcl     w_f                 char(1);                                   03431000
+ dcl     w_p                 ptr;                                       03432000
+ begin /* width */ ;                                                    03433000
+ dcl     rc                  fixed bin(31);                             03434000
+ dcl     font_name           char(8)   based(w_p);                      03435000
+ dcl     fnt_eof             bit(1)              init('0'b);            03436000
+   on endfile(WIDTHTB) fnt_eof='1'b;                                    03437010
+   if w_f='F' then do;                                                  03438000
+     rc = pdsmem( 'READ', 'WIDTHS', font_name );                        03439010
+     if rcª=0 then return( 8 );                                         03439100
+     open file(WIDTHTB) input title('WIDTHS');                          03439210
+     return(0);                                                         03439300
+     end; /* F */                                                       03439400
+   else do; /* R */                                                     03439500
+     read file(WIDTHTB) set(w_p);                                       03439610
+     if fnt_eof then do;                                                03439700
+       close file(WIDTHTB);                                             03439810
+       return( -1 );                                                    03439900
+       end; /* eof */                                                   03440000
+     return(0);                                                         03440100
+     end; /* R */                                                       03440200
+   end /* width */ ;                                                    03440300
+                                                                        03440403
+ /*------------------------------------------------------------------*/ 03440503
+ /*      segrtn: called externally by AFP2PCL2                       */ 03440603
+ /*         reads data from an (AFP) page segment                    */ 03440703
+ /*------------------------------------------------------------------*/ 03440803
+ segrtn: entry( s_f, s_p ) returns( fixed bin(31) );                    03440905
+ dcl     s_f                 char(1);                                   03441003
+ dcl     s_p                 ptr;                                       03441103
+ begin /* segrtn */ ;                                                   03441203
+ dcl     rc                  fixed bin(31);                             03441303
+ dcl     seg_name            char(8)   based(s_p);                      03441403
+ dcl     seg_eof             bit(1)              init('0'b);            03441503
+   on endfile(SEGLIB) seg_eof='1'b;                                     03441604
+   if s_f='F' then do;                                                  03441803
+     rc = pdsmem( 'READ', 'SEGLIB', seg_name );                         03441903
+     if rcª=0 then return( 8 );                                         03442003
+     open file(SEGLIB) input;                                           03442103
+     return(0);                                                         03442203
+     end; /* F */                                                       03442303
+   else do; /* R */                                                     03442403
+     read file(SEGLIB) set(s_p);                                        03442503
+     if seg_eof then do;                                                03442603
+       close file(SEGLIB);                                              03442803
+       return( -1 );                                                    03442903
+       end; /* eof */                                                   03443003
+     return(0);                                                         03443103
+     end; /* R */                                                       03443203
+   end /* segrtn */ ;                                                   03443303
+                                                                        03443400
+ %include word;                                                         03443500
+ %include wordpos;                                                      03443600
+ %include ebcasc;                                                       03443700
+ %include lowercas;                                                     03443800
+                                                                        03443900
+ end AFP2PCL1;                                                          03444000
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 03444100
+//LKED.SYSLIB DD                                                        03444200
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    03444302
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        03444402
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      03445000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       03446002
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  03447000
+//LKED.SYSIN DD *                                                       03448000
+ LIBRARY (FONTTAB,AFP2PCL2,AFP2PCV)                                     03449014
+ MODE AMODE(31)                                                         03450000
+ MODE RMODE(24)                                                         03460000
+ NAME AFP2PCL(R)                                                        03470000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 03480000

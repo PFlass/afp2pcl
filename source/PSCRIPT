@@ -1,0 +1,243 @@
+//FLASS0   JOB  (),'PSCRIPT',CLASS=J,MSGCLASS=Z,                        00010001
+//         NOTIFY=$                                                     00020001
+//*                                                                     00030001
+//*                                                                     00040001
+//********************************************************************* 00050001
+//*                PL/I COMPILE AND LINK                              * 00060001
+//********************************************************************* 00070001
+// EXEC PLIXCL,                                                         00080001
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00090001
+//   PARM.LKED='LIST,MAP,XREF'                                          00100001
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110001
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120001
+//PLI.SYSIN    DD *                                                     00123001
+ /* PSCRIPT - Send Post Script file to printer                       */ 00124001
+                                                                        00125001
+ /********************************************************************/ 00126001
+ /*                                                                  */ 00127001
+ /*    Module ID: PSCRIPT - Send Post Script file to printer.        */ 00128001
+ /*                                                                  */ 00129001
+ /*    Author:    Peter Flass                                        */ 00130001
+ /*               NYS LBDC                                           */ 00140001
+ /*               Mar, 1999                                          */ 00150001
+ /*                                                                  */ 00160001
+ /*    Function:  Download list of fonts to PCL printer hard drive.  */ 00170001
+ /*                                                                  */ 00180001
+ /*    Modifications:                                                */ 00190001
+ /*                                                                  */ 00200001
+ /********************************************************************/ 00210001
+                                                                        00220001
+ %DCL   (TRUE,FALSE)         CHAR;                                      00230001
+ %TRUE  = '''1''b';                                                     00240001
+ %FALSE = '''0''b';                                                     00250001
+                                                                        00260001
+ PSCRIPT: proc(parm) options( main reentrant );                         00261001
+                                                                        00261101
+ dcl     parm                char(100)           varying;               00261201
+                                                                        00261301
+ dcl     SYSPRINT            print;                                     00261401
+ dcl     PCLOUT              record output                              00261501
+                             env(FB recsize(80) );                      00261601
+ dcl     PSIN                record input;                              00261701
+                                                                        00261801
+ dcl     psp                 ptr;                                       00261901
+ dcl     ps_buf              char(256) based(psp);                      00262001
+ dcl     ps_count            fixed bin(15);                             00262101
+ dcl     rc                  fixed bin(31);                             00262201
+ dcl     rcx                 fixed bin(31)       based;                 00262301
+ dcl     zero                fixed bin(31)       init(0);               00263001
+ dcl     pcl_work            char(80)  varying;                         00266001
+ dcl     ps_eof              bit(1)              init('0'b);            00267001
+                                                                        00269001
+ dcl   1 alloc_status        unaligned,                                 00270001
+         5 al_dsorg          char(4),                                   00280001
+         5 al_rc             fixed bin(31),                             00290001
+         5 al_s99rc          fixed bin(31),                             00300001
+         5 al_s99rsc         fixed bin(31),                             00310001
+         5 fil               char(32);                                  00320001
+                                                                        00330001
+ /*-----------------------------------*/                                00340001
+ /* 'Static' data                     */                                00350001
+ /*-----------------------------------*/                                00360001
+ dcl     pcl_rec             char(80);                                  00370001
+ dcl     pclo                fixed bin(15)                 init(-1);    00380001
+ dcl     stat_cards          fixed bin(15)                 init(0);     00381001
+                                                                        00390001
+ %page;                                                                 00400001
+                                                                        00410001
+ dcl     numeric             char(10)  static                           00420001
+              init('0123456789');                                       00430001
+ dcl     ESC                 char(1) static      init( '27'x );         00440001
+ dcl     CRLF                char(2) static      init( '0D0A'x );       00450001
+                                                                        00470001
+ dcl     GETSYSI             entry( char(*), char(*) )                  00500001
+                             returns( fixed bin(31) );                  00510001
+ dcl     RECL                entry( * )                                 00540001
+                             returns( fixed bin(31) );                  00550001
+ dcl     ALLOC               entry( char(*) varying , )                 00600001
+                             options( asm inter retcode );              00610001
+                                                                        00630001
+ %include builtins;                                                     00640001
+                                                                        00650001
+ %page;                                                                 00660001
+                                                                        00690001
+ on endfile(psin) ps_eof='1'b;                                          00691001
+                                                                        00693301
+ call process_parm;                                                     00693401
+                                                                        00697001
+ /* --------------------------------- */                                00698001
+ /* Write job header                  */                                00699001
+ /* --------------------------------- */                                00700001
+ open file(pclout) output;                                              00710001
+ pcl_work = ESC || '%-12345X@PJL JOB NAME="POSTSCRIPT"';                00720001
+ call write_pcl( addr(pcl_work)+2,                                      00730001
+                 length(pcl_work),                                      00740001
+                 addr(ascii)                                            00750001
+               );                                                       00760001
+ pcl_work = CRLF;                                                       00770001
+ call write_pcl( addr(pcl_work)+2,                                      00780001
+                 length(pcl_work),                                      00790001
+                 null()                                                 00800001
+               );                                                       00810001
+                                                                        00820001
+ /* --------------------------------- */                                00830001
+ /* Process Post Script File          */                                00840001
+ /* --------------------------------- */                                00850001
+                                                                        00860001
+ open file(psin) input;                                                 00861001
+ read file(psin) set(psp);                                              00862001
+ do while(ªps_eof);                                                     00870001
+   ps_count = RECL(psin);                                               00880001
+   call write_pcl( psp, ps_count, null() );                             00890001
+   read file(psin) set(psp);                                            00900001
+   end; /* do while */                                                  01336301
+                                                                        01336401
+ /* --------------------------------- */                                01336501
+ /* Write job trailer                 */                                01336601
+ /* --------------------------------- */                                01336701
+ pcl_work = ESC || '%-12345X@PJL EOJ';                                  01336801
+ call write_pcl( addr(pcl_work)+2,                                      01336901
+                 length(pcl_work),                                      01337001
+                 addr(ascii)                                            01337101
+               );                                                       01337201
+ pcl_work = CRLF;                                                       01340001
+ call write_pcl( addr(pcl_work)+2,                                      01341001
+                 length(pcl_work),                                      01342001
+                 null()                                                 01343001
+               );                                                       01344001
+ call write_pcl( null(), -1, null() );           /* Flush last card  */ 01345001
+ close file(pclout);                                                    01346001
+                                                                        01347001
+ return;                                                                01348001
+                                                                        01349001
+ %page;                                                                 01350001
+ /*-----------------------------------------*/                          01360001
+ /*     Parse PARM information              */                          01370001
+ /*-----------------------------------------*/                          01380001
+ process_parm: procedure;                                               01390001
+ dcl     command_text        char(80)       varying;                    01400001
+ dcl     w                   char(80)       varying;                    01410001
+ dcl     command             char(8)        varying;                    01420001
+ dcl     i                   fixed bin(15);                             01430001
+                                                                        01440001
+   /*===============================*/                                  01450001
+   /* No parm information currently */                                  01460001
+   /*===============================*/                                  01470001
+                                                                        01480001
+   end process_parm;                                                    01490001
+                                                                        01500001
+ %page;                                                                 01510001
+ /********************************************************************/ 01520001
+ /*    Write data to pclout                                          */ 01530001
+ /********************************************************************/ 01540001
+ write_pcl: procedure(p,len,t) options( reentrant );                    01550001
+ dcl     p                   ptr;                                       01560001
+ dcl     len                 fixed bin(15);                             01570001
+ dcl     t                   ptr;                                       01580001
+                                                                        01590001
+ dcl     pcl_hdr             char(80)  static                           01600001
+              init( ('5A'x || 'JES328X' || '01DA'x || (70)'FF'x) );     01610001
+ dcl     buffer_init         char(3)   static                           01620001
+              init( '5A354D'x );                                        01630001
+                                                                        01640001
+ /*-------------------------*/                                          01650001
+ /* First time thru         */                                          01660001
+ /*-------------------------*/                                          01670001
+ if pclo<=0 then do;                                                    01680001
+   pcl_rec = buffer_init || (80)'00'x;                                  01690001
+   pclo=length(buffer_init)+1;                                          01700001
+   end; /* pclo=0 */                                                    01710001
+                                                                        01720001
+ /*-------------------------*/                                          01730001
+ /* Flush out last card(s)  */                                          01740001
+ /*-------------------------*/                                          01750001
+ if len<0 then do;                                                      01760001
+   if pclo>4 then call punch_one_card;                                  01770001
+   do while( mod(stat_cards,6)ª=0 );                                    01780001
+     call punch_one_card; /* punch empty cards */                       01790001
+     end; /* do while */                                                01800001
+   return;                                                              01810001
+   end; /* len<0 */                                                     01820001
+                                                                        01830001
+ call move_data( (p), (len), (t) );    /* All parms called by value  */ 01840001
+                                                                        01850001
+ return;                                                                01860001
+                                                                        01870001
+ /*-------------------------*/                                          01880001
+ /* Data mover              */                                          01890001
+ /*-------------------------*/                                          01900001
+ move_data: procedure(atext,count,atab) options( reentrant );           01910001
+   dcl   atext               ptr,                                       01920001
+         text                char(32767)         based(atext);          01930001
+   dcl   count               fixed bin(15);                             01940001
+   dcl   atab                ptr,                                       01950001
+         ttab                char(256)           based(atab);           01960001
+   dcl  (char_in,char_out)   fixed bin(15);                             01970001
+   dcl   n                   fixed bin(15);                             01980001
+                                                                        01990001
+   char_in  = count;                                                    02000001
+   do while(char_in>0);                                                 02010001
+     char_out = 80-pclo+1;                                              02020001
+     n = min(char_in,char_out);                                         02030001
+     substr(pcl_rec,pclo,n) = substr(text,1,n);                         02040001
+     if atabª=null() then substr(pcl_rec,pclo,n) =                      02050001
+           translate( substr(pcl_rec,pclo,n), ttab );                   02060001
+     atext   = atext+n;                                                 02070001
+     char_in = char_in-n;                                               02080001
+     if n = char_out then call punch_one_card;                          02090001
+     else pclo=pclo+n;                                                  02100001
+     end; /* do while */                                                02110001
+                                                                        02120001
+   end move_data;                                                       02130001
+                                                                        02140001
+ punch_one_card: procedure options( reentrant );                        02150001
+   if mod(stat_cards,6) = 0                                             02160001
+   then write file(pclout) from(pcl_hdr);                               02170001
+   stat_cards = stat_cards + 1;                                         02180001
+   write file(pclout) from(pcl_rec);                                    02190001
+   pcl_rec = buffer_init || (80)'00'x;                                  02200001
+   pclo=length(buffer_init)+1;                                          02210001
+   end punch_one_card;                                                  02220001
+                                                                        02230001
+ end write_pcl;                                                         02240001
+                                                                        02250001
+ %page;                                                                 02260001
+                                                                        02270001
+ %include word;                                                         02280001
+ %include wordpos;                                                      02290001
+ %include ebcasc;                                                       02300001
+ %include lowercas;                                                     02310001
+                                                                        02320001
+ end PSCRIPT;                                                           02330001
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 02340001
+//LKED.SYSLIB DD                                                        02350001
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    02360001
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        02370001
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      02380001
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       02390001
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  02400001
+//LKED.SYSIN DD *                                                       02410001
+ MODE AMODE(31)                                                         02430001
+ MODE RMODE(24)                                                         02440001
+ NAME PSCRIPT(R)                                                        02450001
+//* -------------- END OF LINKEDIT STEP ------------------------------* 02460001

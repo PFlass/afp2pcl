@@ -1,0 +1,5 @@
+ /* Lower-case alphabetic characters */                                 00010000
+ DCL LOWER_CASE CHAR(26) STATIC                                         00020000
+   INIT('abcdefghijklmnopqrstuvwxyz');                                  00030000
+ DCL UPPER_CASE CHAR(26) STATIC                                         00040000
+   INIT('ABCDEFGHIJKLMNOPQRSTUVWXYZ');                                  00050000

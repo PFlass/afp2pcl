@@ -1,0 +1,134 @@
+//FLASS35  JOB  (),'FONT4235',CLASS=J,MSGCLASS=X,                       00010002
+//         NOTIFY=$                                                     00020000
+//********************************************************************* 00030000
+//*                PL/I COMPILE AND LINK                              * 00040000
+//********************************************************************* 00050000
+// EXEC PLIXCL,                                                         00060000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG',                                  00070000
+//   PARM.LKED='LIST,MAP,XREF'                                          00080000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00090000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00100005
+//PLI.SYSIN    DD *                                                     00110000
+ /* FONT4235: Download Xerox 4235 fonts                              */ 00120002
+                                                                        00130000
+ /********************************************************************/ 00140000
+ /*                                                                  */ 00150000
+ /* Module: FONT4235                                                 */ 00160002
+ /*                                                                  */ 00170000
+ /* Author: Peter Flass -- NYS LBDC                                  */ 00180000
+ /*         March, 1998                                              */ 00190000
+ /*                                                                  */ 00200000
+ /* Function: Load Xerox 4235 XPPM fonts from PDS to printer.        */ 00210002
+ /*           Fonts are stored with RECFM=FB,LRECL=128               */ 00220000
+ /*           This program add LBD-specific DJDE header              */ 00230000
+ /*           and writes header+font to print stream.                */ 00240000
+ /*                                                                  */ 00250004
+ /* Modifications:                                                   */ 00260004
+ /*            4-1-98 Process fontlib as PDS.                        */ 00270004
+ /*                                                                  */ 00280004
+ /********************************************************************/ 00290000
+                                                                        00300000
+ FONT4235: proc(parm)   options( main );                                00310002
+ dcl     parm                char(100) varying;                         00320000
+                                                                        00330004
+ dcl     fontin              input record;                              00340000
+ dcl     sysin               input record;                              00350004
+ dcl     prtout              output record                              00360000
+                             env( FB CTLASA );                          00370002
+                                                                        00380004
+ dcl     rc                  fixed bin(31);                             00390004
+ dcl     cardin              char(80);                                  00400004
+ dcl     inptr               ptr;                                       00410000
+ dcl     inrec               char(128)           based(inptr);          00420000
+ dcl     outrec              char(133);                                 00430001
+ dcl     card_eof            bit(1)              init('0'b);            00440004
+ dcl     member              char(8)  varying;                          00450004
+ dcl     msg                 char(80)            varying;               00460004
+ dcl     j                   fixed bin(15);                             00470004
+ dcl     mc                  fixed bin(15)       init(0);               00480004
+ dcl     ml             (256)char(80)            varying;               00490004
+                                                                        00500004
+ dcl     PDSMEM              entry( char(8), char(8), char(8) )         00510004
+                             returns( fixed bin(31) );                  00520004
+ %include builtins;                                                     00530004
+                                                                        00540000
+ on endfile(sysin)  card_eof='1'b;                                      00550004
+                                                                        00560000
+ /*---------------------------------------------*/                      00570004
+ /*      Read and process control cards         */                      00580004
+ /*---------------------------------------------*/                      00590004
+ open file(sysin) input,                                                00600004
+      file(prtout) output;                                              00610004
+ read file(sysin) into(cardin);                                         00620004
+ outrec = '+ **DJDE**,FILE=(,,,P),END;';                                00630004
+ write file(prtout) from(outrec);                                       00640004
+ do while(card_eof='0'b);                                               00650004
+   if substr(cardin,1,1)ª='*' &                                         00660004
+      cardinª=' '                                                       00670004
+   then do;                                                             00680004
+     member = word(cardin,1);                                           00690004
+     rc = pdsmem( 'READ', 'FONTIN', member );                           00700004
+     if rcª=0 then do;                                                  00710004
+       msg = ' Font ' || member || ' not found.';                       00720004
+       call add_msg;                                                    00730004
+       end; /* rcª=0 */                                                 00740004
+     else do;                                                           00750004
+       call load_the_font;                                              00760004
+       msg = ' Font ' || member || ' has been downloaded.';             00770004
+       call add_msg;                                                    00780004
+       end; /* else */                                                  00790004
+     end; /* ª'*' */                                                    00800004
+   read file(sysin) into(cardin);                                       00810004
+   end; /* card_eof */                                                  00820004
+                                                                        00830004
+ outrec = '+ ' || (8)'13'x;            /* 'RSTACK' data              */ 00840004
+ write file(prtout) from(outrec);                                       00850004
+                                                                        00860004
+ do j=1 to mc;                                                          00870004
+   outrec = ml(j);                                                      00880004
+   write file(prtout) from(outrec);                                     00890004
+   end; /* do j */                                                      00900004
+                                                                        00910004
+ close file(sysin),                                                     00920004
+       file(prtout);                                                    00930004
+ return;                                                                00940004
+                                                                        00950004
+ add_msg: proc;                                                         00960004
+   if mc<hbound(ml,1) then do;                                          00970004
+     mc=mc+1;                                                           00980004
+     ml(mc)=msg;                                                        00990004
+     end;                                                               01000004
+   else ml(mc)=' ***** Message table overflow *****';                   01010004
+ end add_msg;                                                           01020004
+                                                                        01030004
+ %page;                                                                 01040004
+ /*---------------------------------------------*/                      01050004
+ /*      Download one font file                 */                      01060004
+ /*---------------------------------------------*/                      01070004
+ load_the_font: proc;                                                   01080004
+   dcl   font_eof            bit(1)              init('0'b);            01090004
+   on endfile(fontin) font_eof='1'b;                                    01100004
+   open file(fontin) input;                                             01110004
+   read file(fontin) set(inptr);                                        01120004
+                                                                        01130004
+   do while(ªfont_eof);                                                 01140004
+     outrec = '+' || inrec || '*';                                      01150004
+     write file(prtout) from(outrec);                                   01160004
+     read file(fontin) set(inptr);                                      01170004
+     end; /* do while */                                                01180004
+                                                                        01190004
+   close file(fontin);                                                  01200004
+ end load_the_font;                                                     01210004
+                                                                        01220000
+ %include word;                                                         01230004
+                                                                        01240004
+ end FONT4235;                                                          01250002
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 01260000
+//LKED.SYSLIB DD                                                        01270000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        01280000
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      01290000
+//LKED.SYSLMOD  DD DSN=FLASS.PF.LOAD,DISP=SHR                           01300000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  01310000
+//LKED.SYSIN DD *                                                       01320000
+ NAME FONT4235(R)                                                       01330002
+//* -------------- END OF LINKEDIT STEP ------------------------------* 01340000

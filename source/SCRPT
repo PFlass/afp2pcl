@@ -1,0 +1,872 @@
+//FLASSP   JOB  (),'SCRPT',CLASS=J,MSGCLASS=Z,                          00010040
+//         NOTIFY=$                                                     00020000
+//********************************************************************* 00030000
+//*                PL/I COMPILE AND LINK                              * 00040000
+//********************************************************************* 00050000
+// EXEC OPLIXCL,                                                        00060054
+//   PARM.PLI='M,NIS,OF,STMT,XREF,GS,AG,LANGLVL(SPROG)',                00070052
+//   PARM.LKED='LIST,MAP,XREF'                                          00080000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00090000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00100029
+//PLI.SYSIN    DD *                                                     00110000
+ /* SCRPT -- Run  SCRIPT in MVS batch                                */ 00120000
+                                                                        00130000
+ /********************************************************************/ 00140000
+ /*                                                                  */ 00150000
+ /* Module name: SCRPT                                               */ 00160000
+ /*                                                                  */ 00170000
+ /* Author:      Peter Flass                                         */ 00180000
+ /*              New York State Legislative Bill Drafting Commission */ 00190000
+ /*              May, 1997                                           */ 00200000
+ /*                                                                  */ 00210000
+ /* Function:    Invoke TSO/E Script Command from batch.             */ 00220000
+ /*              TSO/E environment is established via call           */ 00230000
+ /*              to IKJTSOEV.  Script command is built               */ 00240000
+ /*              and executed via call to IKJEFTSR.                  */ 00250000
+ /*                                                                  */ 00260000
+ /* Input:       SYSIN contains SCRIPT input file.                   */ 00270000
+ /*                                                                  */ 00280000
+ /* Modifications:                                                   */ 00290000
+ /*              2010-02-04 Add 'CONTINUE' option                 PRF*/ 00300168
+ /*              2008-07-29 Add 'BIND' option.                    PRF*/ 00300268
+ /*              2005-06-21 Add 'PUNCH' option.                   PRF*/ 00300368
+ /*              2005-01-27 Add 'STAPLE' option.                  PRF*/ 00300468
+ /*              2002-01-15 Add 'RMT6' as valid metacode dest.    PRF*/ 00300568
+ /*              2000-11-16 Fix copies for metacode devices.      PRF*/ 00300668
+ /*              2000-11-08 'SYSVAR' option.                      PRF*/ 00300768
+ /*              2000-10-27 'PAGE' Option.                        PRF*/ 00300868
+ /*              2000-06-14 'TEST' Option.                        PRF*/ 00300968
+ /*              2000-06-13 Version 2.0                           PRF*/ 00301068
+ /*                Use DDnames for SCRPTFNT, SCRPTSEG, TEXTLIB.   PRF*/ 00301168
+ /*              2000-05-22 Add CLASS() parm.                     PRF*/ 00301268
+ /*              2000-02-15 Change FONTLIB DD                     PRF*/ 00301368
+ /*              1999-09-21 Change DCF() parm to 17 characters.   PRF*/ 00301468
+ /*              1999-09-17 DUPLEX() option.                      PRF*/ 00302055
+ /*              1999-05-26 DEST(LOCAL).                          PRF*/ 00310030
+ /*              1999-05-05 NOTRACE option.                       PRF*/ 00320030
+ /*              1999-03-16 PS() option.                          PRF*/ 00330030
+ /*              1999-01-24 TWOPASS  option                       PRF*/ 00340030
+ /*              1998-08-12 SPELLCHK option                       PRF*/ 00350030
+ /*              1997-10-02 check for PCL printer                 PRF*/ 00360022
+ /*                                                                  */ 00370017
+ /********************************************************************/ 00380000
+                                                                        00390000
+ %DCL    version             CHARACTER;                                 00400017
+ %version = '''2.0''';                                                  00410037
+                                                                        00420017
+ %DCL    MCK                 CHAR;     /* Definition of MCK=YES100297*/ 00430017
+ %DCL    PCL                 CHAR;     /* Definition of PCL=YES100297*/ 00440017
+ %DCL    VPS                 CHAR;     /* Definition of VPS=YES060811*/ 00441060
+ %DCL   (TRUE,FALSE)         CHAR;                                      00450017
+ %DCL    FOREVER             CHARACTER;                                 00460017
+ %MCK   = 'SUBSTR(PR_FLAGS,3,1)';                          /*PF100297*/ 00470017
+ %PCL   = 'SUBSTR(PR_FLAGS,5,1)';                          /*PF100297*/ 00480017
+ %VPS   = 'SUBSTR(PR_PCL,7,1)';                            /*PF060811*/ 00481060
+ %TRUE  = '''1''b';                                                     00490017
+ %FALSE = '''0''b';                                                     00500017
+ %FOREVER = 'WHILE(''1''B)';                                            00510017
+                                                                        00520017
+ SCRPT: PROCEDURE(PARM) OPTIONS(MAIN);                                  00530000
+                                                                        00540000
+ DCL     PARM                CHAR(100) VARYING;                         00550000
+                                                                        00560000
+ DCL     SYSIN               STREAM INPUT;                              00570000
+ DCL     SYSPRINT            PRINT;                                     00580000
+ DCL     PUNCH               RECORD                                     00590000
+              ENV( FB RECSIZE(80) BLKSIZE(0) );                         00600000
+ dcl    (fontafp,fontps)     record input;                 /*PF000613*/ 00601036
+                                                                        00610000
+ /*-------------------------------------------------------*/            00620000
+ /*      Parameters for IKJTSOEV                          */            00630000
+ /*-------------------------------------------------------*/            00640000
+ DCL     IKJTSOEV            ENTRY(                                     00650000
+                   FIXED BIN(31),      /* Reserved        */            00660000
+                   FIXED BIN(31),      /* Return code     */            00670000
+                   FIXED BIN(31),      /* Reason code     */            00680000
+                   FIXED BIN(31),      /* Add'l error inf */            00690000
+                   POINTER             /* A(CPPL)         */            00700000
+                             ) OPTIONS(ASM RETCODE INTER);              00710000
+                                                                        00720000
+ DCL     RSVD_1              FIXED BIN(31);                             00730000
+ DCL     IKJTSOEV_RC         FIXED BIN(31);                             00740000
+ DCL     IKJTSOEV_REAS       FIXED BIN(31);                             00750000
+ DCL     IKJTSOEV_ADDL       FIXED BIN(31);                             00760000
+                                                                        00770000
+ /*-------------------------------------------------------*/            00780000
+ /*      Command Processor Parameter List (CPPL)          */            00790000
+ /*-------------------------------------------------------*/            00800000
+ DCL     CPPL_ADDR           POINTER;                                   00810000
+ DCL   1 CPPL                BASED(CPPL_ADDR),                          00820000
+         5 CPPLCBUF          PTR,      /* A(Command Buffer)          */ 00830000
+         5 CPPLUPT           PTR,      /* A(User Profile Table) UPT  */ 00840000
+         5 CPPLPSCB          PTR,      /* A(Prot Step Ctl Blk)  PSCB */ 00850000
+         5 CPPLECT           PTR;      /* A(Env. Ctl Table)     ECT  */ 00860000
+                                                                        00870000
+ /*-------------------------------------------------------*/            00880000
+ /*      Parameters for IKJEFTSR                          */            00890000
+ /*-------------------------------------------------------*/            00900000
+ DCL     IKJEFTSR            ENTRY(                                     00910000
+              1,                                                        00920000
+                5 FIXED BIN(15),  /* Reserved        */                 00930000
+                5 BIT(8),         /* Abend Flag      */                 00940000
+                5 BIT(8),         /* Function Code   */                 00950000
+              CHARACTER(*),       /* Command or Pgm  */                 00960000
+              FIXED BIN(31),      /* Length of Cmnd  */                 00970000
+              FIXED BIN(31),      /* Return code     */                 00980000
+              FIXED BIN(31),      /* Reason code     */                 00990000
+              FIXED BIN(31),      /* Abend code      */                 01000000
+                             ) OPTIONS(ASM RETCODE INTER);              01010000
+                                                                        01020000
+ DCL   1 IKJEFTSR_1          UNALIGNED,                                 01030000
+         5 FIL1              FIXED BIN(15),                             01040000
+         5 IKJEFTSR_ABEND_F  BIT(8),                                    01050000
+         5 IKJEFTSR_FUNCT    BIT(8);                                    01060000
+ DCL     IKJEFTSR_CMND_LEN   FIXED BIN(31);                             01070000
+ DCL     IKJEFTSR_RC         FIXED BIN(31);                             01080000
+ DCL     IKJEFTSR_REAS       FIXED BIN(31);                             01090000
+ DCL     IKJEFTSR_ABEND      FIXED BIN(31);                             01100000
+ DCL     CMND_BUF            CHAR(512) VARYING;                         01110000
+                                                                        01120000
+ DCL     RC                  FIXED BIN(15);                             01130000
+ DCL     MAX_RC              FIXED BIN(15) INIT(0);                     01140000
+ DCL     CARD                CHAR(80) VARYING;                          01150000
+ DCL     PUNCH_REC           CHAR(80);                                  01160000
+ DCL    (RUN_DATE,RUN_TIME)  CHAR(8);                                   01170000
+ DCL     JOB_ID              CHAR(8);                                   01180000
+ DCL     PUNCH_DSN           CHAR(44) VARYING INIT('');                 01190000
+ DCL     TEMP                CHAR(100) VARYING;                         01200003
+ dcl     jfcb_fontafp        ptr;                          /*PF000613*/ 01201036
+ dcl     jfcb_fontps         ptr;                          /*PF000613*/ 01202036
+ dcl     scrptfnt_dsn        char(44)  varying;            /*PF000613*/ 01203036
+ dcl     writer_name         char(8)   varying   init('PCL'); /*00614*/ 01204038
+                                                                        01210000
+ /*-------------------------*/                                          01220000
+ /* $PRINT Parameters       */                                          01230000
+ /*-------------------------*/                                          01240000
+ DCL     DEVICE              CHAR(8)  VARYING INIT('PG4');              01250000
+ DCL     PAPER_SIZE          CHAR(1)  VARYING INIT('A');                01260000
+ DCL     ROTATION            CHAR(3)  VARYING INIT('');                 01270000
+ DCL     DEST                CHAR(8)  VARYING INIT('');                 01280000
+ DCL     CHARS               CHAR(8)  VARYING INIT('X0TTN10M'); /*316*/ 01290025
+                                                                        01300000
+ /*-------------------------*/                                          01310000
+ /* PARM Overrides          */                                          01320000
+ /*-------------------------*/                                          01330000
+ DCL     DCF_REL             CHAR(17) VARYING INIT('');    /*PF990921*/ 01340032
+ DCL     MSG_CLASS           CHAR(1)          INIT('Z');                01350000
+ DCL     DEST_OVERRIDE       CHAR(8)  VARYING INIT('');                 01360000
+ DCL     TRAY_OVERRIDE       CHAR(8)  VARYING INIT('');                 01370003
+ DCL     COPIES              CHAR(3)  VARYING INIT('');                 01380003
+ DCL     SYSOUT_CLASS        CHAR(3)  VARYING INIT('');    /*PF000127*/ 01381062
+ DCL     PAGE_RANGE          CHAR(80) VARYING INIT('');    /*PF001027*/ 01382040
+ DCL     SYSVAR_OPT          CHAR(80) VARYING INIT('');    /*PF001108*/ 01383042
+ DCL     TEST_MODE           BIT(1)           INIT('0'B);               01390006
+ DCL     POSTSCRIPT          BIT(1)           INIT('0'B);  /*PF990316*/ 01400024
+ DCL     SPELLCHK_OPT        BIT(1)           INIT('0'B);  /*PF980812*/ 01410022
+ DCL     TWOPASS_OPT         BIT(1)           INIT('0'B);  /*PF990124*/ 01420023
+ DCL     NOTRACE_OPT         BIT(1)           INIT('0'B);  /*PF990505*/ 01430026
+ DCL     DUPLEX_OPT          BIT(1)           INIT('0'B);  /*PF990917*/ 01440030
+ DCL     STAPLE_OPT          BIT(1)           INIT('0'B);  /*PF050127*/ 01441055
+ DCL     PUNCH_OPT           BIT(1)           INIT('0'B);  /*PF050621*/ 01442056
+ DCL     CO_OPT              BIT(1)           INIT('0'B);  /*PF100204*/ 01442168
+ DCL     BIND_OPT            CHAR(24) VARYING INIT('');    /*PF080729*/ 01442268
+                                                                        01450000
+ DCL     EOF                 BIT(1)   INIT(FALSE);                      01460000
+ DCL     KEEP_PUNCH          BIT(1)   INIT(FALSE);                      01470000
+ DCL     NO_WRITER           BIT(1)   INIT(FALSE);         /*PF060810*/ 01471059
+                                                                        01480000
+ DCL     ALLOC               ENTRY( CHAR(*) VARYING, )                  01490017
+                             OPTIONS( ASM INTER RETCODE );              01500000
+ DCL     GETSYSI             ENTRY( CHAR(*), CHAR(*) )                  01510017
+                             RETURNS( FIXED BIN(31) );                  01520000
+ dcl     TOKEN               entry( char(8), ptr )         /*PF100297*/ 01530017
+                             returns( fixed bin(31) );     /*PF100297*/ 01540017
+ DCL     AJFCB               ENTRY() RETURNS( PTR );       /*PF000613*/ 01541036
+                                                                        01550000
+ DCL   1 ALLOC_STATUS        UNALIGNED,                                 01560000
+         5 AL_DSORG          CHAR(4),                                   01570000
+         5 AL_RC             FIXED BIN(31),                             01580000
+         5 AL_S99RC          FIXED BIN(31),                             01590000
+         5 AL_S99RSC         FIXED BIN(31),                             01600000
+         5 FIL               CHAR(32);                                  01610000
+                                                                        01620000
+ %INCLUDE BUILTINS;                                                     01630000
+ %include prtoken;                                         /*PF100297*/ 01640017
+ %INCLUDE PLIJFCBN;                                        /*PF000613*/ 01641039
+                                                                        01650000
+ %PAGE;                                                                 01660000
+ /*------------------------------------------------------------------*/ 01670000
+ /*                  M A I N L I N E                                 */ 01680000
+ /*------------------------------------------------------------------*/ 01690000
+                                                           /*PF000613*/ 01691036
+                                                                        01700000
+ ON ENDFILE(SYSIN) EOF=TRUE;                                            01710000
+                                                                        01721051
+ CALL PROCESS_PARM;                                                     01730000
+                                                                        01740000
+ RC = GETSYSI( 'JOBID', JOB_ID );                                       01750000
+ RUN_DATE=DATE();                                                       01760000
+ RUN_TIME=TIME();                                                       01770000
+ PUNCH_DSN = 'PCLTMP.' || JOB_ID ||                                     01780000
+             '.D' || SUBSTR(RUN_DATE,1,6) ||                            01790000
+             '.T' || SUBSTR(RUN_TIME,1,6) ||                            01800000
+             '.SCRIPT';                                                 01810000
+                                                                        01820000
+ jfcb_fontafp = AJFCB(fontafp);                            /*PF000613*/ 01821036
+ jfcb_fontps  = AJFCB(fontps);                             /*PF000613*/ 01821136
+                                                                        01822036
+ /*                                                                     01830007
+  .  IF DEST_OVERRIDE = '' THEN DO;                                     01840007
+  .  PUT SKIP EDIT('SCR001E Destination is required,',     **PF100297** 01850018
+  .                ', specify DEST(xxxx)')(a);             **PF100297** 01860017
+  .  CALL PLIRETC(16);                                                  01870007
+  .  RETURN;                                                            01880007
+  .  END; -- DEST_OVERRIDE --                                           01890007
+  */                                                                    01900007
+                                                                        01910004
+ /*-----------------------------------------*/                          01920000
+ /*     Allocate Punch file                 */                          01930000
+ /*-----------------------------------------*/                          01940000
+                                                                        01950000
+ CALL ALLOC( 'ALLOC FI(PUNCH) ' ||                                      01960000
+             'DA(' || PUNCH_DSN || ') ' ||                              01970000
+             'NEW CAT UNIT(3390) SPACE(20 20) CYL RELEASE',             01980047
+             ALLOC_STATUS );                                            01990000
+ IF AL_RCª=0 THEN DO;                                                   02000000
+   PUT SKIP EDIT('SCR002E PUNCH ALLOC RC=',AL_RC)(A,P'Z9');             02010018
+   CALL DELETE_PUNCH;                                                   02020000
+   CALL PLIRETC(16);                                                    02030000
+   RETURN;                                                              02040000
+   END;                                                                 02050000
+                                                                        02060000
+ /*-----------------------------------------*/                          02070000
+ /*     Copy SYSIN                          */                          02080000
+ /*-----------------------------------------*/                          02090000
+                                                                        02100000
+ OPEN FILE(SYSIN) INPUT,                                                02110000
+      FILE(PUNCH) OUTPUT;                                               02120000
+                                                                        02130000
+ GET FILE(SYSIN) EDIT(CARD)( A(80) );                                   02140000
+                                                                        02150030
+ /* 'Duplex' should be first for PJL considerations          PF990917*/ 02160030
+ IF DUPLEX_OPT='1'b THEN DO;                               /*PF990917*/ 02170030
+   PUNCH_REC = '.OC ''$PRINT DUPLEX=Y''';                  /*PF990917*/ 02180031
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                      /*PF990917*/ 02190030
+   END; /* DUPLEX_OPT */                                   /*PF990917*/ 02200030
+                                                                        02210003
+ IF STAPLE_OPT='1'b THEN DO;                               /*PF050127*/ 02211055
+   PUNCH_REC = '.OC ''$PRINT STAPLE=Y''';                  /*PF050127*/ 02212055
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                      /*PF050127*/ 02213055
+   END; /* STAPLE_OPT */                                   /*PF050127*/ 02214055
+                                                                        02214156
+ IF PUNCH_OPT='1'b THEN DO;                                /*PF050621*/ 02214256
+   PUNCH_REC = '.OC ''$PRINT PUNCH=Y''';                   /*PF050621*/ 02214356
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                      /*PF050621*/ 02214456
+   END; /* PUNCH_OPT */                                    /*PF050621*/ 02214556
+                                                                        02216065
+ IF TRAY_OVERRIDEª='' THEN DO;                                          02220003
+   PUNCH_REC = '.OC ''$PRINT TRAY=' || TRAY_OVERRIDE || '''';           02230003
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                                   02240003
+   END; /* TRAY_OVERRIDE */                                             02250003
+                                                                        02251043
+ IF COPIES ª= '' THEN DO;                                  /*PF001116*/ 02252043
+   TEMP = TEMP || ' COPIES(' || copies || ')';             /*PF001116*/ 02253043
+   PUNCH_REC = '.OC ''$PRINT COPIES=' || COPIES || '''';   /*PF001116*/ 02253143
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                      /*PF001116*/ 02253243
+   END; /* COPIES */                                       /*PF001116*/ 02254043
+                                                                        02260030
+ IF SPELLCHK_OPT THEN DO;                                  /*PF980812*/ 02270022
+   PUNCH_REC = '.IM SCHDR';                                /*PF980812*/ 02280022
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                      /*PF980812*/ 02290022
+   PUNCH_REC = '.IM DU';                                   /*PF980812*/ 02300022
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                      /*PF980812*/ 02310022
+   PUNCH_REC = '.IM SCTRLR';                               /*PF980812*/ 02320022
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                      /*PF980812*/ 02330022
+   END; /* SPELLCHK_OPT */                                 /*PF980812*/ 02340022
+                                                                        02350011
+ PUNCH_REC = '.DD DSMUTTOC DD DSMUTTOC';                                02360011
+ WRITE FILE(PUNCH) FROM(PUNCH_REC);                                     02370011
+                                                                        02380000
+ DO WHILE( EOF=FALSE );                                                 02390000
+   CALL TRIM(CARD);                                                     02400000
+   IF TRANSLATE( SUBSTR(CARD,1,6), UPPER_CASE, LOWER_CASE ) = '$PRINT'  02410000
+   THEN DO;                                                             02420000
+     CALL PARSE_CONTROL(CARD);                                          02430000
+     IF LENGTH(CARD)>74 THEN CARD=SUBSTR(CARD,1,74);                    02440000
+     CARD = '.OC ''' || CARD || '''';                                   02450000
+     END; /* $PRINT */                                                  02460000
+   PUNCH_REC = CARD;                                                    02470000
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                                   02480000
+   GET FILE(SYSIN) EDIT(CARD)( A(80) );                                 02490000
+   END; /* DO WHILE */                                                  02500000
+                                                                        02510000
+ IF DEST_OVERRIDEª='' THEN DO;                                          02520000
+   PUNCH_REC = '.OC ''$PRINT DEST=' || DEST_OVERRIDE || '''';           02530000
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                                   02540000
+   DEST = DEST_OVERRIDE;                                                02550007
+   END; /* DEST_OVERRIDE */                                             02560000
+                                                                        02561035
+ IF SYSOUT_CLASSª='' THEN DO;                              /*PF000522*/ 02562035
+   PUNCH_REC = '.OC ''$PRINT CLASS=' || SYSOUT_CLASS || '''';/*000522*/ 02563035
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                      /*PF000522*/ 02564035
+   END; /* SYSOUT_CLASS */                                 /*PF000522*/ 02566035
+                                                                        02570000
+ CLOSE FILE(SYSIN), FILE(PUNCH);                                        02580000
+                                                                        02590000
+ CALL ALLOC( 'FREE FI(PUNCH)', ALLOC_STATUS );                          02600000
+                                                                        02610017
+ if destª='LOCAL   ' &                                     /*PF001127*/ 02620044
+    destª='X4135   ' &                                     /*PF001127*/ 02620266
+    destª='RMT6    '                                       /*PF020115*/ 02620366
+ then do;                                                  /*PF990526*/ 02622044
+   /* --------------------------------- */                 /*PF100297*/ 02630028
+   /* Get printer token                 */                 /*PF100297*/ 02640028
+   /* --------------------------------- */                 /*PF100297*/ 02650028
+   allocate prtoken  set(token_addr);                      /*PF100297*/ 02660028
+   rc = token( (dest), token_addr );                       /*PF100297*/ 02670028
+   if rcª=0 then do;                                       /*PF100297*/ 02680028
+     put skip edit('SCR003E ', dest,                       /*PF100297*/ 02690028
+                   ' is not a valid printer destination')  /*PF100297*/ 02700028
+                  (a);                                     /*PF100297*/ 02710028
+     call delete_punch;                                    /*PF100297*/ 02720028
+     call pliretc(16);                                     /*PF100297*/ 02730028
+     return;                                               /*PF100297*/ 02740028
+     end; /* rc */                                         /*PF100297*/ 02750028
+                                                           /*PF100297*/ 02760028
+   if PCL=TRUE | MCK=TRUE                                  /*PF100297*/ 02770028
+   then /* okay */ ;                                       /*PF100297*/ 02780028
+   else do;                                                /*PF100297*/ 02790028
+     put skip edit('SCR004E ', dest,                       /*PF100297*/ 02800028
+                   ' is not a PCL-capable printer.')(a);   /*PF100297*/ 02810028
+     call delete_punch;                                    /*PF100297*/ 02820028
+     call pliretc(16);                                     /*PF100297*/ 02830028
+     return;                                               /*PF100297*/ 02840028
+     end; /* else */                                       /*PF100297*/ 02850028
+   if VPS=TRUE                                             /*PF060811*/ 02851060
+   then NO_WRITER = TRUE;                                  /*PF060811*/ 02852060
+   end; /* ªLOCAL */                                       /*PF990526*/ 02860028
+ else if substr(dest,1,3)='GAZ'                            /*PF060807*/ 02862061
+      then NO_WRITER = TRUE;                               /*PF060807*/ 02863060
+                                                                        02870000
+ /*-----------------------------------------*/                          02880000
+ /*     Allocate SCRIPT files               */                          02890000
+ /*-----------------------------------------*/                          02900000
+                                                                        02910000
+ /*-------------------------*/                                          02920000
+ /*      SCRIPT Output      */                                          02930000
+ /*-------------------------*/                                          02940000
+ if no_writer then do;                                     /*PF060807*/ 02941060
+   if SYSOUT_CLASS = '' then do;                           /*PF060911*/ 02942063
+     if ROTATION = '270' then SYSOUT_CLASS='L';            /*PF060911*/ 02942163
+     else                     SYSOUT_CLASS='E';            /*PF060911*/ 02942263
+     end; /* SYSOUT_CLASS */                               /*PF060911*/ 02943063
+   TEMP =  'ALLOC FI(SCRPTFIL) ' ||                        /*PF060807*/ 02950057
+           'DEST(' || dest || ') ' ||                      /*PF060807*/ 02960057
+           'SYSOUT(' || SYSOUT_CLASS || ')';               /*PF060906*/ 02970062
+   end;                                                    /*PF060807*/ 02970157
+ else do;                                                  /*PF060807*/ 02970257
+   TEMP =  'ALLOC FI(SCRPTFIL) ' ||                                     02970357
+           'DEST(' || dest || ') ' ||                                   02970457
+           'SYSOUT(A) WRITER(' || writer_name || ')';      /*PF000614*/ 02970557
+   end;                                                    /*PF060807*/ 02970657
+                                                                        02971043
+ if destª='LOCAL   ' &                                     /*PF001127*/ 02971245
+    destª='X4135   ' &                                     /*PF001127*/ 02971346
+    destª='RMT6    '                                       /*PF020115*/ 02971446
+ then do;                                                  /*PF990526*/ 02971546
+   IF COPIES ª= ''                                                      02980043
+   THEN TEMP = TEMP || ' COPIES(' || copies || ')';                     02990043
+   end; /* local */                                        /*PF001116*/ 02991043
+ CALL ALLOC( TEMP,                                                      03000003
+             ALLOC_STATUS );                                            03010003
+ IF AL_RCª=0 THEN DO;                                                   03020000
+   PUT SKIP EDIT('SCR005E SCRPTFIL ALLOC RC=',AL_RC)(A,P'Z9');          03030018
+   PUT SKIP EDIT('                 SVC99 RC=',                          03040018
+                 HEX( ADDR(AL_S99RC)+2,2) )(A);                         03050004
+   PUT SKIP EDIT('                 SVC99 RS=',                          03060018
+                 HEX( ADDR(AL_S99RSC)+2,2) )(A);                        03070004
+   CALL DELETE_PUNCH;                                                   03080000
+   CALL PLIRETC(16);                                                    03090017
+   RETURN;                                                              03100000
+   END;                                                                 03110000
+                                                                        03120000
+ /*-------------------------*/                                          03130000
+ /*      FONTLIB            */                                          03140000
+ /*-------------------------*/                                          03150000
+ if postscript='1'b                                        /*PF990316*/ 03160036
+ then scrptfnt_dsn = jfcb_fontps->JFCBDSNM;                /*PF000613*/ 03160136
+ else scrptfnt_dsn = jfcb_fontafp->JFCBDSNM;               /*PF000613*/ 03160236
+ call trim(scrptfnt_dsn);                                  /*PF000613*/ 03160336
+                                                                        03160436
+ CALL ALLOC( 'ALLOC FI(SCRPTFNT) ' ||                      /*PF000613*/ 03170036
+             'DA(' || scrptfnt_dsn || ') SHR',             /*PF000613*/ 03180036
+             ALLOC_STATUS );                               /*PF000613*/ 03200036
+ IF AL_RCª=0 THEN DO;                                                   03280000
+   PUT SKIP EDIT('SCR006E SCRPTFNT ALLOC RC=',AL_RC)(A,P'Z9');          03290018
+   CALL DELETE_PUNCH;                                                   03300000
+   CALL PLIRETC(16);                                                    03310017
+   RETURN;                                                              03320000
+   END;                                                                 03330000
+                                                                        03340000
+ /*-------------------------*/                                          03350000
+ /*      GML Macros         */                                          03360000
+ /*-------------------------*/                                          03370000
+ CALL ALLOC( 'ALLOC FI(SCRPTLIB) ' ||                                   03380000
+             'DA(' || DCF_REL || '.MACLIB) ' ||                         03390032
+             'SHR',                                                     03400000
+             ALLOC_STATUS );                                            03410000
+ IF AL_RCª=0 THEN DO;                                                   03420000
+   PUT SKIP EDIT('SCR007E SCRPTLIB ALLOC RC=',AL_RC)(A,P'Z9');          03430018
+   CALL DELETE_PUNCH;                                                   03440000
+   CALL PLIRETC(16);                                                    03450017
+   RETURN;                                                              03460000
+   END;                                                                 03470000
+                                                                        03480000
+ /*-------------------------*/                                          03490000
+ /*      DCF Profile        */                                          03500000
+ /*-------------------------*/                                          03510000
+ CALL ALLOC( 'ALLOC FI(SCRPTPRO) ' ||                                   03520000
+             'DA(' || DCF_REL || '.MACLIB(LBDPCL)) ' ||                 03530032
+             'SHR',                                                     03540000
+             ALLOC_STATUS );                                            03550000
+ IF AL_RCª=0 THEN DO;                                                   03560000
+   PUT SKIP EDIT('SCR008E SCRPTPRO ALLOC RC=',AL_RC)(A,P'Z9');          03570018
+   CALL DELETE_PUNCH;                                                   03580000
+   CALL PLIRETC(16);                                                    03590017
+   RETURN;                                                              03600000
+   END;                                                                 03610000
+                                                                        03880000
+ /*-------------------------*/                                          03890000
+ /*      SCRIPT messages    */                                          03900000
+ /*-------------------------*/                                          03910000
+ CALL ALLOC( 'ALLOC FI(SYSTSPRT) SYSOUT(' || MSG_CLASS || ') ' ||       03920033
+             'DEST(' || dest || ')',                                    03921033
+             ALLOC_STATUS );                                            03930000
+ IF AL_RCª=0 THEN DO;                                                   03940000
+   PUT SKIP EDIT('SCR010E SYSTSPRT ALLOC RC=',AL_RC)(A,P'Z9');          03950018
+   CALL DELETE_PUNCH;                                                   03960000
+   CALL PLIRETC(16);                                                    03970017
+   RETURN;                                                              03980000
+   END;                                                                 03990000
+                                                                        04000000
+ /*-------------------------*/                                          04010008
+ /*      TOC File           */                                          04020008
+ /*-------------------------*/                                          04030008
+ TEMP      = 'PCLTMP.' || JOB_ID ||                                     04040008
+             '.D' || SUBSTR(RUN_DATE,1,6) ||                            04050008
+             '.T' || SUBSTR(RUN_TIME,1,6) ||                            04060008
+             '.TOC';                                                    04070008
+ CALL ALLOC( 'ALLOC FI(DSMUTTOC) ' ||                                   04080008
+             'DA(' || temp || ') ' ||                                   04090008
+             'NEW CAT UNIT(3390) SPACE(0 1) CYL RELEASE ' ||            04100016
+             'BLK(4096) LRECL(256) RECFM(V B)',                         04110016
+             ALLOC_STATUS );                                            04120012
+ IF AL_RCª=0 THEN DO;                                                   04130008
+   PUT SKIP EDIT('SCR011E DSMUTTOC ALLOC RC=',AL_RC)(A,P'Z9');          04140018
+   PUT SKIP EDIT('                 SVC99 RC=',                          04150018
+                 HEX( ADDR(AL_S99RC)+2,2) )(A);                         04160012
+   PUT SKIP EDIT('                 SVC99 RS=',                          04170018
+                 HEX( ADDR(AL_S99RSC)+2,2) )(A);                        04180012
+   CALL DELETE_PUNCH;                                                   04190017
+   CALL PLIRETC(16);                                                    04200017
+   RETURN;                                                              04210008
+   END;                                                                 04220008
+                                                                        04230008
+ /*-----------------------------------------*/                          04240000
+ /*     Initialize TSO environment          */                          04250000
+ /*-----------------------------------------*/                          04260000
+                                                                        04270000
+ CALL IKJTSOEV(                                                         04280000
+      RSVD_1, IKJTSOEV_RC, IKJTSOEV_REAS, IKJTSOEV_ADDL, CPPL_ADDR      04290000
+              );                                                        04300000
+                                                                        04310000
+   IF IKJTSOEV_RCª=0 THEN DO;                                           04320000
+     PUT SKIP EDIT('SCR012E Return code from IKJTSOEV is ',             04330018
+                   IKJTSOEV_RC, IKJTSOEV_REAS, IKJTSOEV_ADDL)           04340000
+                  (A,P'z9',(2)(P'ZZ9'));                                04350000
+     END;                                                               04360000
+                                                                        04370016
+ /*-----------------------------------------*/                          04380016
+ /*     Build SCRIPT Command                */                          04390016
+ /*-----------------------------------------*/                          04400016
+                                                                        04410016
+ DEVICE = DEVICE || PAPER_SIZE || ROTATION;                             04420016
+                                                                        04430016
+ CMND_BUF = 'SCRIPT ''' || PUNCH_DSN || ''' ';             /*PF990505*/ 04440026
+ IF NOTRACE_OPT='1'b                                       /*PF990505*/ 04450026
+ THEN CMND_BUF = CMND_BUF || 'SYS(X NO) ';                 /*PF990505*/ 04460027
+ /* COMMENT: "SYSVAR 'X' controls whether or not the cross-reference */ 04461064
+ /*           listing will be produced.  The macro defines &SYSVARX  */ 04462064
+ /*           (cross-reference) to either 'yes' or 'no' based on the */ 04463064
+ /*           value given on the command.  The default is 'yes'. "   */ 04464064
+ /*             _GML Starter Set Implementation Guide Release 3.2_   */ 04465064
+ /*             SH35-0050-04, p.35.                                  */ 04466064
+ CMND_BUF = CMND_BUF ||                                    /*PF990505*/ 04470026
+            'SEGLIB CO DDUT CHAR(' || chars ||' ) ' ||     /*PF990316*/ 04480026
+            'DEV(' || DEVICE || ')';                                    04490022
+ IF SPELLCHK_OPT                                           /*PF980812*/ 04500022
+ THEN CMND_BUF = CMND_BUF || ' SPELLCHK';                  /*PF980812*/ 04510022
+ IF twopass_opt                                            /*PF990124*/ 04520023
+ THEN CMND_BUF = CMND_BUF || ' TWOPASS';                   /*PF990124*/ 04530023
+ IF page_rangeª=''                                         /*PF001027*/ 04531040
+ THEN CMND_BUF = CMND_BUF || ' PAGE(' || page_range || ')';/*PF001108*/ 04532042
+ IF sysvar_optª=''                                         /*PF001108*/ 04533042
+ THEN CMND_BUF = CMND_BUF || ' SYSVAR(' || sysvar_opt || ')';           04534042
+ IF BIND_OPTª=''                                           /*PF080729*/ 04535065
+ THEN CMND_BUF = CMND_BUF || ' BIND(' || BIND_OPT || ')';  /*PF080729*/ 04536065
+ IF CO_OPT                                                 /*PF100204*/ 04537068
+ THEN CMND_BUF = CMND_BUF || ' CO';                        /*PF100204*/ 04538068
+ /*-----------------------------------------*/                          04550000
+ /*     Script the document                 */                          04560000
+ /*-----------------------------------------*/                          04570000
+                                                                        04580000
+ IKJEFTSR_1.FIL1 = 1;                                                   04590000
+ IKJEFTSR_1.IKJEFTSR_ABEND_F = '00000000'B; /* NO ABEND    */           04600000
+ /*IKJEFTSR_1.IKJEFTSR_ABEND_F = '00000001'B; **    ABEND    */         04610000
+ IKJEFTSR_1.IKJEFTSR_FUNCT   = '00000001'B;                             04620000
+ IKJEFTSR_ABEND = 0;                                                    04630000
+ CALL IKJEFTSR(                                                         04640000
+      IKJEFTSR_1, CMND_BUF, FIXED(LENGTH(CMND_BUF),31),                 04650000
+      IKJEFTSR_RC, IKJEFTSR_REAS, IKJEFTSR_ABEND                        04660000
+              );                                                        04670000
+                                                                        04680000
+   /* IF IKJEFTSR_ABENDª=0                            */                04690000
+   /* THEN PUT SKIP EDIT('SCR013E Command abended, code is ', */        04700018
+   /*                    IKJEFTSR_ABEND)(A,P'9999');  */                04710000
+ IF IKJEFTSR_RC>0 THEN DO;                                              04720000
+   PUT SKIP EDIT('SCR014W SCRIPT Return code is ',IKJEFTSR_RC)          04730018
+                (A,P'--9');                                             04740017
+   END; /* IKJEFTSR_RC */                                               04750000
+                                                                        04760000
+ IF IKJEFTSR_RC>MAX_RC THEN MAX_RC=IKJEFTSR_RC;                         04770000
+                                                                        04780000
+ IF KEEP_PUNCH = FALSE                                                  04790000
+ THEN CALL DELETE_PUNCH;                                                04800000
+                                                                        04810016
+ /*-------------------------*/                                          04820014
+ /*  Free TOC file          */                                          04830014
+ /*-------------------------*/                                          04840014
+ CALL ALLOC( 'FREE FI(DSMUTTOC)', ALLOC_STATUS );                       04850014
+ CALL ALLOC( 'ALLOC FI(DSMUTTOC) ' ||                                   04860014
+             'DA(' || temp || ') OLD DEL',                              04870014
+             ALLOC_STATUS );                                            04880014
+ IF AL_RCª=0 THEN DO;                                                   04890014
+   PUT SKIP EDIT('SCR015E DSMUTTOC ALLOC RC=',AL_RC)(A,P'Z9');          04900018
+   PUT SKIP EDIT('                 SVC99 RC=',                          04910018
+                 HEX( ADDR(AL_S99RC)+2,2) )(A);                         04920014
+   PUT SKIP EDIT('                 SVC99 RS=',                          04930018
+                 HEX( ADDR(AL_S99RSC)+2,2) )(A);                        04940014
+   CALL DELETE_PUNCH;                                                   04950017
+   CALL PLIRETC(16);                                                    04960017
+   RETURN;                                                              04970014
+   END;                                                                 04980014
+                                                                        04990014
+ CALL ALLOC( 'FREE FI(DSMUTTOC)', ALLOC_STATUS );                       05000014
+                                                                        05010000
+ CALL PLIRETC(MAX_RC);                                                  05020000
+                                                                        05030000
+ RETURN;                                                                05040000
+                                                                        05050000
+ %PAGE;                                                                 05060000
+ /*-----------------------------------------*/                          05070000
+ /*     Parse $PRINT Control Card           */                          05080000
+ /*     (code stolen from AFP2PCL)          */                          05090000
+ /*-----------------------------------------*/                          05100000
+ PARSE_CONTROL: PROCEDURE(S);                                           05110000
+ dcl     s                   char(80)       varying;                    05120000
+ dcl     command_text        char(80)       varying;                    05130000
+ dcl     this_command        char(80)       varying;                    05140000
+ dcl     command             char(8)        varying;                    05150000
+ dcl     i                   fixed bin(15);                             05160000
+                                                                        05170000
+ dcl     command_list    (10)char(8)        varying                     05180000
+           init(                                                        05190000
+                 '1DEST', '2SIZE', '3FORMAT', '0*****'                  05200000
+               );                                                       05210000
+ command_text = substr(s,8,length(s)-7);                                05220000
+ command_text=translate(command_text,upper_case,lower_case);            05230000
+                                                                        05240000
+ do while( length(command_text)>0 );                                    05250000
+                                                                        05260000
+   i = index(command_text,',');                                         05270000
+   if i=0 then do;                                                      05280000
+     this_command=command_text;                                         05290000
+     command_text='';                                                   05300000
+     end; /* i=0 */                                                     05310000
+   else if i=length(command_text) then do;                              05320000
+     this_command=substr(command_text,1,length(command_text-1));        05330000
+     command_text='';                                                   05340000
+     end; /* i=length */                                                05350000
+   else if i=1 then do;                                                 05360000
+     this_command='';                                                   05370000
+     command_text=substr(command_text,2);                               05380000
+     end; /* i=length */                                                05390000
+   else do;                                                             05400000
+     this_command=substr(command_text,1,i-1);                           05410000
+     command_text=substr(command_text,i+1);                             05420000
+     end; /* else */                                                    05430000
+                                                                        05440000
+   i = index(this_command,'=');                                         05450000
+   if i>0 then substr(this_command,i,1)=' ';                            05460000
+   command = word(this_command,1);                                      05470000
+   i = wordpos(this_command,2);                                         05480000
+   if i=0 then this_command='';                                         05490000
+   else this_command = substr(this_command,i);                          05500000
+   do i=1 by 1;                                                         05510000
+     if substr(command_list(i),2,1)='*'   then return;                  05520000
+     if substr(command_list(i),2)=command then leave; /* do i */        05530000
+     end; /* do i */                                                    05540000
+   i = substr(command_list(i),1,1);                                     05550000
+                                                                        05560000
+   select(i);                                                           05570000
+     when(1) do;             /* DEST=           */                      05580000
+       dest = this_command;                                             05590000
+       end; /* 1 */                                                     05600000
+     when(2) do;             /* SIZE=           */                      05610000
+       this_command=substr(this_command,1,1);                           05620000
+       if index(this_command,'SCRPTDEL')>0                              05630000
+       then paper_size = this_command;                                  05640000
+       end; /* 2 */                                                     05650000
+     when(3) do;             /* FORMAT=         */                      05660000
+       this_command=substr(this_command,1,4);                           05670000
+       if this_command = 'PORT' then rotation = '';                     05680000
+       if this_command = 'LAND' then rotation = '270';                  05690000
+       end; /* 3 */                                                     05700000
+     otherwise; /* null */                                              05710000
+     end; /* select */                                                  05720000
+                                                                        05730000
+   end; /* do while */                                                  05740000
+                                                                        05750000
+   END PARSE_CONTROL;                                                   05760000
+                                                                        05770000
+ %PAGE;                                                                 05780000
+ /*-----------------------------------------*/                          05790000
+ /*     Parse PARM information              */                          05800000
+ /*-----------------------------------------*/                          05810000
+ PROCESS_PARM: PROCEDURE;                                               05820000
+ dcl     command_text        char(80)       varying;                    05830000
+ dcl     w                   char(80)       varying;                    05840000
+ dcl     command             char(8)        varying;                    05850000
+ dcl     i                   fixed bin(15);                             05860000
+                                                                        05860352
+ i = index( parm, 'CLASS(' );                              /*PF000522*/ 05860440
+ if i>0 then do;                                           /*PF000522*/ 05860640
+   w = substr(parm,i+6);                                   /*PF000522*/ 05860740
+   i = index(w,')');                                       /*PF000522*/ 05860840
+   if i>0 then w=substr(w,1,i-1);                          /*PF000522*/ 05860940
+   SYSOUT_CLASS=w;                                         /*PF000522*/ 05861040
+   end; /* CLASS */                                        /*PF000522*/ 05861140
+                                                                        05861240
+ i = index( parm, 'COPIES(' );                                          05861340
+ if i>0 then do;                                                        05861540
+   w = substr(parm,i+7);                                                05861640
+   i = index(w,')');                                                    05861740
+   if i>0 then w=substr(w,1,i-1);                                       05861840
+   copies=w;                                                            05861940
+   end; /* COPIES */                                                    05862040
+                                                                        05862140
+ i = index( parm, 'DCF(' );                                             05862240
+ if i>0 then do;                                                        05863040
+   w = substr(parm,i+4);                                                05864040
+   i = index(w,')');                                                    05865040
+   if i>0 then w=substr(w,1,i-1);                                       05866040
+   dcf_rel = w;                                                         05867040
+   end; /* DCF */                                                       05868040
+                                                                        05870000
+ i = index( parm, 'DEST(' );                                            05880000
+ if i>0 then do;                                                        05890000
+   w = substr(parm,i+5);                                                05900000
+   i = index(w,')');                                                    05910000
+   if i>0 then w=substr(w,1,i-1);                                       05920000
+   dest_override = w;                                                   05930000
+   end; /* DEST */                                                      05940000
+                                                                        05941040
+ i = index( parm, 'DUPLEX(' );                             /*PF990917*/ 05942040
+ if i>0 then do;                                           /*PF990917*/ 05943040
+   w = substr(parm,i+7);                                   /*PF990917*/ 05944040
+   i = index(w,')');                                       /*PF990917*/ 05945040
+   if i>0 then w=substr(w,1,i-1);                          /*PF990917*/ 05946040
+   if w='Y' then do;                                       /*PF990917*/ 05947040
+     DUPLEX_OPT='1'b;                                      /*PF990917*/ 05948040
+     end; /* 'Y' */                                        /*PF990917*/ 05949040
+   end; /* DUPLEX */                                       /*PF990917*/ 05949140
+                                                                        05949255
+ i = index( parm, 'STAPLE(' );                             /*PF050127*/ 05949355
+ if i>0 then do;                                           /*PF050127*/ 05949455
+   w = substr(parm,i+7);                                   /*PF050127*/ 05949555
+   i = index(w,')');                                       /*PF050127*/ 05949655
+   if i>0 then w=substr(w,1,i-1);                          /*PF050127*/ 05949755
+   if w='Y' then do;                                       /*PF050127*/ 05949855
+     STAPLE_OPT='1'b;                                      /*PF050127*/ 05949955
+     end; /* 'Y' */                                        /*PF050127*/ 05950055
+   end; /* STAPLE */                                       /*PF050127*/ 05950155
+                                                                        05950256
+ i = index( parm, 'PUNCH(' );                              /*PF050621*/ 05950356
+ if i>0 then do;                                           /*PF050621*/ 05950456
+   w = substr(parm,i+6);                                   /*PF050621*/ 05950556
+   i = index(w,')');                                       /*PF050621*/ 05950656
+   if i>0 then w=substr(w,1,i-1);                          /*PF050621*/ 05950756
+   if w='Y' then do;                                       /*PF050621*/ 05950856
+     PUNCH_OPT='1'b;                                       /*PF050621*/ 05950956
+     end; /* 'Y' */                                        /*PF050621*/ 05951056
+   end; /* PUNCH */                                        /*PF050621*/ 05951156
+                                                                        05951265
+ i = index( parm, 'BIND(' );                               /*PF080729*/ 05951365
+ if i>0 then do;                                           /*PF080729*/ 05951465
+   w = substr(parm,i+5);                                   /*PF080729*/ 05951565
+   i = index(w,')');                                       /*PF080729*/ 05951665
+   if i>0 then w=substr(w,1,i-1);                          /*PF080729*/ 05951765
+   BIND_OPT = w;                                           /*PF080729*/ 05951865
+   end; /* PUNCH */                                        /*PF080729*/ 05952165
+                                                                        05953065
+ i = index( parm, 'FORMAT(' );                                          05960040
+ if i>0 then do;                                                        05970040
+   w = substr(parm,i+7);                                                05980040
+   i = index(w,')');                                                    05990040
+   if i>0 then w=substr(w,1,i-1);                                       06000040
+   if w='L' then rotation = '270';                                      06010040
+   else          rotation = '';                                         06020040
+   end; /* FORMAT */                                                    06021040
+                                                                        06030000
+ i = index( parm, 'KEEP(' );                                            06040000
+ if i>0 then do;                                                        06050000
+   w = substr(parm,i+5);                                                06060000
+   i = index(w,')');                                                    06070000
+   if i>0 then w=substr(w,1,i-1);                                       06080000
+   if w='Y' then keep_punch = true;                                     06090000
+   end; /* KEEP */                                                      06100000
+                                                                        06110040
+ i = index( parm, 'MSG(' );                                             06120040
+ if i>0 then do;                                                        06130040
+   w = substr(parm,i+4);                                                06140040
+   i = index(w,')');                                                    06150040
+   if i>0 then w=substr(w,1,i-1);                                       06160040
+   msg_class = w;                                                       06170040
+   end; /* MSG */                                                       06180040
+                                                                        06190040
+ i = index( parm, 'PAGE(' );                               /*PF001027*/ 06200040
+ if i>0 then do;                                           /*PF001027*/ 06210040
+   w = substr(parm,i+5);                                   /*PF001027*/ 06220041
+   i = index(w,')');                                       /*PF001027*/ 06230040
+   if i>0 then w=substr(w,1,i-1);                          /*PF001027*/ 06240040
+   page_range=w;                                           /*PF001027*/ 06250040
+   end; /* PAGE */                                         /*PF001027*/ 06273041
+                                                                        06274040
+ i = index( parm, 'PS(' );                                 /*PF990316*/ 06275040
+ if i>0 then do;                                           /*PF990316*/ 06276040
+   w = substr(parm,i+3);                                   /*PF990316*/ 06277040
+   i = index(w,')');                                       /*PF990316*/ 06278040
+   if i>0 then w=substr(w,1,i-1);                          /*PF990316*/ 06279040
+   if w='Y' then do;                                       /*PF990316*/ 06279140
+     postscript='1'b;                                      /*PF990316*/ 06279240
+     DEVICE='PS';                                          /*PF990316*/ 06279340
+     CHARS='PSFCR';     /* Default font=Courier */         /*PF990316*/ 06279440
+     end; /* 'Y' */                                        /*PF990316*/ 06279540
+   end; /* PS */                                           /*PF990316*/ 06279640
+                                                                        06280002
+ i = index( parm, 'SIZE(' );                                            06290002
+ if i>0 then do;                                                        06300002
+   w = substr(parm,i+5);                                                06310002
+   i = index(w,')');                                                    06320002
+   if i>0 then w=substr(w,1,i-1);                                       06330002
+   paper_size = w;                                                      06340002
+   end; /* SIZE */                                                      06350002
+                                                                        06360040
+ i = index( parm, 'SPELLCHK' );                            /*PF980812*/ 06370040
+ if i>0 then spellchk_opt='1'b;                            /*PF980812*/ 06380040
+                                                                        06390042
+ i = index( parm, 'SYSVAR(' );                             /*PF001108*/ 06400042
+ if i>0 then do;                                           /*PF001108*/ 06410042
+   w = substr(parm,i+7);                                   /*PF001108*/ 06420042
+   i = index(w,')');                                       /*PF001108*/ 06430042
+   if i>0 then w=substr(w,1,i-1);                          /*PF001108*/ 06440042
+   sysvar_opt = w;                                         /*PF001108*/ 06450042
+   end; /* SYSVAR */                                       /*PF001108*/ 06460042
+                                                                        06520006
+ i = index( parm, 'TEST(' );                                            06530006
+ if i>0 then do;                                                        06540006
+   w = substr(parm,i+5);                                                06550006
+   i = index(w,')');                                                    06560006
+   if i>0 then w=substr(w,1,i-1);                                       06570006
+   if w='Y' then do;                                       /*PF000614*/ 06580038
+     test_mode = '1'b;                                     /*PF000614*/ 06581038
+     writer_name = 'PCLTEST';                              /*PF000614*/ 06582038
+     end;                                                  /*PF000614*/ 06583038
+   end; /* TEST */                                                      06590006
+                                                                        06591040
+ i = index( parm, 'TRAY(' );                                            06592040
+ if i>0 then do;                                                        06593040
+   w = substr(parm,i+5);                                                06594040
+   i = index(w,')');                                                    06595040
+   if i>0 then w=substr(w,1,i-1);                                       06596040
+   tray_override=w;                                                     06597040
+   end; /* TRAY */                                                      06598040
+                                                                        06630023
+ i = index( parm, 'TWOPASS' );                             /*PF990124*/ 06640023
+ if i>0 then twopass_opt='1'b;                             /*PF990124*/ 06650023
+                                                                        06780026
+ i = index( parm, 'NOTRACE' );                             /*PF990505*/ 06790026
+ if i>0 then notrace_opt='1'b;                             /*PF990505*/ 06800026
+                                                                        06810068
+ i = index( parm, 'CO(' );                                 /*PF100204*/ 06820068
+ if i>0 then do;                                           /*PF100204*/ 06830068
+   w = substr(parm,i+3);     /* Ignore supplied value      /*PF100204*/ 06840068
+   i = index(w,')');                                       /*PF100204*/ 06850068
+   if i>0 then w=substr(w,1,i-1);                          /*PF100204*/ 06860068
+   co_opt='1'b;              /* Turn on 'continue'           PF100204*/ 06870068
+   end; /* CONTINUE */                                     /*PF100204*/ 06880068
+                                                                        06910000
+   END PROCESS_PARM;                                                    06920000
+                                                                        06930000
+ %PAGE;                                                                 06940000
+ /*-----------------------------------------*/                          06950000
+ /*     Delete the punch file               */                          06960000
+ /*-----------------------------------------*/                          06970000
+ DELETE_PUNCH: PROCEDURE;                                               06980000
+                                                                        06990000
+   CALL ALLOC( 'ALLOC FI(PUNCH) ' ||                                    07000000
+               'DA(' || PUNCH_DSN || ') ' ||                            07010000
+               'OLD DELETE',                                            07020000
+               ALLOC_STATUS );                                          07030000
+                                                                        07040000
+   CALL ALLOC( 'FREE FI(PUNCH)', ALLOC_STATUS );                        07050000
+                                                                        07060000
+   END DELETE_PUNCH;                                                    07070000
+                                                                        07080000
+ /*-----------------------------------------*/                          07090000
+ /*     Trim trailing blanks                */                          07100019
+ /*-----------------------------------------*/                          07110000
+                                                                        07120000
+ TRIM: PROCEDURE(S);                                                    07130018
+ DCL S CHAR(*) VARYING;                                                 07140000
+                                                                        07150000
+   /* TRIM TRAILING BLANKS */                                           07160000
+   DO FOREVER;                                                          07170000
+     IF LENGTH(S)=0                THEN RETURN;                         07180000
+     IF SUBSTR(S,LENGTH(S),1)ª=' ' THEN LEAVE;                          07190000
+     S=SUBSTR(S,1,LENGTH(S)-1);                                         07200000
+     END; /* FOREVER */                                                 07210000
+                                                                        07220000
+ END TRIM;                                                              07230000
+                                                                        07240000
+ %INCLUDE HEX;                                                          07250004
+ %INCLUDE LOWERCAS;                                                     07260004
+ %INCLUDE WORD;                                                         07270000
+ %INCLUDE WORDPOS;                                                      07280000
+                                                                        07290000
+ END SCRPT;                                                             07300000
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 07310000
+//LKED.SYSLIB DD                                                        07320000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        07330000
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      07340000
+//LKED.LINKLIB  DD DSN=SYS1.LINKLIB,DISP=SHR                            07350000
+//LKED.LPALIB   DD DSN=SYS1.LPALIB,DISP=SHR                             07360000
+//*LKED.SYSLMOD  DD DSN=SYSTEMS.AUTHLIB,DISP=SHR                        07381043
+//LKED.SYSLMOD  DD DSN=SYSTEMS.LINKLIB,DISP=SHR                         07382053
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  07390000
+//LKED.SYSIN DD *                                                       07400000
+ MODE AMODE(31),RMODE(24)                                               07410050
+ INCLUDE LINKLIB(IKJTSOEV)                                              07420000
+ INCLUDE LPALIB(IKJEFTSR)                                               07430000
+ NAME SCRPT(R)                                                          07440000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 07450000

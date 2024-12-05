@@ -1,0 +1,20 @@
+ /*------------------------------------------------------------------*/ 00010000
+ /*                                                                  */ 00020000
+ /*                PCL Character Header Description                  */ 00030000
+ /*                                                                  */ 00040000
+ /*------------------------------------------------------------------*/ 00050000
+                                                                        00060000
+ dcl     cp                  ptr,                                       00070000
+       1 char_desc           unaligned based(cp),                       00080000
+         5 format            HPBYTE,                                    00090000
+         5 continuation      HPBYTE,                                    00100000
+         5 desc_size         HPBYTE,                                    00110000
+         5 class             HPBYTE,                                    00120000
+         5 orientation       HPBYTE,                                    00130000
+         5 reserved          HPBYTE,                                    00140000
+         5 left_offset       HPBIN,                                     00150000
+         5 top_offset        HPBIN,                                     00160000
+         5 char_width        HPBIN,                                     00170000
+         5 char_height       HPBIN,                                     00180000
+         5 delta_x           HPBIN,                                     00190000
+         5 char_data         char(0);                                   00200000

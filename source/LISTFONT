@@ -1,0 +1,812 @@
+//FLASSP   JOB  (),'LISTFONT',CLASS=J,MSGCLASS=Z,                       00010001
+//         NOTIFY=$                                                     00020001
+//********************************************************************* 00030001
+//*                PL/I COMPILE AND LINK                              * 00040001
+//********************************************************************* 00050001
+// EXEC PLIXCL,                                                         00060001
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)', LIST,MAP',        00070001
+//   PARM.LKED='LIST,MAP'                                               00080001
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00090001
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00100001
+//             DD DSN=FLASS.PF.PLIMAC,DISP=SHR                          00110001
+//PLI.SYSIN    DD *                                                     00120001
+ /* LISTFONT: List a PCL Font Header             t                   */ 00130001
+                                                                        00140001
+ LISTFONT: procedure(parm) options(main);                               00150001
+                                                                        00160001
+ /*------------------------------------------------------------------*/ 00170001
+ /*                                                                  */ 00180001
+ /*      Module ID: LISTFONT                                         */ 00190001
+ /*                                                                  */ 00200001
+ /*      Function: List a PCL Font Header                            */ 00210001
+ /*                                                                  */ 00220001
+ /*      Author:   Peter Flass -- NYS LBDC                           */ 00230001
+ /*                Jan, 2000.                                        */ 00240001
+ /*                                                                  */ 00250001
+ /*      Modifications:                                              */ 00290001
+ /*                                                                  */ 00380001
+ /*------------------------------------------------------------------*/ 00390001
+                                                                        00400001
+ %dcl    ESC_CHAR            char;                                      00410001
+ %ESC_CHAR = '''1B''x';                                                 00420001
+                                                                        00430001
+ dcl     parm                char(100) varying;                         00440001
+                                                                        00450001
+ dcl     sysprint            print;                                     00460001
+ dcl     sysin               record input;                              00470001
+ dcl     font                record input;                              00480001
+ dcl     fontlist            print;                                     00490001
+                                                                        00510001
+ dcl     rc                  fixed bin(31);                             00520001
+ dcl     b                   fixed bin(15);                             00530001
+ dcl     esc_seq             char(256) varying;                         00540001
+ dcl     card_in             char(80)  varying;                         00550001
+                                                                        00570001
+ dcl   1 card_data           unaligned,                                 00580001
+         5 mem_name          char(8);                                   00590001
+                                                                        00690001
+ dcl     sysin_eof           bit(1)              init('0'b);            00710001
+ dcl     first_page          bit(1)              init('1'b);            00720001
+ dcl     first_time_font     bit(1);                                    00740001
+                                                                        00740101
+ /*-----------------------------------*/                                00740201
+ /* Font-wide character metrics       */                                00740301
+ /*-----------------------------------*/                                00740401
+ dcl     first_character     bit(1)              init('1'b);            00740501
+ dcl     font_points         fixed bin(15);                             00740601
+ dcl     font_inc            fixed bin(15);                             00740701
+ dcl     font_asp            fixed bin(15);                             00740801
+ dcl     font_msp            fixed bin(15);                             00740901
+ dcl     font_char_count     fixed bin(15);                /*PF980505*/ 00741001
+ dcl     font_mbe            fixed bin(15);                /*PF980722*/ 00741101
+ dcl     font_blo            fixed bin(15);                /*PF980722*/ 00741201
+ dcl     font_uinc           bit(1);                                    00741301
+ dcl     font_uasp           bit(1);                                    00741401
+ dcl     font_ublo           bit(1);                                    00742001
+ dcl     font_kern           bit(1);                                    00750001
+                                                                        01340001
+ %page;                                                                 01350001
+ /*-----------------------------------*/                                01360001
+ /* PCL Miscellaneous Font Descriptors*/                                01370001
+ /*-----------------------------------*/                                01380001
+ dcl     fdesc          (0:2)char(16) varying    init                   01390001
+         ( 'ASCII-7', 'ASCII-8', 'PC-8' );                              01400001
+ dcl     orien          (0:1)char(16) varying    init                   01410001
+         ( 'Portrait', 'Landscape' );                                   01420001
+ dcl     spacing        (0:1)char(16) varying    init                   01430001
+         ( 'Fixed', 'Proportional' );                                   01440001
+ dcl     sty            (0:1)char(16) varying    init                   01450001
+         ( 'Upright', 'Italic' );                                       01460001
+                                                                        01470001
+ /*-----------------------------------*/                                01470101
+ /* PCL-AFP Weight Conversions        */                                01470201
+ /*-----------------------------------*/                                01470301
+ dcl     weight        (-7:7)char(16) varying    init                   01470401
+         (                                                              01470501
+          'Ultra Thin',     /* -7 */                                    01470601
+          '',               /* -6 */                                    01470701
+          'Thin',           /* -5 */                                    01470801
+          'Ultra Light',    /* -4 */                                    01470901
+          'Light',          /* -3 */                                    01471001
+          '',               /* -2 */                                    01471101
+          '',               /* -1 */                                    01471201
+          'Medium',         /*  0 */                                    01471301
+          'Medium',         /* +1 */                                    01471401
+          'Demi Bold',      /* +2 */                                    01471501
+          'Bold',           /* +3 */                                    01471601
+          'Ultra Bold',     /* +4 */                                    01471701
+          'Black',          /* +5 */                                    01471801
+          '',               /* +6 */                                    01471901
+          'Ultra Black'     /* +7 */                                    01472001
+         );                                                             01480001
+ dcl     wgt           (-7:7)bit(8) unaligned    init                   01690001
+         (                                                              01700001
+          '00000001'b,      /* -7 */                                    01710001
+          '00000001'b,      /* -6 */                                    01720001
+          '00000010'b,      /* -5 */                                    01730001
+          '00000010'b,      /* -4 */                                    01740001
+          '00000011'b,      /* -3 */                                    01750001
+          '00000100'b,      /* -2 */                                    01760001
+          '00000100'b,      /* -1 */                                    01770001
+          '00000101'b,      /*  0 */                                    01780001
+          '00000111'b,      /* +1 - kludge for Xerox fonts */           01790001
+          '00000110'b,      /* +2 */                                    01800001
+          '00000111'b,      /* +3 */                                    01810001
+          '00001000'b,      /* +4 */                                    01820001
+          '00001000'b,      /* +5 */                                    01830001
+          '00001001'b,      /* +6 */                                    01840001
+          '00001001'b       /* +7 */                                    01850001
+         );                                                             01860001
+                                                                        01870001
+ /*-----------------------------------*/                                01880001
+ /* PCL-AFP Width Conversions         */                                01890001
+ /*-----------------------------------*/                                01900001
+ dcl     width         (-5:3)char(16) varying    init                   01910001
+         (                                                              01920001
+          'Ultra Compressed', /* -5 */                                  01930001
+          'Extra Compressed', /* -4 */                                  01940001
+          'Compressed',       /* -3 */                                  01950001
+          'Condensed',        /* -2 */                                  01960001
+          '',                 /* -1 */                                  01970001
+          'Normal',           /*  0 */                                  01980001
+          '',                 /*  1 */                                  01990001
+          'Expanded',         /*  2 */                                  02000001
+          'Extra Expanded'    /*  3 */                                  02010001
+         );                                                             02020001
+ dcl     wid           (-5:3)bit(8) unaligned    init                   02030001
+         (                                                              02040001
+          '00000001'b,        /* -5 */                                  02050001
+          '00000001'b,        /* -4 */                                  02060001
+          '00000010'b,        /* -3 */                                  02070001
+          '00000011'b,        /* -2 */                                  02080001
+          '00000011'b,        /* -1 */                                  02090001
+          '00000101'b,        /*  0 */                                  02100001
+          '00000101'b,        /*  1 */                                  02110001
+          '00000111'b,        /*  2 */                                  02120001
+          '00001000'b         /*  3 */                                  02130001
+         );                                                             02140001
+                                                                        02150001
+ /*-----------------------------------*/                                02160001
+ /* PCL Font Format Descriptors       */                                02170001
+ /*-----------------------------------*/                                02180001
+ dcl     fmt           (0:21)char(20) varying    init                   02190001
+         (                                                              02200001
+          'PCL Bitmap',          /*  0    */                            02210001
+          '', '', '', '', '',    /* 1-5   */                            02220001
+          '', '', '', '',        /* 6-9   */                            02230001
+          'Intellifount Bound',  /* 10    */                            02240001
+          'Intellifount Unound', /* 11    */                            02250001
+          '', '', '',            /* 12-14 */                            02260001
+          'TrueType Scalable',   /* 15    */                            02270001
+          '', '', '', '',        /* 16-19 */                            02280001
+          'Reso. Spec. Bitmap',  /* 20    */                            02290001
+          '***Invalid***'        /* 21+   */                            02300001
+         );                                                             02310001
+                                                                        02320001
+ /*-----------------------------------*/                                02330001
+ /* PCL Symbol Set Definitions        */                                02340001
+ /*-----------------------------------*/                                02350001
+ dcl     sset          (0:50)char(36) varying    init                   02360001
+         (                                                              02370001
+          '0001 HP Math-7',                                             02380001
+          '0002 HP Line Draw',                                          02390001
+          '0004 ISO 60: Norwegian-1',                                   02400001
+          '0036 ISO 61: Norewgian-2',                                   02410001
+          '0005 HP Roman Extensions',                                   02420001
+          '0037 ISO 4: UK English',                                     02430001
+          '0006 ISO 25: French',                                        02440001
+          '0038 ISO 69: French',                                        02450001
+          '0007 HP German',                                             02460001
+          '0039 ISO 21: German',                                        02470001
+          '0263 HP Greek-8',                                            02480001
+          '0009 ISO 15: Italian',                                       02490001
+          '0011 ISO 14: JIS ASCII',                                     02500001
+          '0075 ISO 57: Chinese',                                       02510001
+          '0045 Technical-7',                                           02520001
+          '0269 HP Math-8',                                             02530001
+          '0014 ISO 100: Latin-1',                                      02540001
+          '0015 OCR A',                                                 02550001
+          '0047 OCR B',                                                 02560001
+          '0019 ISO 11: Swedish',                                       02570001
+          '0051 HP Spanish',                                            02580001
+          '0083 ISO 17: Spanish',                                       02590001
+          '0115 ISO 10: Spanish',                                       02600001
+          '0147 ISO 16: Portuguese',                                    02610001
+          '0179 ISO 84: Portuguese',                                    02620001
+          '0211 ISO 85: Spanish',                                       02630001
+          '0021 ISO 6: ASCII',                                          02640001
+          '0053 HP Legal',                                              02650001
+          '0085 ISO 2: Int''l Ref Ver',                                 02660001
+          '0245 OEM-1',                                                 02670001
+          '0277 HP Roman-8',                                            02680001
+          '0341 PC-8',                                                  02690001
+          '0373 PC-8 D/N',                                              02700001
+          '0501 HP Pi Font',                                            02710001
+          'End'                                                         02720001
+         );                                                             02730001
+                                                                        02740001
+ %page;                                                                 02750001
+ dcl     PDSMEM              entry( char(8), char(8), char(8) )         02760001
+                             returns( fixed bin(31) );                  02770001
+                                                                        02790001
+ dcl     strip               entry                                      02800001
+                ( char(*) varying, char(*) varying, char(*) varying );  02810001
+                                                                        02820001
+ dcl     HEXDUMP             entry                                      02830001
+                ( ptr, fixed bin(31), char(*) varying );                02840001
+                                                                        02880001
+ dcl     Xalloc              entry( fixed bin(31) )                     02890001
+                             returns( ptr );                            02900001
+ dcl     Xfree               entry( ptr );                              02910001
+ dcl     Xstats              entry returns( ptr );                      02920001
+                                                                        02980001
+ /*-----------------------------------*/                                02990001
+ /* Storage Statistics                */                                03000001
+ /*-----------------------------------*/                                03010001
+ dcl     sbp                 ptr,                                       03020001
+       1 sblk                unaligned based(sbp), /* Storage stats  */ 03030001
+         5 sbnalc            fixed bin(31),      /* number of allocs */ 03040001
+         5 sbnfre            fixed bin(31),      /* number of frees  */ 03050001
+         5 sbcalc            fixed bin(31),      /* current alloc stg*/ 03060001
+         5 sbmalc            fixed bin(31);      /* max alloc stg    */ 03070001
+                                                                        03080001
+ %include builtins;                                                     03090001
+                                                                        03110001
+ %page;                                                                 03120001
+ %include(pclfdesc);                                                    03130001
+ %page;                                                                 03140001
+ %include(pclcdesc);                                                    03150001
+ %page;                                                                 03160001
+ %include(afpsf);                                                       03170001
+                                                                        03290001
+ %page;                                                                 03300001
+                                                                        03310001
+ on endfile(sysin) sysin_eof = '1'b;                                    03320001
+                                                                        03330001
+ open file(sysprint);                                                   03340001
+                                                                        03350001
+ substr(ebcdic,128,1)='FF'x; /* Translate ASCII 7F to EBCDIC FF990715*/ 03360001
+                                                                        03490001
+ call process_parm;                                                     03491001
+                                                                        03492001
+ open file(sysin),                                                      03500001
+      file(fontlist);                                                   03510001
+ call read_command;                                                     03520001
+                                                                        03530001
+ /*-----------------------------------------*/                          03540001
+ /*    M A I N L I N E   L O O P            */                          03550001
+ /*-----------------------------------------*/                          03560001
+ do while( ªsysin_eof );                                                03570001
+   put skip edit(card_in)(a);                                           03580001
+   call read_command;                                                   03590001
+   if mem_name ª= ' ' then do;                                          03600001
+     rc = pdsmem( 'READ', 'FONT', mem_name );                           03610001
+     if rcª=0 then do;                                                  03620001
+       put skip edit('*** Member ',mem_name,' not found.')(a);          03630001
+       put skip edit('    PDSMEM RC=',rc)(a,p'zzz9');                   03640001
+       end; /* rcª=0 */                                                 03650001
+     else call process_font;                                            03740001
+     end; /* mem_name ª= ' ' */                                         03760001
+                                                                        03770001
+   read file(sysin) into(card_in);                                      03780001
+                                                                        03790001
+   end; /* do while */                                                  03800001
+                                                                        03810001
+ /*-----------------------------------------*/                          03820001
+ /*    Print Storage Statistics             */                          03830001
+ /*-----------------------------------------*/                          03840001
+ call storage_stats;                                                    03850001
+                                                                        03860001
+ close file(sysin),                                                     03870001
+       file(sysprint),                                                  03880001
+       file(fontlist);                                                  03890001
+ return;                                                                03900001
+                                                                        03910001
+ %page;                                                                 03920001
+ /*------------------------------------------------------------------*/ 03930001
+ /*      process_font:       Process data for font                   */ 03940001
+ /*------------------------------------------------------------------*/ 03950001
+                                                                        03960001
+ process_font: procedure;                                               03970001
+                                                                        03980001
+ dcl     n                   fixed bin(15);                             03990001
+ dcl     z                   char(24) varying;                          04000001
+                                                                        04010001
+   open file(font) input;                                               04020001
+   first_time_font='1'b;                                                04030001
+                                                                        04040001
+   font_uinc = '1'b;         /* Assume Uniform Character Increment   */ 04050001
+   font_uasp = '1'b;         /* Assume Uniform A-space               */ 04060001
+   font_ublo = '0'b;         /* Non-uniform Baseline offset  PF991203*/ 04070001
+   font_kern = '0'b;         /* Assume no kerning                    */ 04080001
+   font_asp  = 0;                                                       04090001
+   font_inc  = 0;                                                       04100001
+                                                                        04130001
+   do while('1'b);                                                      04140001
+     call get_esc_seq;                                                  04150001
+     if esc_seq='' then do;                                             04160001
+       put skip edit('*** No font descriptor found.')(a);               04170001
+       return;                                                          04180001
+       end;                                                             04190001
+     if length(esc_seq)=6 & substr(esc_seq,1,6) = '1B2973363457'x       04200001
+     then leave;                                                        04210001
+     end; /* do while */                                                04220001
+                                                                        04250001
+   fp = Xalloc( cstg(font_desc) );                                      04260001
+   n = read_pcl( fp, cstg(font_desc) );                                 04270001
+   if nª=64 then do;                                                    04280001
+     put skip edit('*** Invalid font descriptor.')(a);                  04290001
+     return;                                                            04300001
+     end;                                                               04310001
+                                                                        04320001
+   call list_font_attrs(fp);                                            04330001
+   call list_font_metrics;                                              04340001
+                                                                        05310001
+   Call Xfree( fp );                                                    05340001
+                                                                        05350001
+   close file(font);                                                    05360001
+                                                                        05370001
+   return;                                                              05380001
+                                                                        05390001
+   end process_font;                                                    05400001
+                                                                        05410001
+ %page;                                                                 05420001
+ /*------------------------------------------------------------------*/ 05960001
+ /*      list_font_attrs:    display font info                       */ 05970001
+ /*------------------------------------------------------------------*/ 05980001
+                                                                        05990001
+ list_font_attrs: procedure(fp);                                        06000001
+                                                                        06010001
+ dcl     fp                  ptr;                                       06020001
+                                                                        06030001
+ dcl     symbol_set_n        pic'9999';                                 06040001
+ dcl     symbol_set_d        char(36);                                  06050001
+ dcl     font_name           char(16);                                  06060001
+ dcl     style_b             bit(16) unaligned;                         06070001
+ dcl     style_word          char(2) based( addr(style_b) );            06080001
+ dcl     w                   bit(8);                                    06090001
+                                                                        06100001
+   if ªfirst_page then put file(fontlist) page;                         06110001
+   first_page = '0'b;                                                   06120001
+                                                                        06130001
+                                                                        06140001
+   put file(fontlist) skip                                              06150001
+       edit( 'Member Name ', mem_name )(a);                             06160001
+   put file(fontlist) skip;                                             06170001
+                                                                        06180001
+   /*-----------------------*/                                          06190001
+   /* Get font Name         */                                          06200001
+   /*-----------------------*/                                          06210001
+   font_name = translate( font_desc.font_name, ebcdic );                06220001
+   put file(fontlist) skip                                              06230001
+       edit( 'Font Name:', font_name )                                  06240001
+           (a,col(24),a);                                               06250001
+                                                                        06260001
+   b = c2b(font_desc.format);                                           06270001
+   put file(fontlist) skip                                              06280001
+       edit( 'Format:', b, fmt(b) )                                     06290001
+           (a,col(18),p'zzz9',col(24),a);                               06300001
+   if bª=0 then do;                                                     06310001
+     put file(fontlist) skip                                            06320001
+         edit('Unable to interpret this format.')(a);                   06330001
+     call pliretc(12);                                                  06340001
+     exit;                                                              06350001
+     end; /* bª=0 */                                                    06360001
+   /* No AFP equivalent */                                              06370001
+                                                                        06380001
+   b = c2b(font_desc.type);                                             06390001
+   put file(fontlist) skip                                              06400001
+       edit( 'Type:', b, fdesc(b) )                                     06410001
+           (a,col(18),p'zzz9',col(24),a);                               06420001
+   /* No AFP equivalent */                                              06430001
+                                                                        06440001
+   b = c2b(font_desc.orientation);                                      06450001
+   put file(fontlist) skip                                              06460001
+       edit( 'Orientation:', b, orien(b) )                              06470001
+           (a,col(18),p'zzz9',col(24),a);                               06480001
+   if bª=0 & bª=1 & bª=3 then do;                                       06490001
+     put file(fontlist) skip                                            06500001
+         edit('Invalid orientation.')(a);                               06510001
+     call pliretc(12);                                                  06520001
+     exit;                                                              06530001
+     end; /* bª=0 */                                                    06540001
+   /* No AFP equivalent */                                              06550001
+                                                                        06560001
+   /*-----------------------*/                                          06570001
+   /* Proportional/Non-Prop */                                          06580001
+   /*-----------------------*/                                          06590001
+   b = c2b(font_desc.spacing);                                          06600001
+   put file(fontlist) skip                                              06610001
+       edit( 'Spacing:', b, spacing(b) )                                06620001
+           (a,col(18),p'zzz9',col(24),a);                               06630001
+   /* save spacing -- 0=non-proportional, 1=proportional */             06640001
+                                                                        06740001
+   b = b2b(font_desc.symbol_set);                                       06750001
+   symbol_set_n = b;                                                    06760001
+   symbol_set_d = '';                                                   06770001
+   do b = 0 by 1 while( substr(sset(b),1,3)ª='End' );                   06780001
+     if substr(sset(b),1,4) = symbol_set_n then do;                     06790001
+       symbol_set_d = substr(sset(b),6);                                06800001
+       leave;                                                           06810001
+       end; /* if */                                                    06820001
+     end; /* do while */                                                06830001
+   put file(fontlist) skip                                              06840001
+       edit( 'Symbol set:', b, symbol_set_d )                           06850001
+           (a,col(18),p'zzz9',col(24),a);                               06860001
+   /* No AFP equivalent (maybe codepage) */                             06870001
+                                                                        06880001
+   /*-----------------------*/                                          06890001
+   /* "Style Word":         */                                          06900001
+   /*   "Posture"           */                                          06910001
+   /*   "Appearance Width"  */                                          06920001
+   /*   "Structure"         */                                          06930001
+   /*-----------------------*/                                          06940001
+   style_word = sty_msb || sty_lsb;                                     06960001
+   /* Structure - Outline   */                                          06970001
+   b = substr(style_b,7,5);                                             06980001
+   put file(fontlist) skip                                              06990001
+       edit( 'Structure:', b)                                           07000001
+           (a,col(18),p'zzz9');                                         07010001
+   if b=1 then substr(fnd.fnd_flags1,4,1)='1'b;                         07020001
+   /* Appearance            */                                          07030001
+   b = substr(style_b,4,3);                                             07040001
+   put file(fontlist) skip                                              07050001
+       edit( 'Appearance width:', b)                                    07060001
+           (a,col(18),p'zzz9');                                         07070001
+   /* No AFP equivalent */                                              07080001
+   /* Posture - Italic      */                                          07100001
+   b = substr(style_b,15,2);                                            07110001
+   put file(fontlist) skip                                              07120001
+       edit( 'Posture:', b)                                             07130001
+           (a,col(18),p'zzz9');                                         07140001
+                                                                        07160001
+   /*-----------------------*/                                          07170001
+   /* Width Type            */                                          07180001
+   /*-----------------------*/                                          07190001
+   b = c2b(font_desc.width_type);                                       07200001
+   if b<-5 | b>3 then do;                                               07210001
+     put file(fontlist) skip                                            07220001
+         edit('Invalid width type',b)(a,p'--9');                        07230001
+     b = 0; /* Normal */                                                07240001
+     end; /* b */                                                       07250001
+   put file(fontlist) skip                                              07260001
+       edit( 'Width type:', b, width(b) )                               07270001
+           (a,col(18),p'---9',col(24),a);                               07280001
+                                                                        07300001
+   /*-----------------------*/                                          07310001
+   /* Stroke Weight         */                                          07320001
+   /*-----------------------*/                                          07330001
+   b = c2b(font_desc.stroke_weight);                                    07340001
+   if b<-7 | b>7 then do;                                               07350001
+     put file(fontlist) skip                                            07360001
+         edit('Invalid stroke weight',b)(a,p'--9');                     07370001
+     b = 0; /* Medium */                                                07380001
+     end; /* b */                                                       07390001
+   put file(fontlist) skip                                              07400001
+       edit( 'Stroke weight:', b, weight(b) )                           07410001
+           (a,col(18),p'---9',col(24),a);                               07420001
+                                                                        07440001
+   b = c2b(font_desc.serif_style);                                      07450001
+   put file(fontlist) skip                                              07460001
+       edit( 'Serif style:', b )                                        07470001
+           (a,col(18),p'zzz9');                                         07480001
+   /* No AFP equivalent */                                              07490001
+                                                                        07500001
+   return;                                                              07510001
+                                                                        07520001
+   end list_font_attrs;                                                 07530001
+                                                                        07540001
+ %page;                                                                 07550001
+ /*------------------------------------------------------------------*/ 07560001
+ /*      list_font_metrics:  display font metrics                    */ 07570001
+ /*------------------------------------------------------------------*/ 07580001
+                                                                        07590001
+ list_font_metrics: procedure;                                          07600001
+                                                                        07610001
+   dcl   cpi                 fixed bin(15);                             07620001
+   dcl   em_space            fixed bin(15);                             07630001
+                                                                        07640001
+   put file(fontlist) skip(2)                                           07650001
+       edit( '---- PCL Font Metrics ----' )(a);                         07660001
+                                                                        07670001
+   put file(fontlist) skip                                              07680001
+       edit( 'Cell Width  ', b2b(font_desc.cell_width), ' pels' )       07690001
+           (a,p'zzzz9',a);                                 /*PF991202*/ 07700001
+   put file(fontlist) skip                                              07710001
+       edit( 'Cell Height ', b2b(font_desc.cell_height), ' pels' )      07720001
+           (a,p'zzzz9',a);                                 /*PF991202*/ 07730001
+                                                                        07740001
+                                                                        07750001
+   b = b2b(font_desc.pitch);                                            07760001
+   cpi = 300 / floor(b/4);                                              07770001
+   put file(fontlist) skip                                              07780001
+       edit( 'Pitch       ', b, ' (', floor(b/4), ' pels -',            07790001
+             cpi, ' CPI)' )                                             07800001
+           (a,p'zzzz9',a,p'zzz9',a,p'zz9',a);                           07810001
+   /* No AFP equivalent */                                              07820001
+                                                                        07830001
+   /*-----------------------*/                                          07840001
+   /* Point Size            */                                          07850001
+   /* + Em-space default    */                                          07860001
+   /*-----------------------*/                                          07870001
+   b = b2b(font_desc.height);                                           07880001
+   font_points = floor( (b*72+600)/1200 ) * 10;                         07890001
+   put file(fontlist) skip                                              07900001
+       edit( 'Height      ', b, ' (', floor(b/4), ' pels -',            07910001
+             floor(font_points/10), ' points)' )                        07920001
+           (a,p'zzzz9',a,p'zzz9',a,p'zz9',a);                           07930001
+                                                                        08150001
+   /*-----------------------*/                                          08160001
+   /* Baseline              */                                          08170001
+   /*-----------------------*/                                          08180001
+   b = b2b(font_desc.baseline) + 1;                        /*PF991115*/ 08190001
+   font_blo = P2R(b);                                      /*PF980722*/ 08200001
+   put file(fontlist) skip                                              08210001
+       edit( 'Baseline    ', font_blo, ' (', b, ' pels)' ) /*PF980722*/ 08220001
+           (a,p'zzzz9',a,p'zzz9',a);                       /*PF980722*/ 08230001
+                                                                        08280001
+   /* Default Em-quad     */                                            08290001
+   em_space = 1000;                    /* By definition      PF980505*/ 08300001
+                                                                        08320001
+   /*-----------------------*/                                          08360001
+   /* X-Height              */                                          08370001
+   /*-----------------------*/                                          08380001
+   b = b2b(font_desc.xheight);                                          08390001
+   put file(fontlist) skip                                              08400001
+       edit( 'XHeight     ', b, ' (', floor(b/4), ' pels)' )            08410001
+           (a,p'zzzz9',a,p'zzz9',a);                                    08420001
+                                                                        08490001
+   /*-----------------------*/                                          08500001
+   /* Underscore data       */                                          08510001
+   /*-----------------------*/                                          08520001
+   b = sc2b(font_desc.ul_distance);                                     08530001
+   put file(fontlist) skip                                              08540001
+       edit( 'ULDist      ', b )(a,p'----9');                           08550001
+                                                                        08610001
+   b = c2b(font_desc.ul_height);                                        08620001
+   put file(fontlist) skip                                              08630001
+       edit( 'ULHeight    ', b )(a,p'zzzz9');                           08640001
+                                                                        08700001
+   b = b2b(font_desc.text_width);                                       08710001
+   put file(fontlist) skip                                              08720001
+       edit( 'Text width  ', b, ' (', floor(b/4), ' pels)' )            08730001
+           (a,p'zzzz9',a,p'zzz9',a);                                    08740001
+   /* No AFP equivalent */                                              08750001
+                                                                        08760001
+   /*-----------------------*/                                          08770001
+   /* Dflt Baseline Incr.   */                                          08780001
+   /*-----------------------*/                                          08790001
+   b = b2b(font_desc.text_height);                                      08800001
+   put file(fontlist) skip                                              08810001
+       edit( 'Text height ', b, ' (', floor(b/4), ' pels)' )            08820001
+           (a,p'zzzz9',a,p'zzz9',a);                                    08830001
+   b = floor(b/4);                                                      08840001
+                                                                        09110001
+   put file(fontlist) skip                                              09120001
+       edit( 'Pitch-ext   ', c2b(font_desc.pitch_ext) )(a,p'zzzz9');    09130001
+   put file(fontlist) skip                                              09140001
+       edit( 'Height-ext  ', c2b(font_desc.height_ext) )                09150001
+           (a,p'zzzz9');                                                09160001
+   /* No AFP equivalent */                                              09170001
+                                                                        09180001
+   return;                                                              09190001
+                                                                        09200001
+   end list_font_metrics;                                               09210001
+                                                                        09220001
+ %page;                                                                 09230001
+ /********************************************************************/ 13520001
+ /*   Convert pels at 300DPI to relative metric.                     */ 13530001
+ /*   Relative = 1000/pels_per_inch) * 72 * pels.                    */ 13540001
+ /********************************************************************/ 13550001
+ P2R: proc(pels) returns( fixed bin(15) );                              13560001
+ dcl     pels                fixed bin(15);                             13570001
+ dcl     num                 float bin(21);                /*PF980723*/ 13580001
+ dcl     denom               float bin(21);                /*PF980723*/ 13590001
+ dcl     sgn                 fixed bin(31);                /*PF991220*/ 13600001
+ num   = pels * 7200;                                                   13610001
+ denom = font_points * 3;                                               13620001
+ if denom<0 then do;                                                    13630001
+   sgn=-1;                                                              13640001
+   denom = 0.0 - denom;                                                 13641001
+   end;                                                                 13642001
+ else sgn=1;                                                            13643001
+ if denom=0 then do;                                                    13644001
+   put skip edit('Fixed-point divide, num=',num)(a,p'zzz,zzz,zz9');     13645001
+   return(0);                                                           13646001
+   end;                                                                 13647001
+ return( sgn * ceil(num/denom) );                                       13648001
+ end P2R;                                                               13649001
+                                                                        13650001
+ /********************************************************************/ 13660001
+ /*   Convert relative font metrics to pels at 300DPI                */ 13670001
+ /*   Pels = (relative_metric * pels_per_inch * point_size)/72000    */ 13680001
+ /********************************************************************/ 13690001
+                                                                        13700001
+ R2P: proc(m,p) returns( fixed bin(15) );                               13710001
+ dcl    (m,p,r)              fixed bin(15);                             13720001
+ dcl     z                   fixed bin(31);                             13730001
+ z = m * p * 300;                                                       13740001
+ r = floor( z / 72000 );                                                13750001
+ return(r);                                                             13760001
+ end R2P;                                                               13770001
+                                                                        13780001
+ %page;                                                                 13790001
+ /*------------------------------------------------------------------*/ 13800001
+ /*      read_command:       Get next member name                    */ 13810001
+ /*      Card format: PCL_member name                                */ 13820001
+ /*------------------------------------------------------------------*/ 13840001
+ read_command: procedure;                                               13850001
+                                                                        13860001
+   dcl   (i,n)               fixed bin(15);                             13870001
+   dcl   option              char(64)            varying;               13880001
+   dcl   numeric             char(10)            static                 13890001
+              init('0123456789');                                       13900001
+                                                                        13910001
+   card_data = ' ';                                                     13920001
+   if length(card_in)>72 then card_in=substr(card_in,1,72);             13930001
+   call strip( card_in, 'B', ' ' );    /* strip blanks from card     */ 13940001
+   if card_in = ''            then return;                              13950001
+   if substr(card_in,1,1)='*' then return;                              13960001
+   mem_name   = word(card_in,1);                                        13970001
+                                                                        14790001
+   end read_command;                                                    14800001
+                                                                        14810001
+ %page;                                                                 14820001
+ /*-----------------------------------*/                                14830001
+ /* c2b: convert BYTE to binary       */                                14840001
+ /*-----------------------------------*/                                14850001
+ c2b: proc( c ) returns( fixed bin(15) );                               14860001
+ dcl     c                 HPBYTE;                                      14870001
+ dcl     b8                bit(8);                                      14880001
+ dcl     f15               fixed bin(15);                               14890001
+ b8 = unspec(c);                                                        14900001
+ unspec(f15) =  '00000000'b || b8;                                      14910001
+ return(f15);                                                           14920001
+ end c2b;                                                               14930001
+                                                                        14940001
+ /*-----------------------------------*/                                14950001
+ /* sc2b: SIGNED BYTE to binary       */                                14960001
+ /*-----------------------------------*/                                14970001
+ sc2b: proc( c ) returns( fixed bin(15) );                              14980001
+ dcl     c                 HPBYTE;                                      14990001
+ dcl     b8                bit(8);                                      15000001
+ dcl     f15               fixed bin(15);                               15010001
+ b8 = unspec(c);                                                        15020001
+ if substr(b8,1,1)='1'b                                                 15030001
+ then unspec(f15) = '11111111'b || b8;                                  15040001
+ else unspec(f15) = '00000000'b || b8;                                  15050001
+ return(f15);                                                           15060001
+ end sc2b;                                                              15070001
+                                                                        15080001
+ /*-----------------------------------*/                                15090001
+ /* b2b: convert HPBIN to binary      */                                15100001
+ /* (no-operation for mainframe)      */                                15110001
+ /*-----------------------------------*/                                15120001
+ b2b: proc( b ) returns( fixed bin(15) );                               15130001
+ dcl     b                 HPBIN;                                       15140001
+ dcl     b16               bit(16);                                     15150001
+ dcl     f15               fixed bin(15);                               15160001
+ b16 = unspec( substr(b,1,1) ) || unspec( substr(b,2,1) ) ;             15170001
+ unspec(f15) = b16;                                                     15180001
+ return(f15);                                                           15190001
+ end b2b;                                                               15200001
+                                                                        15210001
+ %page;                                                                 15220001
+ /*------------------------------------------------------------------*/ 15230001
+ /*      get_esc_seq:  Read one escape sequence                      */ 15240001
+ /*------------------------------------------------------------------*/ 15250001
+                                                                        15260001
+ get_esc_seq: proc;                                                     15270001
+                                                                        15280001
+ dcl     c                   char(1);                                   15290001
+ dcl     n                   fixed bin(15);                             15300001
+ dcl     in_esc              bit(1)              init('0'b);            15310001
+                                                                        15320001
+ /* ----------------------- */                                          15330001
+ /* ASCII upper-case A-Z    */                                          15340001
+ /* ----------------------- */                                          15350001
+ dcl     alpha               char(26)  static    init                   15360001
+    ('4142434445464748494A4B4C4D4E4F505152535455565758595A'x);          15370001
+                                                                        15380001
+ esc_seq='';                                                            15390001
+                                                                        15400001
+ scan: do while('1'b);                                                  15410001
+   n = read_pcl( addr(c), 1 );                                          15420001
+   if n=0 then return;       /* End of file */                          15430001
+   if in_esc then do;                                                   15440001
+     esc_seq = esc_seq || c;                                            15450001
+     if index(alpha,c)>0 then leave scan;                               15460001
+     end; /* in_esc */                                                  15470001
+   else do;                                                             15480001
+     if c=ESC_CHAR then do;                                             15490001
+       esc_seq = esc_seq || c;                                          15500001
+       in_esc='1'b;                                                     15510001
+       end;                                                             15520001
+     end; /* else */                                                    15530001
+   end; /* do while */                                                  15540001
+                                                                        15550001
+   return;                                                              15560001
+                                                                        15570001
+ end get_esc_seq;                                                       15580001
+                                                                        15590001
+ %page;                                                                 15600001
+ /*------------------------------------------------------------------*/ 15610001
+ /*      read_pcl: read data from PCL input file                     */ 15620001
+ /*------------------------------------------------------------------*/ 15630001
+                                                                        15640001
+ read_pcl: proc(where,howmuch) returns( fixed bin(15) );                15650001
+                                                                        15660001
+ dcl     where               ptr;                                       15670001
+ dcl     howmuch             fixed bin(15);                             15680001
+                                                                        15690001
+ dcl     fp                  ptr      static;                           15700001
+ dcl     font_buffer         char(80) static;                           15710001
+ dcl     c                   char(1024)          based;                 15720001
+ dcl     op                  ptr;                                       15730001
+ dcl    (n,nmax,z)           fixed bin(15);                             15740001
+ dcl     font_eof            bit(1)   static     init('0'b);            15750001
+                                                                        15760001
+ on endfile(font) font_eof='1'b;                                        15770001
+                                                                        15780001
+ if first_time_font then do;                                            15790001
+   read file(font) into(font_buffer);                                   15800001
+   fp = addr(font_buffer);                                              15810001
+   first_time_font='0'b;                                                15820001
+   font_eof='0'b;                                                       15830001
+   end; /* first_time_font */                                           15840001
+                                                                        15850001
+ op   = where;                                                          15860001
+ nmax = howmuch;                                                        15870001
+ z    = 0;                                                              15880001
+                                                                        15890001
+ do while('1'b);                                                        15900001
+                                                                        15910001
+   if nmax=0   then return(z);                                          15920001
+                                                                        15930001
+   if fp > addr(font_buffer) + 79 then do;                              15940001
+     if font_eof then return(z);                                        15950001
+     read file(font) into(font_buffer);                                 15960001
+     fp=addr(font_buffer);                                              15970001
+     end; /* if */                                                      15980001
+   n = 80 - ( fp - addr(font_buffer) );     /* Characters in buffer  */ 15990001
+   n = min(n,nmax);                         /* Characters to move    */ 16000001
+   substr(op->c,1,n) = substr(fp->c,1,n);   /* Move data             */ 16010001
+   op   = op+n;                             /* Bump output pointer   */ 16020001
+   fp   = fp+n;                             /* Bump input pointer    */ 16030001
+   z    = z+n;                              /* Count chars moved     */ 16040001
+   nmax = nmax-n;                           /* Adj chars wanted      */ 16050001
+                                                                        16060001
+   end; /* do while */                                                  16070001
+                                                                        16080001
+ end read_pcl;                                                          16090001
+                                                                        16100001
+ %include(ascebc);                                                      19500001
+ %include(lowercas);                                                    19510001
+ %page;                                                                 19520001
+ /********************************************************************/ 19530001
+ /*   Process PARM info                                              */ 19540001
+ /********************************************************************/ 19550001
+                                                                        19560001
+ process_parm: proc;                                                    19570001
+   dcl   i                   fixed bin(15);                             19580001
+   dcl   wrk                 char(10)  varying;                         19590001
+                                                                        19600001
+                                                                        19720001
+ end process_parm;                                                      19730001
+                                                                        20750001
+ /********************************************************************/ 20760001
+ /*   Print Storage Statistics                                       */ 20770001
+ /********************************************************************/ 20780001
+ storage_stats: proc;                                                   20790001
+    dcl  sbp                 ptr;                                       20800001
+    sbp = Xstats();                                                     20810001
+    put file(sysprint) skip(2) edit                                     20820001
+            ('Storage Statistics ---')(a);                              20830001
+    put file(sysprint) skip(2) edit                                     20840001
+            ('  Number of storage allocations: ',sbnalc)(a,p'zzz9');    20850001
+    put file(sysprint) skip(2) edit                                     20860001
+        ('  Number of storage releases:    ',sbnfre)(a,p'zzz9');        20870001
+    put file(sysprint) skip(2) edit                                     20880001
+            ('  Current storage allocated:     ',sbcalc)                20890001
+            (a,p'zz,zzz,zz9');                                          20900001
+    put file(sysprint) skip(2) edit                                     20910001
+            ('  Storage highwatermark:         ',sbmalc)                20920001
+            (a,p'zz,zzz,zz9');                                          20921001
+    end storage_stats;                                                  20922001
+                                                                        20923001
+ %include word;                                                         20924001
+ %include wordpos;                                                      20925001
+ %include hex;                                                          20926001
+                                                                        20927001
+ end LISTFONT;                                                          20928001
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 20929001
+//LKED.SYSLIB DD                                                        20930001
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    20940001
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        20950001
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      20960001
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       20970001
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  20980001
+//LKED.SYSIN DD *                                                       20990001
+ MODE AMODE(31),RMODE(24)                                               21000001
+ NAME LISTFONT(R)                                                       21010001
+//* -------------- END OF LINKEDIT STEP ------------------------------* 21020001

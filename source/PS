@@ -1,0 +1,252 @@
+//FLASSV   JOB (),PS,CLASS=J,MSGCLASS=Z,                                00010000
+//            REGION=2048K,NOTIFY=$                                     00020000
+//ASM      EXEC PGM=ASMA90,REGION=200K,                                 00030000
+//        PARM='OBJECT,NODECK,ALIGN,RENT'                               00040000
+//********************************************************************  00050000
+//**       ASSEMBLE PROGRAM -- HLASM                                 *  00060000
+//********************************************************************  00070000
+//SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                             00080000
+//         DD DSN=SYSTEMS.MACLIB,DISP=SHR                               00081000
+//         DD DSN=SYS1.MACLIB,DISP=SHR                                  00082000
+//         DD DSN=SYS1.MODGEN,DISP=SHR                                  00083000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     00084000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00085000
+//SYSUT2   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00086000
+//SYSUT3   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00087000
+//SYSLIN   DD DSN=&&ASM,UNIT=VIO,DISP=(,PASS),                          00088000
+//            SPACE=(TRK,(3,3)),DCB=BLKSIZE=400                         00089000
+//SYSIN    DD *                                                         00090000
+         title 'PS - PostScript Processor for PCL Writer'               00100004
+PS       csect                                                          00110000
+                                                                        00140000
+*********************************************************************** 00150000
+*                                                                     * 00160000
+*   Module: PS                                                        * 00170000
+*                                                                     * 00180000
+*   Function: Process Posc Script data.                               * 00190000
+*                                                                     * 00200000
+*   Author: Peter Flass -- NYS LBDC                                   * 00210000
+*           March, 1999                                               * 00220000
+*                                                                     * 00221000
+*   Description:                                                      * 00230000
+*      Called by the PCL writer task when the input datastream        * 00240000
+*      has been identified as Post Script.  This module packages      * 00250000
+*      up the input as transparent data and sends it to the           * 00260000
+*      printer without modifications.                                 * 00270000
+*                                                                     * 00280000
+*   Modifications:                                                    * 00320000
+*                                                                     * 00350000
+*********************************************************************** 00350100
+                                                                        00350200
+PS       amode 31                                                       00350300
+PS       rmode any                                                      00350400
+                                                                        00350500
+         regs  ,                                                        00350600
+base     equ   r12                CSECT base register                   00350800
+aparm    equ   r11                A(afp2pcl_parm)                       00351002
+out      equ   r10                Output data pointer                   00351102
+link     equ   r9                 linkage register                      00351202
+                                                                        00351300
+PS       csect                                                          00351400
+         b     start-*(,r15)      skip over comment                     00352000
+PS       version 1.0              generate version information          00353000
+         space 3                                                        00354000
+* ------------------------------- *                                     00355000
+*        Chain saveareas          *                                     00356000
+* ------------------------------- *                                     00357000
+start    ds    0h                                                       00358000
+         save  (14,12)            save caller's registers               00359000
+         lr    base,r15           establish csect base                  00360000
+         using PS,base            .                                     00370000
+         lr    r2,r1              save a(readparm)                      00380000
+         storage OBTAIN,length=wrklen,loc=BELOW obtain workarea         00390000
+         st    r13,4(,r1)         chain saveareas                       00400000
+         st    r1,8(,r13)         .                                     00410000
+         lr    r13,r1             .                                     00420000
+         using work,r13                                                 00430000
+         mvc   comment,version    initialize workarea                   00440000
+         space 2                                                        02210000
+* ------------------------------- *                                     02211000
+*        Initialization           *                                     02212000
+* ------------------------------- *                                     02213000
+         l     aparm,0(,r2)       load a(AFP2PCL_PARM)                  02213100
+         using AFP2PCL_PARM,aparm                                       02213200
+         xc    A2P_RETC,A2P_RETC  clear return code                     02213301
+         la    r1,recaddr         set up read parameter list            02213400
+         st    r1,readparm        .                                     02213500
+         la    r1,reclen          .                                     02213600
+         st    r1,readparm+4      .                                     02213700
+         oi    readparm+4,x'80'   .                                     02213800
+         la    r1,psrec           set up write parameter list           02213900
+         st    r1,psaddr          .                                     02214000
+         la    r1,psaddr          .                                     02214100
+         st    r1,writparm        .                                     02214200
+         oi    writparm,x'80'     .                                     02214300
+         mvc   psrec(l'bufinit),bufinit     init trnsp data buffer      02214403
+         mvc   psrec+l'bufinit(l'psrec-l'bufinit),psrec+l'bufinit-1     02214500
+         la    out,psrec+3        point to output address               02214600
+         title 'PS - Read/Write Loop'                                   02214700
+* ------------------------------- *                                     02214800
+*        Read a Record            *                                     02214900
+*   (note nonstandard linkage)    *                                     02215000
+* ------------------------------- *                                     02215100
+read     ds    0h                                                       02215200
+         la    r1,readparm        Read a record                         02215300
+         l     r15,A2P_RDA        . A(Entry Point)                      02215400
+         l     r5,A2P_RDA+4       . A(PCLWTR1 work area)                02215500
+*                                   (*PL/I convention*)                 02215600
+         balr  r14,r15            .                                     02215700
+         icm   r2,b'1111',reclen  Load returned record length           02215800
+         bm    eof                Done, flush out last buffer           02215900
+         l     r3,recaddr         Load the record address               02216000
+*                                                                       02216100
+loop     equ   *                                                        02216200
+         lr    r0,out             Compute space available               02216300
+         la    r1,psrec           .                                     02216400
+         sr    r0,r1              .                                     02216500
+         la    r1,l'psrec         .                                     02216600
+         sr    r1,r0              .                                     02216700
+         cr    r1,r2              compare to current record length      02216800
+         bnh   *+6                .. only partial record                02216902
+         lr    r1,r2              .. enough space for whole record      02217000
+         sr    r2,r1              subtract amount moved                 02217100
+         bctr  r1,0               move data to output                   02217200
+         ex    r1,mvc             ** mvc 0(*-*,out),0(r3)               02217300
+         la    r3,1(r1,r3)        bump input address                    02217400
+         la    out,1(r1,out)      bump output address                   02217500
+         la    r0,psrec+l'psrec   check for output buffer full          02217600
+         cr    out,r0             .                                     02217700
+         bl    *+8                .. no                                 02217802
+         bal   link,write         .. yes, write full buffer             02217900
+         ltr   r2,r2              check for input data exhausted        02218000
+         bnz   loop               .. no, continue                       02218100
+         b     read               otherwise read next record            02218200
+         space 2                                                        02218300
+* ------------------------------- *                                     02218400
+*        Write a Record           *                                     02218500
+*   (note nonstandard linkage)    *                                     02219000
+* ------------------------------- *                                     02219100
+write    ds    0h                                                       02219200
+         l     r15,A2P_STAT       Load A(Statistics block)              02219300
+         l     r1,TASKCRDS-TASKSTAT(,r15) Load current card count       02219500
+         sr    r0,r0              Compute mod(TASKCRDS,6)               02219600
+         d     r0,=f'6'           .                                     02219700
+         ltr   r0,r0              Test remainder                        02219800
+         bnz   write1             .                                     02219900
+         la    r0,jeshdr          Punch JES/328x header                 02220000
+         st    r0,psaddr                                                02220100
+         la    r1,writparm        Write a record                        02220200
+         l     r15,A2P_PCHA       . A(Entry Point)                      02220300
+         l     r5,A2P_PCHA+4      . A(PCLWTR1 work area)                02220400
+*                                   (*PL/I convention*)                 02220500
+         balr  r14,r15            .                                     02220600
+         la    r0,psrec           reset record address                  02220700
+         st    r0,psaddr          .                                     02220800
+write1   equ   *                                                        02220900
+         l     r15,A2P_STAT       Load A(Statistics block)              02221000
+         l     r1,TASKCRDS-TASKSTAT(,r15) Bump card count               02221100
+         la    r1,1(,r1)          .                                     02221200
+         st    r1,TASKCRDS-TASKSTAT(,r15)                               02221300
+         la    r1,writparm        Write a record                        02221400
+         l     r15,A2P_PCHA       . A(Entry Point)                      02221500
+         l     r5,A2P_PCHA+4      . A(PCLWTR1 work area)                02221600
+*                                   (*PL/I convention*)                 02221700
+         balr  r14,r15            .                                     02221800
+         mvc   psrec(l'bufinit),bufinit     init trnsp data buffer      02221903
+         mvc   psrec+l'bufinit(l'psrec-l'bufinit),psrec+l'bufinit-1     02222100
+         la    out,psrec+3        point to output address               02222200
+         br    link               return to caller                      02222300
+         space 2                                                        02222400
+* ------------------------------- *                                     02222500
+*        End-Of-File              *                                     02222600
+* ------------------------------- *                                     02222700
+eof      ds    0h                 EOF Routine                           02222800
+         la    r0,psrec+3         check for empty record                02222900
+         cr    r0,out             .                                     02223000
+         be    *+8                .. yes                                02223100
+         bal   link,write         Write last card                       02223200
+         l     r15,A2P_STAT       Load A(Statistics block)              02223300
+         l     r1,TASKCRDS-TASKSTAT(,r15) Load current card count       02223400
+         sr    r0,r0              Compute mod(TASKCRDS,6)               02223500
+         d     r0,=f'6'           .                                     02223600
+         ltr   r0,r0              .                                     02223700
+         bz    return             .. done                               02223800
+         la    r2,6               Compute cards to punch                02223900
+         sr    r2,r0              .                                     02224000
+eof1     equ   *                  Write empty cards                     02224100
+         bal   link,write         Write empty cards to fill set         02224400
+         bctr  r2,0               Decrement remainder                   02224502
+         ltr   r2,r2              .                                     02224602
+         bz    return             .. done                               02224702
+         b     eof1               .                                     02224800
+         space 2                                                        02225100
+* ------------------------------- *                                     02226000
+*        Return to caller         *                                     02230000
+* ------------------------------- *                                     02240000
+return   ds    0h                                                       02250000
+         l     r2,rc               save return code                     02260000
+         la    r0,wrklen           L'area to free                       02270000
+         lr    r1,r13              A(area to free)                      02271000
+         l     r13,4(,r13)         load A(HL savearea)                  02272000
+         storage RELEASE,length=(0),addr=(1) free workarea              02273000
+         lr    r15,r2              load return code                     02274000
+         return (14,12),rc=(15)    return to caller                     02275000
+                                                                        02275100
+*        EXecuted instruction                                           02275200
+mvc      mvc   0(*-*,out),0(r3)    move data to trnsp buffer            02275300
+                                                                        02276000
+abend    ds    0h                  ABEND                                02277000
+         abend 2,DUMP                                                   02278000
+                                                                        02279000
+         title 'PS - constants and workareas'                           02280000
+                                                                        02400000
+jeshdr   ds    0cl80               JES/328x header                      02401000
+         dc    x'5A',c'JES328X',x'01DA'                                 02402000
+         dc    70x'FF'                                                  02403000
+                                                                        02404000
+bufinit  dc    xl4'5A354D00'       Transparent buffer header            02404103
+                                                                        02405000
+null     dc    x'FF000000'         PL/I 'null' pointer value            02410000
+                                                                        02420000
+         ltorg *                                                        02480000
+         drop  ,                                                        02490000
+                                                                        02710000
+         space 2                                                        02720000
+         pclincl                                                        02730000
+*                                                                       02740000
+         space 3                                                        02750000
+* ------------------------------- *                                     02760000
+*        Dynamic storage          *                                     02770000
+* ------------------------------- *                                     02780000
+work     dsect ,                   working storage (below)              02790000
+savearea ds    9d                  OS savearea                          02800000
+comment  ds    cl8                 comment for dumps                    02810000
+dwd      ds    d                   doubleword workarea                  02820000
+rc       ds    f                   return code                          02830000
+readparm ds    2A                  Read Parameter List for callback     02840000
+writparm ds    A                   Write Parameter List for callback    02850000
+recaddr  ds    a                   record recaddr                       02860000
+reclen   ds    f                   record length                        02870002
+psaddr   ds    a                   A(psrec)                             02871000
+psrec    ds    cl80                Workarea for transparent output      02880003
+wrklen   equ   *-work              L'workarea                           02990000
+                                                                        03000000
+         end   PS                                                       03070000
+//* --------------------------------------------------------------- *** 03080000
+//LKED     EXEC PGM=IEWL,                                              X03090000
+//            PARM='XREF,LET,LIST,NCAL,RENT,REUS,REFR',                X03100000
+//            COND=(8,LT,ASM)                                           03110000
+//********************************************************************  03120000
+//**       LINKEDIT PROGRAM                                          *  03130000
+//********************************************************************  03140000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     03150000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                03160000
+//SYSLIB   DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                            03170000
+//         DD DSN=FLASS.PF.LOAD,DISP=SHR                                03180000
+//SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                            03181000
+//SYSLIN   DD DSN=&&ASM,DISP=(OLD,DELETE)                               03210000
+//         DD *                                                         03220000
+ MODE AMODE(31),RMODE(24)                                               03230000
+ SETCODE AC(1)                                                          03240000
+ NAME PS(R)                                                             03250000
+//* --------------------------------------------------------------- *** 03260000

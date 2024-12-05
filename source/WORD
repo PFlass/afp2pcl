@@ -1,0 +1,45 @@
+ /*------------------------------------------------------------------*/ 00010000
+ /* REXX-like 'word()' function.                                     */ 00020000
+ /*------------------------------------------------------------------*/ 00030000
+                                                                        00040000
+ word: procedure(str,no) options( reentrant )                           00050000
+                         returns( char(256) varying );                  00060000
+                                                                        00070000
+ dcl  str                    char(*) varying;                           00080000
+ dcl  no                     fixed bin(15);                             00090000
+ dcl (s,e,i,n)               fixed bin(15)       init(0);               00100000
+                                                                        00110000
+ i=1;                                                                   00120000
+ do while('1'b);                                                        00130000
+   s=find_start(str,i);                                                 00140000
+   if s=0 then return('');                                              00150000
+   n=n+1;                                                               00160000
+   i=s;                                                                 00170000
+   e=find_end(str,i);                                                   00180000
+   i=e;                                                                 00190000
+   if n=no then return( substr(str,s,e-s) );                            00200000
+   end; /* do while */                                                  00210000
+                                                                        00220000
+ find_start: proc(s,p) options( reentrant )                             00230000
+                       returns( fixed bin(15) );                        00240000
+   dcl s                     char(*) varying;                           00250000
+   dcl p                     fixed bin(15);                             00260000
+   dcl j                     fixed bin(15);                             00270000
+   do j=p to length(s);                                                 00280000
+     if substr(str,j,1)ª=' ' then return(j);                            00290000
+     end;                                                               00300000
+   return(0);                                                           00310000
+   end find_start;                                                      00320000
+                                                                        00330000
+ find_end: proc(s,p) options( reentrant )                               00340000
+                     returns( fixed bin(15) );                          00350000
+   dcl s                     char(*) varying;                           00360000
+   dcl p                     fixed bin(15);                             00370000
+   dcl j                     fixed bin(15);                             00380000
+   do j=p to length(s);                                                 00390000
+     if substr(str,j,1)=' ' then return(j);                             00400000
+     end;                                                               00410000
+   return( length(s)+1 );                                               00420000
+   end find_end;                                                        00430000
+                                                                        00440000
+ end word;                                                              00450000

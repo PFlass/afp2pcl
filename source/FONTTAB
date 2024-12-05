@@ -1,0 +1,371 @@
+//FLASSV   JOB (),FONTTAB,CLASS=J,MSGCLASS=Z,                           00010000
+//            REGION=2048K,NOTIFY=$                                     00020000
+//ASM      EXEC PGM=ASMA90,REGION=200K,                                 00030000
+//        PARM='OBJECT,NODECK,ALIGN,RENT'                               00040000
+//********************************************************************  00050000
+//**       ASSEMBLE PROGRAM -- HLASM                                 *  00060000
+//********************************************************************  00070000
+//SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                             00080001
+//         DD DSN=SYSTEMS.MACLIB,DISP=SHR                               00081001
+//         DD DSN=SYS1.MACLIB,DISP=SHR                                  00090000
+//         DD DSN=SYS1.MODGEN,DISP=SHR                                  00100000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     00110000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00120000
+//SYSUT2   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00130000
+//SYSUT3   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00140000
+//SYSLIN   DD DSN=&&ASM,UNIT=VIO,DISP=(,PASS),                          00150000
+//            SPACE=(TRK,(3,3)),DCB=BLKSIZE=400                         00160000
+//SYSIN    DD *                                                         00170000
+         title 'FONTTAB - load font correlation table for AFP2PCL'      00180000
+FONTTAB  csect                                                          00190000
+                                                                        00200000
+MAX_FONTS equ  300                maximum number of fonts allowed       00210000
+                                                                        00220000
+*********************************************************************** 00230000
+*                                                                     * 00240000
+*   module: fonttab                                                   * 00250000
+*                                                                     * 00260000
+*   function: load font correlation table for 'AFP2PCL'               * 00270000
+*                                                                     * 00280000
+*   author: Peter Flass -- NYS LBDC -- April, 1997                    * 00290000
+*                                                                     * 00300000
+*   description:                                                      * 00310000
+*      The font forrelation table is read from DD 'FONTTAB'           * 00320000
+*      and loaded into memory.  The address where it is               * 00330000
+*      loaded is returned to the caller.  '0' is returned             * 00340000
+*      if the load is unsuccessful.                                   * 00350000
+*                                                                     * 00350100
+*   future enhancements:                                              * 00350200
+*      Replace bubble sort with a more efficient algorithm.           * 00350302
+*                                                                     * 00350400
+*   modifications:                                                    * 00350500
+*       3 Nov 1997 - add third field to card for metacode font name   * 00350600
+*      10 Dec 1997 - add code to initialize 'FWIDTH'                  * 00350700
+*                                                                     * 00350800
+*********************************************************************** 00350900
+                                                                        00351000
+FONTTAB  amode 31                                                       00352000
+FONTTAB  rmode any                                                      00353000
+                                                                        00354000
+         regs  ,                                                        00355000
+fptr     equ   r11                address of font table                 00356000
+base     equ   r12                CSECT base register                   00357000
+                                                                        00358000
+FONTTAB  csect                                                          00359000
+         b     start-*(,r15)      skip over comment                     00360000
+FONTTAB  version 1.0              generate version information          00370000
+         space 3                                                        00380000
+* ------------------------------- *                                     00390000
+*        Chain saveareas          *                                     00400000
+* ------------------------------- *                                     00410000
+start    ds    0h                                                       00420000
+         save  (14,12)            save caller's registers               00430000
+         lr    base,r15           establish csect base                  00440000
+         using FONTTAB,base       .                                     00450000
+         lr    r2,r1              save a(parmlist)                      00460000
+         storage OBTAIN,length=wrklen,loc=BELOW obtain workarea         00470000
+         st    r13,4(,r1)         chain saveareas                       00480000
+         st    r1,8(,r13)         .                                     00490000
+         lr    r13,r1             .                                     00500000
+         using work,r13                                                 00510000
+         mvc   comment,version    initialize workarea                   00520000
+         xc    rc,rc              clear return code                     00530000
+         space 3                                                        00540000
+* ------------------------------- *                                     00550000
+*        Issue ESTAE macro        *                                     00560000
+* ------------------------------- *                                     00570000
+         mvc   staearea,estaed                                          00580000
+         la    r1,staearea              .                               00590000
+         estaex ,mf=(E,(1)) establish exit                              00600000
+         space 3                                                        00610000
+* ------------------------------- *                                     00620000
+*        Open FNTTAB  DCB         *                                     00630000
+* ------------------------------- *                                     00640000
+@dcb     using ihadcb,r1                                                00650000
+         mvc   fnttab,fnttabd   .                                       00660000
+         la    r0,fnttab+fnttabe-fnttabd                                00670000
+         la    r1,fnttab                                                00680000
+         st    r0,@dcb.dcbrelad  Save A(DCBE) into DCB                  00690000
+         la    r1,fnttab         open 'FNTTAB' DCB                      00700000
+         st    r1,openlist        .                                     00710000
+         oi    openlist,x'80'     .                                     00720000
+         la    r1,openlist        .                                     00730000
+         open  (,(INPUT)),mf=(E,(1))  .                                 00740000
+         la    r1,fnttab                                                00750000
+         tm    @dcb.dcboflgs,dcbofopn  Q/ opened successfully?          00760000
+         bno   abend                   .. no, exit                      00770000
+         drop  @dcb                                                     00780000
+                                                                        00790000
+         space 2                                                        00800000
+* ------------------------------- *                                     00810000
+*        Allocate font table stg. *                                     00820000
+* ------------------------------- *                                     00830000
+         lh    r0,=al2(flen)      load L'font table entry               00840000
+         mh    r0,=al2(MAX_FONTS) . X number of entries                 00850000
+         ah    r0,=al2(fent-ftab) . + storage for count                 00860000
+         storage OBTAIN,length=(0),loc=ANY acquire fonttab stg.         00870000
+         la    fptr,0(,r1)        set up base register                  00880000
+         using ftab,fptr          .                                     00890000
+         xc    fcnt,fcnt          clear font count                      00900000
+                                                                        00910000
+         title 'FONTTAB - read FNTTAB file'                             00920000
+* ------------------------------- *                                     00930000
+*        Read FNTTAB              *                                     00940000
+* ------------------------------- *                                     00950000
+loop     ds    0h                  loop to read FNTTAB                  00960000
+         la    r1,fnttab           read a record                        00970000
+         get   (1)                 .                                    00980000
+         cli   0(r1),c'*'          Q/ comment?                          00990000
+         be    loop                .. yes, ignore                       01000000
+         cli   0(r1),c' '          test for blank record                01010000
+         bne   record              .                                    01020000
+         clc   1(79,r1),0(r1)      .                                    01030000
+         be    loop                .                                    01040000
+                                                                        01050000
+         space 2                                                        01060000
+* ------------------------------- *                                     01070000
+*        Scan record              *                                     01080000
+* ------------------------------- *                                     01090000
+record   equ   *                   scan record                          01100000
+         la    r0,80(,r1)          point to end                         01110000
+         sr    r14,r14             zero field count                     01120000
+         bctr  r1,0                back up one character                01130000
+scan     equ   *                   scan the card                        01140000
+         la    r1,1(,r1)           point to next char                   01150000
+         cr    r1,r0               Q/ done?                             01160000
+         bnl   loop                .. yes, field missing, skip          01170000
+         cli   0(r1),c' '          skip leading blanks                  01180000
+         be    scan                .                                    01190000
+         st    r1,scantab(r14)     save start address                   01200000
+scan01   la    r1,1(,r1)           scan for field end address           01210000
+         cr    r1,r0               .                                    01220000
+         bnl   flddone             .                                    01230000
+         cli   0(r1),c' '          .                                    01240000
+         bne   scan01              .                                    01250000
+flddone  lr    r15,r1              compute field length                 01260000
+         s     r15,scantab(r14)    .                                    01270000
+         st    r15,scantab+4(r14)  save field length                    01280000
+         la    r14,scanel(,r14)    bump to next field                   01290000
+         ch    r14,=al2(scanel*3)  allow three fields per card PF110397 01300000
+         bl    scan                                                     01310000
+                                                                        01320000
+         space 2                                                        01330000
+* ------------------------------- *                                     01340000
+*        Verify card data         *                                     01350000
+* ------------------------------- *                                     01360000
+recdone  equ   *                   record scanned                       01370000
+         icm   r1,b'1111',w1len    load word #1 length                  01380000
+         bnp   loop                .. error if <= zero                  01390000
+         ch    r1,=h'8'            .. or > 8                            01400000
+         bh    loop                .                                    01410000
+         lm    r2,r3,w2addr        load word #2 information             01420000
+         ltr   r3,r3               test word length                     01430000
+         bnh   loop                skip if zero (SNO)                   01440000
+         bctr  r3,0                test for numerics                    01450000
+         ex    r3,numcheck         ** trt 0(*-*,r2),numtab              01460000
+         bnz   loop                .. invalid                           01470000
+         ex    r3,packit           ** pack dwd(8),0(*-*,r2)             01480000
+         lm    r2,r3,w3addr        load word #3 information    PF110397 01490000
+         ltr   r3,r3               test word length            PF110397 01500000
+         bnh   loop                skip if zero (SNO)          PF110397 01510000
+         ch    r3,=h'8'            .. or > 8                   PF110397 01520000
+         bh    loop                .                           PF110397 01530000
+                                                                        01540000
+         space 2                                                        01550000
+* ------------------------------- *                                     01560000
+*        Create font table entry  *                                     01570000
+* ------------------------------- *                                     01580000
+         lh    r1,fcnt             load font count                      01590000
+         ch    r1,=al2(MAX_FONTS)  check for overflow                   01600000
+         bh    eof                 .. yes, error                        01610000
+         la    r0,1(,r1)           bump count                           01620000
+         sth   r0,fcnt             and save it back                     01630000
+         mh    r1,=al2(flen)       compute offset of entry              01640000
+         la    r1,ftab(r1)         point to entry-L'header              01650000
+                                                                        01660000
+@ftab    using ftab,r1                                                  01670000
+         xc    @ftab.fent(flen),@ftab.fent clear entry                  01680000
+         lm    r2,r3,w1addr        load word #1 information             01690000
+         bctr  r3,0                move font name                       01700000
+         ex    r3,movename         ** mvc @ftab.fname(*-*),0(r2)        01710000
+         cvb   r2,dwd              get binary font id                   01720000
+         sth   r2,@ftab.fnum       .                                    01730000
+         lm    r2,r3,w3addr        load word #3 information    PF110397 01740000
+         bctr  r3,0                move metacode font name     PF110397 01750000
+         ex    r3,movemeta         ** mvc @ftab.fmeta(*-*),0(r2PF110397 01760000
+         mvc   @ftab.fwidth,null   Move PL/I null pointer val  PF121297 01770000
+         b     loop                done with this card                  01780000
+         space 2                                                        01790000
+                                                                        01800000
+*        executed instructions                                          01810000
+numcheck trt   0(*-*,r2),numtab    verify numeric font id               01820000
+packit   pack  dwd(8),0(*-*,r2)    pack font id                         01830000
+movename mvc   @ftab.fname(*-*),0(r2) move font name                    01840000
+movemeta mvc   @ftab.fmeta(*-*),0(r2) move centralized font nameF110397 01841000
+                                                                        01842000
+         drop  @ftab                                                    01843000
+                                                                        01844000
+* ------------------------------- *                                     01845000
+*        EOF on FNTTAB            *                                     01846000
+* ------------------------------- *                                     01847000
+eof      ds    0h                  end of file                          01848000
+         la    r1,openlist         close FNTTAB                         01849000
+         close ,mf=(E,(1))         .                                    01850000
+         st    fptr,rc             save address of table                01860000
+                                                                        01870000
+         title 'FONTTAB - bubble sort font table'                       01880000
+i        equ   r1                                                       01890000
+j        equ   r2                                                       01900000
+@i       using fent,i                                                   01910000
+@j       using fent,j                                                   01920000
+                                                                        01930000
+         la    r14,ftab+(fent-ftab) point to entry(1)                   01940000
+         lh    r15,fcnt            load font count                      01950000
+         mh    r15,=al2(flen)      X length of entry                    01960000
+         la    r15,0(r15,r14)      point to end of table                01970000
+         sh    r15,=al2(flen)      .                                    01980000
+                                                                        01990000
+* ------------------------------- *                                     02000000
+*        Bubble sort font table   *                                     02010000
+* ------------------------------- *                                     02020000
+         la    i,fent                        | Do i=2 to fcnt           02030000
+         sh    i,=al2(flen)                  |     +                    02040000
+bubble   equ   *                             |     +                    02050000
+         la    i,@i.fnext                    |     +                    02060000
+         cr    i,r15                         |     +                    02070000
+         bnl   bubblex                       |     +                    02080000
+         clc   @i.fname,@i.fname+flen        |   If font(i-1)>font(i)   02090000
+         bnh   bubble                        |   Then Do                02100000
+         mvc   tempftab,@i.fent+flen         |     temp=font(i)         02110000
+         mvc   @i.fent+flen(flen),@i.fent    |     font(i)=font(i-1)    02120000
+         lr    j,i                           |     Do j=i-2 To 1 By -1  02130000
+bubble2  equ   *                             |         +                02140000
+         sh    j,=al2(flen)                  |         +                02150000
+         cr    j,r14                         |         +                02160000
+         bl    bubble4                       |         +                02170000
+         clc   fname-fent+tempftab,@j.fname  |       If temp>=font(j)   02180000
+         bnl   bubble4                       |       Then Leave         02190000
+         mvc   @j.fent+flen(flen),@j.fent    |       font(j+1)=font(j)  02200000
+         b     bubble2                       |       End j              02210000
+bubble4  equ   *                             |                          02220000
+         mvc   @j.fent+flen(flen),tempftab   |     font(j+1)=temp       02230000
+         b     bubble                        |   End I                  02240000
+bubblex  equ   *                   end of sort                          02250000
+                                                                        02260000
+         drop  @i,@j                                                    02270000
+                                                                        02271000
+         space 2                                                        02272000
+* ------------------------------- *                                     02273000
+*        Return to caller         *                                     02274000
+* ------------------------------- *                                     02275000
+return   ds    0h                                                       02276000
+         l     r2,rc               save return code                     02277000
+         la    r0,wrklen           L'area to free                       02278000
+         lr    r1,r13              A(area to free)                      02279000
+         l     r13,4(,r13)         load A(HL savearea)                  02280000
+         storage RELEASE,length=(0),addr=(1) free workarea              02290000
+         lr    r15,r2              load return code                     02300000
+         return (14,12),rc=(15)    return to caller                     02310000
+                                                                        02320000
+abend    ds    0h                  ABEND                                02330000
+         abend 2,DUMP                                                   02340000
+                                                                        02350000
+         title 'FONTTAB - constants and workareas'                      02360000
+fnttabd  dcb   ddname=FNTTAB,                                          x02370000
+               dcbe=fnttabe,                                           x02380000
+               devd=DA,                                                x02390000
+               dsorg=PS,                                               x02400000
+               macrf=(GL)                                               02410000
+fnttabe  dcbe  rmode31=BUFF,                                           x02420000
+               eodad=eof                                                02430000
+fnttabl  equ   *-fnttabd                                                02440000
+                                                                        02450000
+estaed   estaex recovery,mf=L                                           02460000
+estael   equ   *-estaed                                                 02470000
+                                                                        02480000
+null     dc    x'FF000000'         PL/I 'null' pointer value   PF121297 02490000
+                                                                        02500000
+numtab   dc    256x'01'            translate-and-test table             02510000
+         org   numtab+x'F0'        (verify numerics)                    02520000
+         dc    10x'00'                                                  02530000
+         org   ,                                                        02540000
+                                                                        02550000
+         ltorg *                                                        02560000
+         drop  ,                                                        02570000
+                                                                        02580000
+         title 'FONTTAB - estae recovery routine'                       02590000
+*---------------------------------*                                     02600000
+*  ESTAE recovery routine         *                                     02610000
+*---------------------------------*                                     02620000
+         print gen                                                      02630000
+recovery ds    0h                  estae recovery routine               02640000
+         stm   r14,r12,12(r13)     save registers                       02650000
+         lr    r12,r15                                                  02660000
+         using recovery,r12                                             02670000
+         ch    r0,=h'12'           q/ do we have sdwa?                  02680000
+         be    recover1            .. no, can't retry                   02690000
+         using SDWA,r1                                                  02700000
+         setrp regs=(14,12),                                           X02710000
+               dump=YES,  (NO)                                         X02720000
+               rc=0                                                     02730000
+recover1 equ   *                   no sdwa for retry                    02740000
+         sr    r15,r15                                                  02750000
+         br    r14                                                      02760000
+         ltorg ,                                                        02770000
+         drop  ,                                                        02780000
+                                                                        02790000
+         space 2                                                        02800000
+         pclincl                                                        02810000
+*                                                                       02820000
+         space 3                                                        02830000
+* ------------------------------- *                                     02840000
+*        Dynamic storage          *                                     02850000
+* ------------------------------- *                                     02860000
+work     dsect ,                   working storage (below)              02870000
+savearea ds    9d                  OS savearea                          02880000
+comment  ds    cl8                 comment for dumps                    02890000
+dwd      ds    d                   doubleword workarea                  02900000
+rc       ds    f                   return code                          02910000
+openlist ds    a                   open/close list                      02920000
+                                                                        02930000
+scantab  equ   *                   pointers from card scan              02940000
+w1addr   ds    a                   A(first word)                        02950000
+w1len    ds    f                   L'first word                         02960000
+scanel   equ   *-scantab           length of one entry                  02970000
+w2addr   ds    a                   A(second word)                       02980000
+w2len    ds    f                   L'second word                        02990000
+w3addr   ds    a                   A(third word)               PF110397 03000000
+w3len    ds    f                   L'third word                PF110397 03010000
+scanend  equ   *                   end of scan table                    03020000
+                                                                        03030000
+tempftab ds    xl(flen)            savearea for one font table entry    03040000
+fnttab   ds    xl(fnttabl)         workarea for DCB+DCBE                03050000
+staearea ds    xl(estael)          workarea for ESTAE                   03060000
+wrklen   equ   *-work              L'workarea                           03070000
+                                                                        03080000
+         print nogen                                                    03090000
+ihadcb   dsect  ,                                                       03100000
+         dcbd   dsorg=PS,devd=DA   DCB dsect                            03110000
+         ihadcbe                   DCBE dsect                           03120000
+         ihasdwa ,                 SDWA dsect                           03130000
+                                                                        03140000
+         end   FONTTAB                                                  03150000
+//* --------------------------------------------------------------- *** 03160000
+//LKED     EXEC PGM=IEWL,                                              X03170000
+//            PARM='XREF,LET,LIST,NCAL,RENT,REUS,REFR',                X03180000
+//            COND=(8,LT,ASM)                                           03190000
+//********************************************************************  03200000
+//**       LINKEDIT PROGRAM                                          *  03210000
+//********************************************************************  03220000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     03230000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                03240000
+//SYSLIB   DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                            03250001
+//         DD DSN=FLASS.PF.LOAD,DISP=SHR                                03251001
+//*SYSLMOD  DD DISP=SHR,DSN=SYSTEMS.LINKLIB                             03260000
+//SYSLMOD  DD DISP=SHR,DSN=SYSTEMS.CCP.LINKLIB                          03270000
+//SYSLIN   DD DSN=&&ASM,DISP=(OLD,DELETE)                               03280000
+//         DD *                                                         03290000
+ MODE AMODE(31),RMODE(24)                                               03300000
+ SETCODE AC(1)                                                          03310000
+ NAME FONTTAB(R)                                                        03320000
+//* --------------------------------------------------------------- *** 03330000

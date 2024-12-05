@@ -1,0 +1,626 @@
+//FLASSP   JOB  (),'COPYFONT',CLASS=J,MSGCLASS=X,                       00010001
+//         NOTIFY=$                                                     00020001
+//********************************************************************* 00030001
+//*                PL/I COMPILE AND LINK                              * 00040001
+//********************************************************************* 00050001
+// EXEC PLIXCL,                                                         00060001
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00070001
+//   PARM.LKED='LIST,MAP'                                               00080001
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00090001
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00100001
+//PLI.SYSIN    DD *                                                     00102001
+ /* COPYFONT: Convert PCL font to 300-pel AFP font                   */ 00103001
+                                                                        00104001
+ COPYFONT: procedure(parm) options(main);                               00105001
+                                                                        00106001
+ /*------------------------------------------------------------------*/ 00107001
+ /*                                                                  */ 00108001
+ /*      Module ID: COPYFONT                                         */ 00109001
+ /*                                                                  */ 00110001
+ /*      Function: Copy PCL font and change code point assignments.  */ 00120001
+ /*                                                                  */ 00130001
+ /*      Author:   Peter Flass -- NYS LBDC                           */ 00140001
+ /*                Apr, 1998                                         */ 00150001
+ /*                                                                  */ 00160001
+ /*      Modifications:                                              */ 00170001
+ /*                                                                  */ 00200001
+ /*------------------------------------------------------------------*/ 00210001
+                                                                        00220001
+ %dcl    ESC_CHAR            char;                                      00230001
+ %ESC_CHAR = '''1B''x';                                                 00240001
+                                                                        00250001
+ dcl     parm                char(100) varying;                         00260001
+                                                                        00270001
+ dcl     sysprint            print;                                     00280001
+ dcl     sysin               record input;                              00290001
+ dcl     font                record input;                              00300001
+ dcl     punch               record output;                             00320001
+                                                                        00330001
+ dcl    (bytes_in,bytes_out,                                            00340001
+         char_in,char_out)   fixed bin(31)       init(0);               00340101
+ dcl     rc                  fixed bin(31);                             00341001
+ dcl     b                   fixed bin(15);                             00350001
+ dcl     esc_seq             char(256) varying;                         00360001
+ dcl     esc_seq_ebcdic      char(256) varying;                         00370001
+ dcl     font_type           char(1)             init('FF'x);           00371005
+ dcl     char_code           char(1);                                   00380002
+                                                                        00500001
+                                                                        00550001
+ /*------------------------------------------------------------------*/ 00560001
+ /* Translate table - assumption is that no character will be        */ 00570001
+ /*                   translated to '00'x.                           */ 00571001
+ /* TBD: hex codes for characters to be deleted from font.           */ 00572001
+ /*------------------------------------------------------------------*/ 00580001
+ dcl     xlat         (0:255)char(1)             init( (256)('00'x) );  00620001
+ dcl     tbd          (0:255)char(1)             init( (256)('00'x) );  00630001
+                                                                        02190001
+ %page;                                                                 02200001
+ dcl     strip               entry                                      02240001
+                ( char(*) varying, char(*) varying, char(*) varying );  02250001
+                                                                        02440001
+ %include builtins;                                                     02450001
+                                                                        02460001
+ %page;                                                                 02470001
+ %include(pclfdesc);                                                    02480001
+ %page;                                                                 02490001
+ %include(pclcdesc);                                                    02500001
+ %page;                                                                 02530001
+                                                                        02560001
+ open file(sysprint);                                                   02571001
+                                                                        02580001
+ call read_trtab;                                                       02581002
+                                                                        02582002
+ allocate font_desc set(fp);                                            02590002
+ allocate char_desc set(cp);                                            02600002
+ call process_font;                                                     02720001
+                                                                        03090001
+ put skip edit('Bytes read:    ',bytes_in)(a,p'zzz,zzz,zz9');           03100001
+ put skip edit('Bytes written: ',bytes_out)(a,p'zzz,zzz,zz9');          03101001
+ put skip edit('Char codes read:    ',char_in)(a,p'zzz,zzz,zz9');       03102001
+ put skip edit('Char codes written: ',char_out)(a,p'zzz,zzz,zz9');      03103001
+                                                                        03104001
+ close file(sysprint);                                                  03110001
+ return;                                                                03120001
+                                                                        03130001
+ %page;                                                                 03140001
+ /*------------------------------------------------------------------*/ 03150001
+ /*      process_font:       Process data for font                   */ 03160001
+ /*------------------------------------------------------------------*/ 03170001
+                                                                        03180001
+ process_font: procedure;                                               03190001
+                                                                        03200001
+ dcl     n                   fixed bin(15);                             03210001
+ dcl     z                   char(24) varying;                          03220001
+ dcl     font_eof            bit(1)              init('0'b);            03221001
+ dcl     ESC                 char(1)   static    init('27'x);           03223001
+                                                                        03230001
+   open file(font) input,                                               03240001
+        file(punch) output;                                             03250001
+                                                                        03350001
+   call get_esc_seq;                                                    03351001
+   if esc_seq_ebcdicª=ESC||')s64W' then do;      /* Font header      */ 03351102
+     put skip edit('No font descriptor found.')(a);                     03351202
+     close file(font), file(punch);                                     03351301
+     return;                                                            03351401
+     end;                                                               03351501
+   /* Read Font Header */                                               03351705
+   if read_pcl( fp, cstg(font_desc) ) ª= cstg(font_desc)                03351805
+   then do;                                                             03351905
+     put skip edit( 'Invalid font header at ',                          03352005
+                    hex(addr(bytes_in),4) )(a);                         03352105
+     return;                                                            03352205
+     end;                                                               03352305
+   /* Font header fixups */                                             03352405
+   if font_typeª='FF'x then font_desc.type = font_type;                 03352505
+   /* Write Font Header */                                              03352605
+   call write_pcl( addr(esc_seq)+2, length(esc_seq) );                  03352701
+   call write_pcl( fp, cstg(font_desc) );                               03352805
+                                                                        03353001
+ main: do while('1'b);                                                  03360004
+ loop: do;                                                              03361002
+       call get_esc_seq;                                                03370002
+       if esc_seq='' then leave loop;                                   03370104
+       if substr(esc_seq_ebcdic,1,3)=ESC||'*c' & /* Character Code   */ 03371002
+          substr(esc_seq_ebcdic,length(esc_seq_ebcdic),1)='E'           03371102
+       then call process_char_code;                                     03371202
+       else do;                                                         03371302
+         put skip edit( 'Expected character code not found at ',        03371402
+                        hex(addr(bytes_in),4) )(a);                     03371502
+         leave loop;                                                    03371602
+         end;                                                           03371702
+       call get_esc_seq;                                                03372502
+       if substr(esc_seq_ebcdic,1,3)=ESC||'(s' & /* Character def.   */ 03372602
+          substr(esc_seq_ebcdic,length(esc_seq_ebcdic),1)='W'           03372702
+       then call process_char_def;                                      03372802
+       else do;                                                         03372902
+         put skip edit( 'Expected character definition not found at ',  03373002
+                        hex(addr(bytes_in),4) )(a);                     03373102
+         leave loop;                                                    03373202
+         end;                                                           03373302
+       end loop;                                                        03374002
+     if esc_seq='' then do;                                             03375004
+       put skip edit('EOF at ',hex(addr(bytes_in),4) )(a);              03376004
+       leave main;                                                      03377004
+       end; /* esc_seq='' */                                            03378004
+     end; /* do while */                                                03440001
+                                                                        03440101
+   call write_pcl( null(), -1 );       /* Write last output record   */ 03440201
+   close file(font),                                                    03440301
+         file(punch);                                                   03440401
+   return;                                                              03440501
+                                                                        03440601
+   end process_font;                                                    03441001
+                                                                        03450001
+ %page;                                                                 04390001
+ /*------------------------------------------------------------------*/ 10501601
+ /*      process_char_code:  Process a character code assignment     */ 10501702
+ /*------------------------------------------------------------------*/ 10501801
+ process_char_code: procedure;                                          10501902
+   dcl   cc                  fixed bin(15);                             10502002
+   dcl   c2               (2)char(1)   based;                           10502102
+   dcl   c                   char(1);                                   10502202
+                                                                        10502304
+   char_in = char_in + 1;                                               10502404
+   cc = get_num_value( addr(esc_seq_ebcdic)+2+3,                        10502502
+                       length(esc_seq_ebcdic)-4 );                      10502602
+   if tbd(cc) ='FF'x then do;                                           10502702
+     char_code = '00'x;                                                 10502802
+     put skip edit( 'Deleting character ', hex(addr(cc)+1,1) )(a);      10502902
+     return;                                                            10503002
+     end;                                                               10503102
+   c = xlat(cc);                                                        10503202
+   if cª=addr(cc)->c2(2) then do;                                       10503304
+     put skip edit( 'Translating character ', hex(addr(cc)+1,1),        10503402
+                    ' to ', hex(addr(c),1) )(a);                        10503502
+     end;                                                               10503604
+   addr(cc)->c2(2) = c;                                                 10503704
+   esc_seq = substr(esc_seq,1,3) || put_num_value(cc) ||                10503804
+             substr(esc_seq,length(esc_seq),1);                         10503904
+   esc_seq_ebcdic = translate(esc_seq,ebcdic);                          10504004
+   put skip edit( '<ESC>' || substr(esc_seq_ebcdic,2) )(a);             10504104
+   char_code = c;                                                       10504204
+   /* Write Character Code */                                           10504302
+   char_out = char_out + 1;                                             10504404
+   call write_pcl( addr(esc_seq)+2, length(esc_seq) );                  10504502
+   end process_char_code;                                               10504602
+                                                                        10504702
+ /*------------------------------------------------------------------*/ 10504802
+ /*      process_char_def:   Process a character definition          */ 10504902
+ /*------------------------------------------------------------------*/ 10505002
+ process_char_def: procedure;                                           10505102
+   dcl   n                   fixed bin(15);                             10505202
+   dcl   cont_desc_len       fixed bin(15);                             10505302
+   dcl   bitmap_len          fixed bin(15);                             10505402
+                                                                        10505502
+   cont_desc_len =                                                      10505602
+       ( addr(char_desc.desc_size) - addr(char_desc.format) );          10505702
+   /* Get length of following data */                                   10505802
+   n = get_num_value( addr(esc_seq_ebcdic)+2+3,                         10505902
+                      length(esc_seq_ebcdic)-4 );                       10506002
+   if n<=cont_desc_len then do;                                         10506102
+     put skip edit( 'Invalid character length at ',                     10506202
+                    hex(addr(bytes_in),4), ', code=',                   10506302
+                    hex(addr(char_code),1) )(a);                        10506402
+     return;                                                            10506502
+     end;                                                               10506602
+   n = n - cont_desc_len;              /* Bytes remaining            */ 10506702
+   /* Read first two words of descriptor */                             10506802
+   if read_pcl(cp,cont_desc_len) ª= cont_desc_len then do;              10506902
+     put skip edit( 'Unexpected EOF at ',hex(addr(bytes_in),4) )(a);    10507002
+     return;                                                            10507102
+     end;                                                               10507202
+   if char_desc.format ª= '04'x then do;                                10507302
+     put skip edit( 'Invalid Character descriptor format (',            10507402
+                    hex(addr(char_desc.format),1), ' at ',              10507502
+                    hex(addr(bytes_in),4),                              10507602
+                    ' (char=', hex(addr(char_code),1), ')' )(a);        10507702
+     return;                                                            10507802
+     end; /* format */                                                  10507902
+   if char_desc.continuationª='00'x then do;                            10508002
+     call copy_char;                                                    10508102
+     return;                                                            10508202
+     end;                                                               10508302
+   if n<=cstg(char_desc)-cont_desc_len then do;                         10508402
+     put skip edit( 'Invalid character length at ',                     10508502
+                    hex(addr(bytes_in),4), ', code=',                   10508602
+                    hex(addr(char_code),1) )(a);                        10508702
+     return;                                                            10508802
+     end;                                                               10508902
+   bitmap_len = n -                         /* Bytes in char bitmap  */ 10509002
+           cstg(char_desc) + cont_desc_len;                             10509102
+   /* Read remainder of character descriptor */                         10509202
+   if read_pcl( addr(char_desc.desc_size),                              10509302
+                cstg(char_desc)-cont_desc_len )                         10509402
+              ª= cstg(char_desc)-cont_desc_len then do;                 10509502
+     put skip edit( 'Unexpected EOF at ',hex(addr(bytes_in),4) )(a);    10509602
+     return;                                                            10509702
+     end; /* read_pcl */                                                10509802
+   call copy_char;                                                      10509902
+   return;                                                              10510002
+                                                                        10510102
+ /* Copy or delete a character */                                       10510202
+ copy_char: procedure;                                                  10510302
+   if char_codeª='00'x then do;        /* Copying this character...  */ 10510402
+     /* Write Character Header */                                       10510502
+     call write_pcl( addr(esc_seq)+2, length(esc_seq) );                10510602
+     /* Write Character Descriptor */                                   10510702
+     if char_desc.continuationª='00'x                                   10510802
+     then call write_pcl( cp, cont_desc_len );                          10510902
+     else call write_pcl( cp, cstg(char_desc) );                        10511002
+     /* Copy bitmap data */                                             10511102
+     call copy_pcl(bitmap_len);                                         10511202
+     end; /* char_code */                                               10511302
+   else call delete_pcl(bitmap_len);                                    10511402
+   end copy_char;                                                       10511502
+                                                                        10511602
+   end process_char_def;                                                10511702
+                                                                        10511802
+ %page;                                                                 10511902
+ /*-----------------------------------*/                                10512002
+ /* c2b: convert BYTE to binary       */                                10512102
+ /*-----------------------------------*/                                10512202
+ c2b: proc( c ) returns( fixed bin(15) );                               10512302
+ dcl     c                 HPBYTE;                                      10512402
+ dcl     b8                bit(8);                                      10512502
+ dcl     f15               fixed bin(15);                               10512602
+ b8 = unspec(c);                                                        10512702
+ unspec(f15) =  '00000000'b || b8;                                      10512802
+ return(f15);                                                           10512902
+ end c2b;                                                               10513002
+                                                                        10513102
+ /*-----------------------------------*/                                10513202
+ /* sc2b: SIGNED BYTE to binary       */                                10513302
+ /*-----------------------------------*/                                10513402
+ sc2b: proc( c ) returns( fixed bin(15) );                              10513502
+ dcl     c                 HPBYTE;                                      10513602
+ dcl     b8                bit(8);                                      10513702
+ dcl     f15               fixed bin(15);                               10513802
+ b8 = unspec(c);                                                        10513902
+ if substr(b8,1,1)='1'b                                                 10514002
+ then unspec(f15) = '11111111'b || b8;                                  10514102
+ else unspec(f15) = '00000000'b || b8;                                  10514202
+ return(f15);                                                           10514302
+ end sc2b;                                                              10514402
+                                                                        10514502
+ /*-----------------------------------*/                                10514602
+ /* b2b: convert HPBIN to binary      */                                10514702
+ /* (no-operation for mainframe)      */                                10514802
+ /*-----------------------------------*/                                10514902
+ b2b: proc( b ) returns( fixed bin(15) );                               10515002
+ dcl     b                 HPBIN;                                       10515102
+ dcl     b16               bit(16);                                     10515202
+ dcl     f15               fixed bin(15);                               10515302
+ b16 = unspec( substr(b,1,1) ) || unspec( substr(b,2,1) ) ;             10515402
+ unspec(f15) = b16;                                                     10515502
+ return(f15);                                                           10515602
+ end b2b;                                                               10515702
+                                                                        10515802
+ %page;                                                                 10515902
+ /*------------------------------------------------------------------*/ 10516002
+ /*      get_num_value:      Convert a numeric character string      */ 10516102
+ /*------------------------------------------------------------------*/ 10516202
+ get_num_value: procedure(p,l) returns( fixed bin(15) );                10516302
+   dcl   p                   ptr;                                       10516402
+   dcl   l                   fixed bin(15);                             10516502
+   dcl   s                   char(256) based(p);                        10516602
+   dcl   n                   fixed bin(15)       init(0);               10516702
+   dcl   next                fixed bin(15);                             10516802
+   dcl   i                   fixed bin(15);                             10516902
+   dcl   c                   char(1);                                   10517002
+   dcl   num                 char(10)            static                 10517102
+              init('0123456789');                                       10517202
+                                                                        10517302
+   do i=1 to l;                                                         10517402
+     c = substr(s,i,1);                                                 10517502
+     if verify(c,num)ª=0 then do;                                       10517602
+       put skip edit( 'Invalid numeric digit at ',                      10517702
+                      hex(addr(bytes_in),4) )(a);                       10517802
+       return( 0 );                                                     10517902
+       end;                                                             10518002
+     next = index( num, c ) - 1;                                        10518102
+     n = n*10 + next;                                                   10518202
+     end; /* do i */                                                    10518302
+                                                                        10518402
+   return( n );                                                         10518502
+                                                                        10518602
+   end get_num_value;                                                   10518702
+                                                                        10518802
+ /*------------------------------------------------------------------*/ 10518902
+ /*      put_num_value:      Convert a number to ASCII string        */ 10519002
+ /*------------------------------------------------------------------*/ 10519102
+ put_num_value: procedure(n) returns( char(5) varying );                10519202
+   dcl   n                   fixed bin(15);                             10519302
+   dcl   c                   char(5) varying;                           10519402
+   /* ASCII->EBCDIC numerics               */                           10519502
+   dcl   a                   char(10) static                            10519602
+             init('30313233343536373839'x);                             10519702
+   dcl   e                   char(10) static                            10519802
+             init('0123456789');                                        10519902
+   select;                                                              10520002
+     when( n>9999 ) put string(c) edit(n)(p'(5)9');                     10520102
+     when( n>999  ) put string(c) edit(n)(p'(4)9');                     10520202
+     when( n>99   ) put string(c) edit(n)(p'(3)9');                     10520302
+     when( n>9    ) put string(c) edit(n)(p'(2)9');                     10520402
+     otherwise      put string(c) edit(n)(p'(1)9');                     10520502
+     end; /* select */                                                  10520602
+   c = translate(c,a,e);                                                10520702
+   return( c );                                                         10520802
+                                                                        10520902
+   end put_num_value;                                                   10521002
+                                                                        10530002
+ %page;                                                                 11430001
+ /*------------------------------------------------------------------*/ 11440001
+ /*      get_esc_seq:  Read one escape sequence                      */ 11450001
+ /*------------------------------------------------------------------*/ 11460001
+                                                                        11470001
+ get_esc_seq: proc;                                                     11480001
+                                                                        11490001
+ dcl     c                   char(1);                                   11500001
+ dcl     n                   fixed bin(15);                             11510001
+ dcl     in_esc              bit(1)              init('0'b);            11520001
+ dcl     error               bit(1)              init('0'b);            11521002
+                                                                        11530001
+ /* ----------------------- */                                          11540001
+ /* ASCII upper-case A-Z    */                                          11550001
+ /* ----------------------- */                                          11560001
+ dcl     alpha               char(26)  static    init                   11570001
+    ('4142434445464748494A4B4C4D4E4F505152535455565758595A'x);          11580001
+                                                                        11590001
+ esc_seq,esc_seq_ebcdic='';                                             11600001
+                                                                        11611004
+ scan: do while('1'b);                                                  11620001
+   n = read_pcl( addr(c), 1 );                                          11630001
+   if n=0 then return;       /* End of file */                          11640001
+   if in_esc then do;                                                   11650001
+     esc_seq = esc_seq || c;                                            11660001
+     if index(alpha,c)>0 then leave scan;                               11670001
+     end; /* in_esc */                                                  11680001
+   else do;                                                             11690001
+     if c=ESC_CHAR then do;                                             11700001
+       esc_seq = esc_seq || c;                                          11710001
+       in_esc='1'b;                                                     11720001
+       end;                                                             11730001
+     else do;                                                           11731002
+       if ªerror then do;                                               11731102
+         put skip edit( 'Expected escape sequence not found at ',       11731202
+                        hex(addr(bytes_in),4) )(a);                     11731302
+         end; /* ªerror */                                              11731402
+       error = '1'b;                                                    11731502
+       end; /* else */                                                  11732002
+     end; /* else */                                                    11740001
+   end; /* do while */                                                  11750001
+                                                                        11760001
+   esc_seq_ebcdic = translate(esc_seq,ebcdic);                          11761001
+                                                                        11770001
+   return;                                                              11780001
+                                                                        11790001
+ end get_esc_seq;                                                       11800001
+                                                                        11810001
+ %page;                                                                 11820001
+ /*------------------------------------------------------------------*/ 11830001
+ /*      delete_pcl: delete a known number of bytes                  */ 11840002
+ /*------------------------------------------------------------------*/ 11850001
+                                                                        11860001
+ delete_pcl: proc(howmuch);                                             11870002
+   dcl   howmuch             fixed bin(15);                             11870101
+   dcl  (i,n)                fixed bin(15);                             11870201
+   dcl   c                   char(1);                                   11870301
+   do i=1 to howmuch;                                                   11870401
+     n =  read_pcl(  addr(c), 1 );                                      11870501
+     if n=0 then do;                                                    11870601
+       put skip edit( 'Enexpected EOF at ',hex(addr(bytes_in),4) )(a);  11870702
+       return;                                                          11870802
+       end;                                                             11870901
+     end; /* do i */                                                    11871101
+   end delete_pcl;                                                      11871202
+                                                                        11871302
+ /*------------------------------------------------------------------*/ 11871402
+ /*      copy_pcl: copy a known number of bytes                      */ 11871502
+ /*------------------------------------------------------------------*/ 11871602
+                                                                        11871702
+ copy_pcl: proc(howmuch);                                               11871802
+   dcl   howmuch             fixed bin(15);                             11871902
+   dcl  (i,n)                fixed bin(15);                             11872002
+   dcl   c                   char(1);                                   11872102
+   do i=1 to howmuch;                                                   11872202
+     n =  read_pcl(  addr(c), 1 );                                      11872302
+     if n=0 then do;                                                    11872402
+       put skip edit('Premature EOF at ',bytes_in)(a,p'zzz,zzz,zz9');   11872502
+       return;                                                          11872602
+       end;                                                             11872702
+     call write_pcl( addr(c), 1 );                                      11872802
+     end; /* do i */                                                    11872902
+   end copy_pcl;                                                        11873002
+                                                                        11873101
+ /*------------------------------------------------------------------*/ 11873201
+ /*      read_pcl: read data from PCL input file                     */ 11873301
+ /*------------------------------------------------------------------*/ 11873401
+                                                                        11874001
+ read_pcl: proc(where,howmuch) returns( fixed bin(15) );                11875001
+                                                                        11880001
+ dcl     where               ptr;                                       11890001
+ dcl     howmuch             fixed bin(15);                             11900001
+                                                                        11910001
+ dcl     fp                  ptr      static;                           11920001
+ dcl     font_buffer         char(80) static;                           11930001
+ dcl     c                   char(1024)          based;                 11940001
+ dcl     op                  ptr;                                       11950001
+ dcl    (n,nmax,z)           fixed bin(15);                             11960001
+ dcl     font_eof            bit(1)   static     init('0'b);            11970001
+ dcl     first_time_font     bit(1)   static     init('1'b);            11971001
+                                                                        11980001
+ on endfile(font) font_eof='1'b;                                        11990001
+                                                                        12000001
+ if first_time_font then do;                                            12010001
+   read file(font) into(font_buffer);                                   12020001
+   fp = addr(font_buffer);                                              12030001
+   first_time_font='0'b;                                                12040001
+   font_eof='0'b;                                                       12050001
+   end; /* first_time_font */                                           12060001
+                                                                        12070001
+ op   = where;                                                          12080001
+ nmax = howmuch;                                                        12090001
+ z    = 0;                                                              12100001
+                                                                        12110001
+ do while('1'b);                                                        12120001
+                                                                        12130001
+   if nmax=0   then return(z);                                          12140001
+                                                                        12150001
+   if fp > addr(font_buffer) + 79 then do;                              12160001
+     if font_eof then return(z);                                        12170001
+     read file(font) into(font_buffer);                                 12180001
+     fp=addr(font_buffer);                                              12190001
+     end; /* if */                                                      12200001
+   n = 80 - ( fp - addr(font_buffer) );     /* Characters in buffer  */ 12210001
+   n = min(n,nmax);                         /* Characters to move    */ 12220001
+   substr(op->c,1,n) = substr(fp->c,1,n);   /* Move data             */ 12230001
+   bytes_in = bytes_in + n;                 /* File byte count       */ 12231001
+   op   = op+n;                             /* Bump output pointer   */ 12240001
+   fp   = fp+n;                             /* Bump input pointer    */ 12250001
+   z    = z+n;                              /* Count chars moved     */ 12260001
+   nmax = nmax-n;                           /* Adj chars wanted      */ 12270001
+                                                                        12280001
+   end; /* do while */                                                  12290001
+                                                                        12300001
+ end read_pcl;                                                          12310001
+                                                                        12310101
+ /*------------------------------------------------------------------*/ 12311001
+ /*      write_pcl: Write valid data to PCL output file              */ 12312001
+ /*------------------------------------------------------------------*/ 12313001
+                                                                        12314001
+ write_pcl: proc(where,howmuch);                                        12315001
+                                                                        12316001
+ dcl     where               ptr;                                       12317001
+ dcl     howmuch             fixed bin(15);                             12318001
+ dcl     what         (32760)char(1)             based(where);          12318101
+ dcl     i                   fixed bin(15);                             12318201
+ dcl     card_out            char(80)  static;                          12318302
+ dcl     cop                 fixed bin(15) static init(1);              12318401
+ dcl     first_time_write    bit(1)    static    init('1'b);            12318502
+                                                                        12319001
+ if first_time_write then do;                                           12319102
+   card_out = (80)'00'x;                                                12319202
+   first_time_write = '0'b;                                             12319302
+   end; /* first_time_write */                                          12319402
+                                                                        12319502
+ if howmuch<0 then do;                 /* All done                  */  12319601
+   if cop>1 then do;                                                    12319704
+     write file(punch) from(card_out);                                  12320004
+     bytes_out = bytes_out + 80;       /* Output byte count         */  12321004
+     end; /* cop>1 */                                                   12322004
+   return;                                                              12327001
+   end; /* howmuch<0 */                                                 12327101
+                                                                        12327201
+ do i=1 to howmuch;                                                     12327501
+   substr(card_out,cop,1)=what(i);                                      12327601
+   cop = cop + 1;                                                       12327704
+   if cop>80 then do;                                                   12327804
+     write file(punch) from(card_out);                                  12327901
+     bytes_out = bytes_out + 80;       /* Output byte count         */  12328001
+     cop=1;                                                             12328101
+     card_out = (80)'00'x;                                              12328201
+     end; /* cop>80 */                                                  12329004
+   end; /* do i */                                                      12339101
+                                                                        12339201
+ end write_pcl;                                                         12339301
+                                                                        12339402
+ %page;                                                                 12339502
+ /*------------------------------------------------------------------*/ 12339602
+ /*      read_trtab:         Read character translation table        */ 12339702
+ /*------------------------------------------------------------------*/ 12339802
+ read_trtab: procedure;                                                 12339902
+                                                                        12340002
+                                                                        12340102
+   dcl   card_in             char(80)  varying;                         12341002
+   dcl   sysin_eof           bit(1)              init('0'b);            12342002
+   dcl   GCID                char(8);                                   12343002
+   dcl   hexcode             char(2);                                   12344002
+   dcl  (fromval,toval)      char(1);                                   12345002
+   dcl   hextab              char(16)            static                 12346002
+              init('0123456789ABCDEF');                                 12347002
+   dcl   b                   bit(8)              based;                 12348002
+   dcl   i                   fixed bin(15);                             12348103
+   dcl   c2               (2)char(1)   based;                           12348203
+                                                                        12349002
+   on endfile(sysin) sysin_eof = '1'b;                                  12349102
+                                                                        12349202
+   /* Init translate table */                                           12349303
+   do i=0 to 255;                                                       12349403
+     xlat(i) = addr(i)->c2(2);                                          12349503
+     end; /* do i */                                                    12349603
+                                                                        12349703
+   open file(sysin);                                                    12349802
+   read file(sysin) into(card_in);                                      12349902
+   put skip edit('----- control card listing -----')(a);                12350003
+                                                                        12350102
+   do while(sysin_eof='0'b);                                            12350202
+     put skip edit(card_in)(a);                                         12350302
+     if length(card_in)>72 then card_in=substr(card_in,1,72);           12350402
+     call strip( card_in, 'B', ' ' );  /* Strip blanks from card     */ 12350502
+ loop: do;                                                              12350602
+       if card_in = ''            then leave loop;                      12351002
+       if substr(card_in,1,1)='*' then leave loop;                      12352002
+       GCID    = word(card_in,1);                                       12353002
+       GCID = translate( GCID,  upper_case, lower_case );               12354002
+       hexcode = word(card_in,2);                                       12355002
+       fromval = get_hex_val(hexcode);                                  12356002
+       /* List of characters to be deleted from font */                 12357002
+       if GCID = 'DELETE  ' then do;                                    12358002
+         tbd( addr(fromval)->b ) = 'FF'x;                               12359002
+         leave loop;                                                    12359102
+         end; /* delete */                                              12359202
+       if GCID = 'FONTTYPE' then do;                                    12359305
+         font_type = fromval;                                           12359405
+         leave loop;                                                    12359505
+         end; /* fonttype */                                            12359605
+       /* Replacement translation values for characters */              12359702
+       hexcode = word(card_in,3);                                       12359802
+       toval   = get_hex_val(hexcode);                                  12359902
+       xlat( addr(fromval)->b ) = toval;                                12360002
+       end loop;                                                        12360102
+     read file(sysin) into(card_in);                                    12360202
+     end; /* do while */                                                12360302
+                                                                        12360402
+   put skip edit('----- end of control card listing -----')(a);         12360503
+   close file(sysin);                                                   12361002
+   return;                                                              12362002
+                                                                        12363002
+ /* Convert a two-digit hex character string */                         12364002
+ /* to a one-byte binary number.             */                         12365002
+ get_hex_val: proc(str) returns( char(1) );                             12366002
+   dcl   str                 char(2);                                   12367002
+   dcl  (h,l)                fixed bin(15);                             12368002
+   dcl   c2               (2)char(1)   based;                           12369002
+   str = translate( str,  upper_case, lower_case );                     12369102
+   if verify(hexcode,hextab)ª=0 then do;                                12369202
+     put skip edit('Invalid hex value ''',hexcode,'''')(a);             12369302
+     return( '00'x );                                                   12369402
+     end;                                                               12369502
+   h = index( hextab, substr(str,1,1) ) - 1;                            12369602
+   l = index( hextab, substr(str,2,1) ) - 1;                            12369702
+   l = l + h*16;                                                        12369802
+   return( addr(l)->c2(2) );                                            12369902
+   end get_hex_val;                                                     12370002
+                                                                        12371002
+   end read_trtab;                                                      12372002
+                                                                        12373002
+                                                                        12380001
+ %include(ascebc);                                                      15600001
+ %include(lowercas);                                                    15610001
+                                                                        16530001
+ %include word;                                                         16540001
+ %include wordpos;                                                      16550001
+ %include hex;                                                          16560001
+                                                                        16570001
+ end COPYFONT;                                                          16580001
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 16590001
+//LKED.SYSLIB DD                                                        16600001
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    16610001
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        16620001
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      16630001
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       16640001
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  16650001
+//LKED.SYSIN DD *                                                       16660001
+ MODE AMODE(31),RMODE(any)                                              16670001
+ NAME COPYFONT(R)                                                       16680001
+//* -------------- END OF LINKEDIT STEP ------------------------------* 16690001

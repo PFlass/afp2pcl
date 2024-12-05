@@ -1,0 +1,340 @@
+//FLASST   JOB (),'BMROT',CLASS=J,MSGCLASS=Z,NOTIFY=$                   00001003
+//ASM      EXEC PGM=ASMA90,                                             00002003
+//        PARM='OBJECT,NODECK,ALIGN,RENT'                               00003003
+//********************************************************************  00004003
+//**       ASSEMBLE PROGRAM -- HLASM                                 *  00005003
+//********************************************************************  00006003
+//SYSLIB   DD DSN=FLASS.PF.MACLIB,DISP=SHR                              00007006
+//         DD DSN=SYSTEMS.MACLIB,DISP=SHR                               00007106
+//         DD DSN=SYS1.MACLIB,DISP=SHR                                  00008003
+//         DD DSN=SYS1.MODGEN,DISP=SHR                                  00009003
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     00009103
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00009203
+//SYSUT2   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00009303
+//SYSUT3   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00009403
+//SYSLIN   DD DSN=&&ASM,UNIT=VIO,DISP=(,PASS),                          00009503
+//            SPACE=(TRK,(3,3)),DCB=BLKSIZE=400                         00009603
+//SYSIN    DD *                                                         00009703
+         TITLE 'BMROT - rotate a bitmap'                                00012000
+*                                                                     * 00013025
+**** Sample only -- not debugged, does not work!!!! ***               * 00014025
+*                                                                     * 00015025
+*---------------------------------------------------------------------* 00020000
+*                                                                     * 00030000
+*   Module:   PLIBMROT                                                * 00031000
+*                                                                     * 00032000
+*   Function: Rotate a bitmap 90, 180 or 270 degrees.                 * 00033000
+*                                                                     * 00034000
+*   Author:   Peter Flass                                             * 00035000
+*             New York State Legislative Bill Drafting Commission     * 00036000
+*             July, 1999                                              * 00037000
+*                                                                     * 00038000
+*   Operation: Interfaces with PL/I modules.                          * 00039000
+*                                                                     * 00039100
+*             Calling sequence:                                       * 00039200
+*               DCL (pSrc,pDst) PTR;                                  * 00039300
+*               DCL (iRow,iCol) FIXED BIN(31);                        * 00039400
+*               DCL  iAngle     FIXED BIN(15);                        * 00039500
+*               pDst = BMROT( pSrc, iRow, iCol, iAngle );             * 00039600
+*                                                                     * 00039703
+*   Environment: Uses the 'SM2' heap storage manager to allow use     * 00039803
+*            of large bitmaps.  The area pointed to by pDst is        * 00039903
+*            allocated by Xalloc. pDst = null() if error occurs.      * 00040103
+*                                                                     * 00040200
+*   Remarks: The source and result bitmaps are a multiple of 8-bits   * 00040300
+*            wide.  The result bitmap is allocated as a multiple      * 00041000
+*            of eight-bits high for convenience, although the         * 00042002
+*            excess rows are ignored.                                 * 00042102
+*                                                                     * 00042202
+*   Modifications:                                                    * 00042302
+*                                                                     * 00043000
+*---------------------------------------------------------------------* 00050000
+                                                                        00060000
+         MACRO                                                          00061003
+.*                                                                      00061103
+.*       Reverse bits in a byte                                         00061203
+.*                                                                      00061303
+&L       R       &N                                                     00062005
+         LCLA    &NO,&NN                                                00062103
+&NO      SETA    &N                                                     00064003
+         AIF     (&NO LT 128).L128                                      00065003
+&NN      SETA    &NN+1                                                  00066003
+&NO      SETA    &NO-128                                                00066103
+.L128    ANOP                                                           00066203
+         AIF     (&NO LT  64).L64                                       00066303
+&NN      SETA    &NN+2                                                  00066403
+&NO      SETA    &NO-64                                                 00066503
+.L64     ANOP                                                           00066603
+         AIF     (&NO LT  32).L32                                       00066703
+&NN      SETA    &NN+4                                                  00066803
+&NO      SETA    &NO-32                                                 00066903
+.L32     ANOP                                                           00067003
+         AIF     (&NO LT  16).L16                                       00067103
+&NN      SETA    &NN+8                                                  00067203
+&NO      SETA    &NO-16                                                 00067303
+.L16     ANOP                                                           00067403
+         AIF     (&NO LT   8).L8                                        00067503
+&NN      SETA    &NN+16                                                 00067603
+&NO      SETA    &NO-8                                                  00067703
+.L8      ANOP                                                           00067803
+         AIF     (&NO LT   4).L4                                        00067903
+&NN      SETA    &NN+32                                                 00068003
+&NO      SETA    &NO-4                                                  00068103
+.L4      ANOP                                                           00068203
+         AIF     (&NO LT   2).L2                                        00068303
+&NN      SETA    &NN+64                                                 00068403
+&NO      SETA    &NO-2                                                  00068503
+.L2      ANOP                                                           00068603
+         AIF     (&NO LT   1).L1                                        00068703
+&NN      SETA    &NN+128                                                00068803
+&NO      SETA    &NO-1                                                  00068903
+.L1      ANOP                                                           00069003
+         DC      AL1(&NN.)                                              00069103
+         MEXIT                                                          00069203
+         MEND                                                           00069303
+                                                                        00069403
+PLIBMROT CSECT                                                          00070000
+         REGS ,                                                         00080000
+         PLIREGS ,                                                      00090000
+                                                                        00100000
+         EJECT                                                          00110000
+PLIBMROT CSECT                                                          00120000
+PLIBMROT AMODE 31                                                       00130000
+PLIBMROT RMODE ANY                                                      00140009
+BMROT    PLIENTRY LOCAL=(DSA,DSAL),BASE=R11                             00150009
+*---------------------------------*                                     00151000
+*  Validate parameters            *                                     00152002
+*---------------------------------*                                     00153000
+         LM    R3,R7,0(R1)        Load Parameter addresses              00154000
+         L     R3,0(,R3)          . pSrc: A(Source bitmap)              00155000
+         L     R4,0(,R4)          . iRow: Bitmap height (bits)          00156008
+         L     R5,0(,R5)          . iCol: Bitmap width  (bits)          00157008
+         LH    R6,0(,R6)          . Angle                               00158000
+         MVC   0(4,R7),NULL       Initialize destination address        00159001
+         LTR   R6,R6              Q/ Angle = 0 degrees?                 00159100
+         BZ    ALLOC              .. Yes                                00159200
+         CH    R6,=H'90'          Q/ 90 degrees?                        00159300
+         BE    VAL                .. Yes                                00159411
+         CH    R6,=H'180'         Q/ 180 degrees?                       00159500
+         BE    VAL                .. Yes                                00159611
+         CH    R6,=H'270'         Q/ 270 degrees?                       00159706
+         BE    VAL                .. Yes                                00159802
+         B     EXIT               Error: Invalid angle                  00159900
+VAL      EQU   *                  Validate remaining parameters         00160008
+*                            Compute size of source bitmap              00160108
+         ST    R4,COL             . save number of dest cols            00160221
+         LR    R15,R5             . get source width in bits            00160314
+         AH    R15,=H'7'          . round up to byte boundary           00160411
+         SRL   R15,3              . convert to bytes                    00160511
+         MR    R14,R4             . source size = row x col             00161314
+         ST    R15,SRC_SIZE       Save size                             00161402
+         LTR   R14,R14            Test for overflow(1)                  00161507
+         BNZ   EXIT               .. yes, error                         00161602
+         LTR   R15,R15            Test for overflow(2)                  00161702
+         BNP   EXIT               .. yes, error                         00161802
+         C     R15,=X'00FFFFFF'   Test for overflow(3)                  00161902
+         BH    EXIT               .. yes, error                         00162002
+*                            Compute size of dest. bitmap               00162108
+         LR    R15,R5             . get source width in bits            00162217
+         AH    R15,=H'7'          . round to byte boundary              00162317
+         SRL   R15,3              .                                     00162417
+         SLL   R15,3              .                                     00162517
+         ST    R15,ROW            . save as number of dest rows         00162617
+         LR    R14,R4             . get source height in bits           00162814
+         AH    R14,=H'7'          . *round to byte boundary*            00162911
+         SRL   R14,3                (L'Dst >= L'Src)                    00163011
+         ST    R14,ROW_BYTE       . save as destination row size        00163117
+         SLL   R14,3                                                    00163211
+         SRL   R15,3              . dest column width in bytes          00163411
+         MR    R14,R14            . size = row x col                    00163515
+         ST    R15,DST_SIZE       Save size                             00163602
+         LTR   R14,R14            Test for overflow(1)                  00163707
+         BNZ   EXIT               .. yes, error                         00163802
+         LTR   R15,R15            Test for overflow(2)                  00163902
+         BNP   EXIT               .. yes, error                         00164002
+         C     R15,=X'00FFFFFF'   Test for overflow(3)                  00164102
+         BH    EXIT               .. yes, error                         00164202
+                                                                        00164402
+*---------------------------------*                                     00164502
+*  Allocate Destination Bitmap    *                                     00164602
+*---------------------------------*                                     00164702
+ALLOC    EQU   *                  Allocate destination bitmap           00164802
+         LA    R1,DST_SIZE        Build Parameter list for Xalloc       00164902
+         ST    R1,PARMLIST        .                                     00165002
+         ST    R7,PARMLIST+4      . A(pDst)                             00165102
+         OI    PARMLIST+4,X'80'   .                                     00165202
+         LA    R1,PARMLIST        Allocate bitmap storage               00165302
+         L     R15,=V(Xalloc)     .                                     00165402
+         BALR  R14,R15            .                                     00165502
+         L     R8,0(,R7)          Load destination address (pDst)       00165602
+         C     R8,NULL            Q/ Was storage allocated?             00165702
+         BE    EXIT               .. no, error                          00165802
+                                                                        00165902
+*---------------------------------*                                     00166002
+*  Rotate bitmap                  *                                     00166102
+*---------------------------------*                                     00166202
+*                            R6 = rotation angle                        00166308
+         LTR   R6,R6              Q/ Angle=0?                           00166402
+         BE    D_000              .. yes, special case                  00166502
+         LR    R0,R8              Zero the dsstination bitmap           00166602
+         L     R1,DST_SIZE        Load destination length               00166702
+         SR    R15,R15            Zero source length+pad                00166802
+         MVCL  R0,R14             Zero the bitmap                       00166902
+         CH    R6,=H'180'         Q/ Angle=180?                         00167002
+         BE    D_180              .. yes                                00167102
+         CH    R6,=H'90'          Q/ Angle=90?                          00167202
+         BE    D_090              .. yes                                00167302
+         B     D_270              .. no, must be 270                    00167402
+                                                                        00167502
+*---------------------------------*                                     00167602
+*  Zero-degree rotation           *                                     00167702
+*---------------------------------*                                     00167802
+D_000    DS    0H                 Angle = zero degrees                  00167902
+*                            R3->Source Bitmap                          00168008
+*                            R8->Destination Bitmap                     00168108
+         LR    R14,R3             Load source address                   00168202
+         L     R15,SRC_SIZE       Load source length                    00168302
+         LR    R0,R8              Load destination address              00168402
+         L     R1,DST_SIZE        Load destination length               00168502
+         MVCL  R0,R14             Move the bitmap                       00168602
+         B     EXIT               And we're done                        00168702
+                                                                        00168802
+*---------------------------------*                                     00168902
+*  Ninety-degree rotation         *                                     00169002
+*---------------------------------*                                     00169102
+D_090    DS    0H                 Angle =  90 degrees                   00169202
+*                            R3->Source Bitmap                          00169308
+*                            R8->Destination Bitmap                     00169408
+         SR    R10,R10            Zero bit mask register                00169517
+         SR    R4,R4              Curr_row=0                            00169623
+         L     R6,ROW_BYTE   Get bytes per dest row                     00169717
+D_090_1  EQU   *                  Begin new source row                  00169808
+         SR    R5,R5              Curr_col=0                            00169923
+*                            Dest_col = Src_rows - Curr_row             00170023
+         L     R1,COL                                                   00170221
+         SR    R1,R4                                                    00170421
+         MR    R0,R6              x Bytes_per_dest_row                  00170923
+         LR    R2,R1              .                                     00171118
+         SRL   R1,3               (byte #)                              00171323
+         N     R2,=X'00000007'    (bit #)                               00171523
+         IC    R10,MASK-1(R2)     Get Bit mask                          00171722
+*                            Byte pos in R1                             00171822
+*                            Bit  pos in R2                             00171922
+D_090_2  EQU   *                  Do all columns in row                 00172022
+         IC    R0,0(,R3)          Load source byte                      00172122
+         LA    R3,1(,R3)          Bump source address                   00172222
+*   dest offset = row * width + col/8                                   00172324
+         LR    R15,R5             Compute dest offset                   00172422
+         MR    R14,R6             .                                     00172722
+         AR    R15,R1  ???        .                                     00172823
+         AR    R15,R8             R15<-destination byte address         00172908
+         LA    R9,7               Init bit counter                      00173009
+D_090_3  EQU   *                  Do all bits in a byte                 00173109
+         LR    R7,R0              Get source byte                       00173209
+         LR    R14,R9             Compute shift count                   00173309
+         SH    R14,=H'8'          .                                     00173421
+         AR    R14,R2             .                                     00173517
+         BZ    D_090_5            No shift                              00173617
+         BM    D_090_4            Left shift                            00173717
+         SRL   R7,0(R14)          Right shift                           00173818
+         B     D_090_5            .                                     00173917
+D_090_4  EQU   *                  Left shift                            00174017
+         LPR   R14,R14            .                                     00174117
+         SLL   R7,0(R14)          .                                     00174218
+D_090_5  EQU   *                  Next bit                              00174317
+         NR    R7,R10             AND off unused bits                   00174517
+         EX    R7,OI              OR with existing bits                 00174617
+*        OI   0(R15),*-*          OR bits into byte                     00174722
+ dc h'0'                                                                00174823
+         AR    R15,R6             Bump to next row                      00174917
+         BCTR  R9,0               Decrement bit count                   00175017
+         LTR   R9,R9              Q/ are we done                        00175117
+         BNM   D_090_3            .. no, continue                       00175217
+         AH    R5,=H'8'           Bump column position                  00175317
+         C     R5,ROW             Is col all done?                      00175417
+         BL    D_090_2            .. No, continue row                   00175517
+         AH    R4,=H'1'           Bump row position                     00175617
+         C     R4,COL             Is bitmap all done?                   00175717
+         BL    D_090_1            .. No, to next row                    00175817
+         B     EXIT               All done                              00175917
+                                                                        00176017
+*---------------------------------*                                     00176117
+*  One-eighty-degree rotation     *                                     00176217
+*---------------------------------*                                     00176317
+D_180    DS    0H                 Angle = 180 degrees                   00176417
+         L     R1,SRC_SIZE        Load source length                    00176517
+         AR    R8,R1              Point to end of dest bitmap           00176617
+         BCTR  R8,0               .                                     00176717
+         SR    R15,R15            Clear R15 for IC instructions         00176817
+D_180_1  EQU   *                                                        00176917
+         IC    R15,0(,R3)         Load source byte                      00177017
+         IC    R15,X_REV(R15)     Reverse source bits                   00177117
+         STC   R15,0(,R8)         Store destination byte                00177217
+         BCTR  R8,0               Back up dest                          00177317
+         LA    R3,1(,R3)          Bump up source                        00177417
+         BCT   R1,D_180_1         Loop until done                       00177517
+         B     EXIT               And when done, get out                00177617
+                                                                        00177717
+*---------------------------------*                                     00177817
+*  Two-seventy-degree rotation    *                                     00177917
+*---------------------------------*                                     00178017
+D_270    DS    0H                 Angle = 270 degrees                   00178117
+         B     EXIT               All done                              00178217
+                                                                        00178317
+*---------------------------------*                                     00178417
+*  Return to caller               *                                     00178517
+*---------------------------------*                                     00178617
+EXIT     EQU  *                                                         00178717
+         PLIRET                   Return to caller                      00178817
+                                                                        00178917
+*     h                      Executed instruction                       00179019
+OI       OI   0(R15),*-*          OR bits into byte                     00179117
+                                                                        00179217
+         DS   0F                                                        00179317
+NULL     DC   X'FF000000'         PL/I 'NULL' pointer value             00179417
+MASK     DC   X'8040201008040201' Mask bytes for bit position           00179517
+                                                                        00179617
+X_REV    DS    0F                 Table of bytes w/bits reversed        00179717
+         PRINT OFF                                                      00179817
+         LCLA  &N                                                       00179917
+&N       SETA  0                                                        00180017
+.LOOP    ANOP                                                           00180117
+         R     &N                                                       00180217
+&N       SETA  &N+1                                                     00180317
+         AIF   (&N LT 256).LOOP                                         00180417
+         PRINT ON                                                       00180517
+                                                                        00180617
+         LTORG                                                          00180717
+                                                                        00180817
+         EJECT                                                          00180917
+*---------------------------------*                                     00181017
+*  Dynamic Storage Area           *                                     00181117
+*---------------------------------*                                     00181217
+DSA      DSECT                    Dynamic Storage Area                  00181317
+PARMLIST DS   2A                  Xalloc parameter list                 00181400
+*  +00 A(DST_SIZE)                                                      00182001
+*  +04 A(pDst)                                                          00182100
+DST_SIZE DS   F                   Size of destination bitmap (bytes)    00183002
+SRC_SIZE DS   F                   Size of source bitmap (bytes)         00183102
+COL      DS   F                   Number of bits in source row          00186008
+ROW      DS   F                   Number of source rows                 00187002
+ROW_BYTE DS   F                   Bytes per destination row             00188017
+DSAL     EQU  *-DSA                                                     00190000
+         END  BMROT                                                     00200000
+//* --------------------------------------------------------------- *** 00210003
+//LKED     EXEC PGM=IEWL,                                              X00220003
+//            PARM='XREF,LET,LIST,NCAL,RENT,REUS,REFR',                X00230003
+//            COND=(8,LT,ASM)                                           00240003
+//********************************************************************  00250003
+//**       LINKEDIT PROGRAM                                          *  00260003
+//********************************************************************  00270003
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     00280003
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00290003
+//SYSLIB   DD DSN=SYSTEMS.LINKLIB,DISP=SHR                              00300003
+//         DD DSN=FLASS.PF.LOAD,DISP=SHR                                00310003
+//SYSLMOD  DD DISP=SHR,DSN=FLASS.PF.LOAD                                00320009
+//SYSLIN   DD DSN=&&ASM,DISP=(OLD,DELETE)                               00330003
+//         DD *                                                         00340003
+ MODE AMODE(31),RMODE(ANY)                                              00350003
+ ALIAS BMROT                                                            00360009
+ NAME PLIBMROT(R)                                                       00370025

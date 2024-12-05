@@ -1,0 +1,230 @@
+//FLASST   JOB  (),'TEST',CLASS=J,MSGCLASS=Z,                           00000100
+//         NOTIFY=$                                                     00000200
+//********************************************************************* 00000300
+//*                PL/I COMPILE AND LINK                              * 00000400
+//********************************************************************* 00000500
+// EXEC PLIXCL,                                                         00000600
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00000700
+//   PARM.LKED='LIST,MAP,XREF'                                          00000800
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00000900
+//PLI.SYSLIB   DD DISP=SHR,DSN=FLASS.PCL.SOURCE                         00001000
+//PLI.SYSIN    DD *                                                     00001100
+ /* IMGTEST4: 4135 Image Test #4                                     */ 00001204
+                                                                        00001300
+ /*------------------------------------------------------------------*/ 00001400
+ /* IMGTEST4: 4135 Image Test #4                                     */ 00001503
+ /*          Dump image imported from AFP.                           */ 00001600
+ /*------------------------------------------------------------------*/ 00001700
+ test: proc options(main);                                              00001800
+ dcl     METAOUT             record output                              00001900
+                             env(FB recsize(214) CTLASA );              00002005
+ dcl     SYSPRINT            print;                                     00003000
+ dcl     meta_rec            char(214);                                 00004005
+ dcl     meta_work           char(214) varying;                         00005005
+ dcl    (p,q)                ptr;                                       00006000
+ dcl     tmp                 fixed bin(31);                             00007000
+ dcl     bitmap_size         fixed bin(31);                             00008000
+ dcl     graphic_length      fixed bin(31);                             00009000
+ dcl     graphic_length_x    char(4)   based( addr(graphic_length) );   00010000
+ dcl     i                   fixed bin(31);                             00011000
+ dcl     sz                  fixed bin(31);                             00011100
+ dcl    (image_width,image_height)                                      00011200
+                             fixed bin(31);                             00011300
+                                                                        00011400
+ dcl     DJDE                char(9)   static              init         00011500
+         ( ' **DJDE**' );                                               00011600
+ dcl     JDL                 char(39)  static              init         00011700
+         ( 'JDL=LBDC,JDE=LIST,FONTS=(FORMSX,9438DP)' );                 00011800
+ dcl     CEND                char(5)   static              init         00011900
+                        ( ',END;' );                                    00012000
+ dcl     RSTACK              char(8)   static              init         00013000
+                        ( '1313131313131313'x );                        00014000
+ dcl     SOI                 char(1)   static    init( '70'x );         00014100
+ dcl     EOI                 char(1)   static    init( '71'x );         00014200
+ dcl     NUL                 char(1)   static    init( '00'x );         00014300
+ dcl     NewPage             char(1)   static    init( '1' );           00014405
+ dcl     NoSkip              char(1)   static    init( '+' );           00014505
+ dcl     SpaceOne            char(1)   static    init( ' ' );           00014605
+                                                                        00014705
+ dcl     rp                  ptr;                                       00014805
+ dcl   1 return_data         based(rp),                                 00014905
+         5 pBitmap           ptr,                                       00015005
+         5 XSize             fixed bin(31),                             00015105
+         5 YSize             fixed bin(31);                             00015205
+                                                                        00015305
+ dcl    (                                                               00015405
+         addr,                                                          00015505
+         ceil,                                                          00015605
+         cstg,                                                          00015705
+         length,                                                        00015805
+         null,                                                          00015905
+         repeat,                                                        00016005
+         substr,                                                        00016105
+         translate,                                                     00016205
+         unspec                                                         00016305
+        )                    builtin;                                   00016405
+                                                                        00016505
+ dcl     HEX                 entry( ptr, fixed bin(15) )                00016605
+                             returns( character(256) varying );         00016705
+ dcl     HEXDUMP             entry( ptr, fixed bin(31), char(80) var ); 00016805
+ dcl     IMAGEX              entry                                      00016905
+                             returns( ptr );                            00017005
+                                                                        00017105
+ %include IMG;                                                          00017205
+                                                                        00017305
+   rp = IMAGEX();                      /* Read the bitmap            */ 00017405
+   if rp=null() then do;                                                00017505
+     put skip edit('Error -- IMAGEX returned no data')(a);              00017605
+     return;                                                            00017705
+     end;                                                               00017805
+   i=XSize; XSize=YSize; YSize=i;      /* Swap X and Y axes          */ 00018005
+   image_width  = ceil(XSize/8);       /* Scan line length in bytes  */ 00018105
+   image_height = YSize;               /* Number of scan lines       */ 00018205
+   bitmap_size  = image_width * image_height;    /* Size + '70'x/'71'*/ 00018305
+   sz  = (image_width+1) * image_height + 2;                            00018405
+   graphic_length = sz + cstg( null()->Img_PixelVector_data ) - 4;      00018505
+   /* '4' = length('EAllllll')                                 */       00019000
+   put skip edit( 'X-Size=',XSize,' (', image_width,                    00019100
+                  ') Y-Size=',YSize )                                   00019200
+                ((3)(a,p'zzz,zz9'));                                    00019300
+   put skip edit( 'Bitmap size    ', HEX(addr(bitmap_size),4) )(a);     00019400
+   put skip edit( 'Graphic Length ', HEX(addr(graphic_length_x),4) )(a);00019500
+                                                                        00019600
+   /*---------------------------------*/                                00019700
+   /* Initialize Output Stream        */                                00019800
+   /*---------------------------------*/                                00019900
+   open file(METAOUT) output;                                           00020000
+   meta_work = DJDE || JDL || CEND;                                     00020102
+   call write_meta( null(), NewPage );                                  00020205
+   meta_work = translate( ' ', ascii );                                 00020302
+   call write_meta( null(), NewPage );                                  00020405
+   meta_work = DJDE ||                                                  00020902
+               translate( 'GRAPHIC=(PIC1,1,1)' || CEND, ascii );        00021001
+   call write_meta( null(), NewPage );                                  00021105
+   meta_work='';                                                        00021205
+                                                                        00021400
+   /*---------------------------------*/                                00021500
+   /* Create Image Header             */                                00021600
+   /*---------------------------------*/                                00021700
+   allocate IMGHDR set(p);                                              00021800
+   p->Img_Header = translate( 'Interpress/Xerox/2.0/ImgFormat/2.00 ',   00021900
+                              ascii );                                  00022000
+   p->Img_BeginToken    = 'A066'x;                                      00022100
+   p->Img_CommentToken  = 'E600'x;                                      00022200
+   p->Img_CommentLength = '01AE'x;                                      00022300
+   p->Img_Comment       = ' ';                                          00022400
+   p->Img_Comment       = translate(p->Img_Comment,ascii);              00022500
+   p->Img_ShortSeq1     = 'C202'x;                                      00022600
+   p->Img_XPixels       = XSize;                                        00022705
+   p->Img_ShortSeq2     = 'C202'x;                                      00022800
+   p->Img_YPixels       = ySize;                                        00022905
+   p->Img_Reserved1     = (3)'C2020001'x;                               00023000
+   p->Img_ShortSeqRat1  = 'C404'x;                                      00023100
+   p->Img_ResNumerator  = 300;                                          00023200
+   p->Img_ResDenom      = 1;                                            00023300
+   p->Img_Reserved2     = 'C2020000'x;                                  00023400
+                                                                        00023500
+   /*---------------------------------*/                                00023600
+   /* Length includes everything from */                                00023700
+   /* 'Img_LengthId' to the byte      */                                00023800
+   /* preceeding 'Trl_ShortSeq1'      */                                00023900
+   /*---------------------------------*/                                00024000
+   p->Img_LengthId      = 'EA'x;                                        00024100
+   p->Img_LenByte1      = substr(graphic_length_x,2,1);                 00024200
+   p->Img_LenByte23     = substr(graphic_length_x,3,2);                 00024300
+   p->Img_MBZ           = '0000'x;                                      00024400
+   p->Img_Predictor     = 8;       /* not defined... */                 00024500
+   p->Img_ScanLength    = XSize;                                        00024605
+   call write_image(p,cstg(p->IMGHDR));                                 00024700
+   free p->IMGHDR;                                                      00024800
+                                                                        00024900
+   /*---------------------------------*/                                00025000
+   /* Write Image data                */                                00025100
+   /*---------------------------------*/                                00025200
+   p = pBitmap;                                                         00025300
+   call write_image( addr(SOI), 1 );                                    00025400
+   do i=1 to image_height;                                              00025500
+     call write_image( addr(NUL), 1 );                                  00025600
+     call write_image( p, image_width );                                00025700
+     p = p + image_width;                                               00025805
+     end; /* do i */                                                    00025900
+   call write_image( addr(EOI), 1 );                                    00026000
+                                                                        00026100
+   /*---------------------------------*/                                00026200
+   /* Create Image Trailer            */                                00026300
+   /*---------------------------------*/                                00026400
+   allocate IMGTRL set(p);                                              00026500
+   p->Trl_ShortSeq1     = 'C203'x;                                      00026600
+   p->Trl_LenByte1      = substr(graphic_length_x,2,1);                 00026700
+   p->Trl_LenByte23     = substr(graphic_length_x,3,2);                 00026800
+   p->Trl_ShortSeq2     = 'C202'x;                                      00026900
+   p->Trl_Signature     = '4CCD'x;                                      00027000
+   p->Trl_EndToken      = 'A067'x;                                      00027100
+   call write_image(p,cstg(p->IMGTRL));                                 00027200
+   free p->IMGTRL;                                                      00027300
+                                                                        00027400
+   if length(meta_work)ª=0 then do;                                     00027500
+     meta_rec  = NoSkip || meta_work ||                                 00027605
+                 repeat('00'x,128-length(meta_work)) || '*';            00027705
+     write file(METAOUT) from(meta_rec);                                00027902
+     end;                                                               00028002
+                                                                        00028102
+   meta_work = translate( ' ', ascii );                                 00028205
+   call write_meta( null(), SpaceOne );                                 00028305
+   meta_work = translate( ' End of test image data', ascii );           00028405
+   call write_meta( null(), SpaceOne );                                 00028505
+   meta_work = '20'x || RSTACK;                                         00028802
+   call write_meta( null(), SpaceOne );                                 00028905
+                                                                        00029000
+   close file(METAOUT);                                                 00029100
+                                                                        00029200
+   return;                                                              00029300
+                                                                        00029402
+ write_meta: proc(pX,cc);                                               00029502
+   dcl   pX                  ptr;                                       00029602
+   dcl   cc                  char(1);                                   00029702
+   dcl   Xlat                char(256) based(pX);                       00029802
+   if pXª=NULL()                                                        00029902
+   then meta_work = translate(meta_work,Xlat);                          00030002
+   meta_rec = cc || meta_work || '01'x;                                 00030102
+   write file(METAOUT) from(meta_rec);                                  00030202
+   end write_meta;                                                      00031002
+                                                                        00034300
+ write_image: proc(p,len);                                              00034400
+   dcl   p                   ptr;                                       00034500
+   dcl   len                 fixed bin(31);                             00034600
+   dcl   q                   ptr;                                       00034700
+   dcl  (i,n)                fixed bin(31);                             00034800
+   dcl   rem                 fixed bin(31);                             00034900
+   dcl   temp                char(212) based;                           00035000
+   q=p;                                                                 00035100
+   i=1;                                                                 00035200
+   do while(i<=len);                                                    00035300
+     rem = 128 - length(meta_work); /* Bytes available */               00035400
+     if rem=0 then do;              /* Record is full  */               00035500
+       meta_rec = NoSkip || meta_work || '*';                           00035605
+       write file(METAOUT) from(meta_rec);                              00035700
+       meta_work='';                                                    00035800
+       rem=128;                     /* Now can use 128 */               00035900
+       end; /* rem=0 */                                                 00036000
+     if (len-i+1)>=rem then n=rem;                                      00036100
+     else                   n=len-i+1;                                  00036200
+     meta_work = meta_work || substr(q->temp,1,n);                      00036300
+     q=q+n;                                                             00036400
+     i=i+n;                                                             00036500
+     end; /* do while */                                                00036600
+   end write_image;                                                     00036700
+                                                                        00036800
+ %include EBCASC;                                                       00036900
+                                                                        00037000
+   end test;                                                            00037100
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00037200
+//LKED.SYSLIB DD                                                        00037300
+// DD DISP=SHR,DSN=FLASS.PCL.LINKLIB                                    00037400
+// DD DISP=SHR,DSN=FLASS.PF.LOAD                                        00037500
+// DD DISP=SHR,DSN=SYSTEMS.LINKLIB                                      00037600
+//LKED.SYSLMOD  DD DISP=SHR,DSN=FLASS.PCL.LINKLIB                       00037700
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00037800
+//LKED.SYSIN DD *                                                       00037900
+ NAME IMGTEST4(R)                                                       00038002
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00039000

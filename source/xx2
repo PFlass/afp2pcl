@@ -1,0 +1,35 @@
+ABEND               entry; Generate ABEND
+AFP2PCL2            entry( ptr );                              00550000
+AFP2PCV             entry;                                     00551014
+afptrace            entry( char(3) ) returns( char(48) );      00007800
+AJFCB               ENTRY() RETURNS( PTR );   Returns addr(JFCB)
+ALLOC               ENTRY( CHAR(*) VARYING, ) Dynamic allocation
+BMROT               entry( ptr,                   /*PF991019*/ 02940087
+CALDATE0            ENTRY(,) OPTIONS(ASM,INTER);               00010001
+DEVDEP              entry( ptr,                                01050022
+FONTTAB             entry returns( ptr )                       00560000
+GETSYSI             ENTRY( CHAR(*), CHAR(*) ) 
+HEXDUMP             entry( ptr, fixed bin(31), char(80) var ); 00016805
+HEX                 entry( ptr, fixed bin(15) )                00015300
+IKJEFTSR            ENTRY(                                     00910000
+IKJTSOEV            ENTRY(                                     00650000
+IMAGE               entry( ptr, char(8) )                      01130022
+IMAGEX              entry                                      00016700
+INCR                entry( ptr, fixed bin(31) );               01040022
+ISPLINK             external entry                             00061905
+LF                  entry(                                     00950022
+PDSMEM              entry( char(8), char(8), char(8) )         02770000
+pgalloc             entry( fixed bin(31) )        Sub for plialloc
+PGFREE              entry( ptr, fixed bin(31) );  Sub for plifree
+read_fontlib        entry( char(1), ptr )                      00260006
+recl                entry(*)                                   00087409
+strip               entry                                      02240001
+systime             entry returns( char(14) );                 16280000
+TOKEN               entry( char(8), ptr )         /*PF100297*/ 01530017
+vlocate             entry( file, fixed bin(31) )               02870000
+WIDTAB              entry( ptr, char(8) )                      01110022
+write_pcl           entry( ptr, fixed bin(15), ptr )           00260406
+
+**xAlloc              entry( fixed bin(31) )   returns( ptr );   00110100
+**Xfree               entry( ptr );                              02920000
+**Xstats              entry returns( ptr );                      02930000

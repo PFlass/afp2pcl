@@ -1,0 +1,1393 @@
+//FLASSP    JOB  (),'SCRPT',CLASS=J,MSGCLASS=Z,                         00010000
+//          NOTIFY=$                                                    00020000
+//********************************************************************* 00030000
+//*                PL/I COMPILE AND LINK                              * 00040000
+//********************************************************************* 00050000
+//          EXEC OPLIXCL,                                               00060000
+//          PARM.PLI='M,NIS,OF,STMT,XREF,GS,AG,LANGLVL(SPROG)',         00070000
+//          PARM.LKED='LIST,MAP,XREF'                                   00080000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00090000
+//PLI.SYSLIB DD  DSN=FLASS.PCL.SOURCE,DISP=SHR                          00100000
+//          DD   DSN=FLASS.PF.PLIMAC,DISP=SHR                           00110000
+//PLI.SYSIN DD   *                                                      00120000
+ /* SCRPDF -- Script PDF documents and transmit to VM                */ 00130000
+ /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/ 00140000
+ /*                                                                  */ 00150000
+ /* Module:        SCRPDFP                                           */ 00160000
+ /*                                                                  */ 00170000
+ /* Author:        Peter Flass                                       */ 00180000
+ /*                October, 2006                                     */ 00190000
+ /*                                                                  */ 00200000
+ /* Function:      Batch Script and Transmit PDF documents           */ 00210000
+ /*                                                                  */ 00220000
+ /* Comments:      This package requires IBM Enterprise PL/I.        */ 00230000
+ /*                It contains variations of 'SCRPT' and 'LBDXMIT',  */ 00240000
+ /*                with variations to tailor them for PDF processing.*/ 00250000
+ /*                                                                  */ 00260000
+ /* Modifications:                                                   */ 00270000
+ /*     2010-03-15: Change 'parse_header' to accept cards beginning  */ 00280000
+ /*                 with '$$AFP' as-is.                              */ 00280100
+ /*     2009-03-09: Change default CHARS option because of           */ 00280200
+ /*                 codepage problems.                               */ 00280300
+ /*     2006-10-30: Base version, copy SCRPT and LBDXMIT             */ 00281000
+ /*                 with modifications.                              */ 00290000
+ /*                                                                  */ 00300000
+ /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/ 00310000
+                                                                        00550000
+ %DCL    version             CHARACTER;                                 00560000
+ %version = '''2.0''';                                                  00570000
+                                                                        00580000
+ %DCL    MCK                 CHAR;     /* Definition of MCK=YES100297*/ 00590000
+ %DCL    PCL                 CHAR;     /* Definition of PCL=YES100297*/ 00600000
+ %DCL    VPS                 CHAR;     /* Definition of VPS=YES060811*/ 00610000
+ %DCL   (TRUE,FALSE)         CHAR;                                      00620000
+ %DCL    FOREVER             CHARACTER;                                 00630000
+ %MCK   = 'SUBSTR(PR_FLAGS,3,1)';                          /*PF100297*/ 00640000
+ %PCL   = 'SUBSTR(PR_FLAGS,5,1)';                          /*PF100297*/ 00650000
+ %VPS   = 'SUBSTR(PR_PCL,7,1)';                            /*PF060811*/ 00660000
+ %TRUE  = '''1''b';                                                     00670000
+ %FALSE = '''0''b';                                                     00680000
+ %FOREVER = 'WHILE(''1''B)';                                            00690000
+                                                                        00700000
+ SCRPDF: PROCEDURE(PARM) OPTIONS(MAIN);                                 00710000
+                                                                        00720000
+ DCL     PARM                CHAR(100) VARYING;                         00730000
+                                                                        00740000
+ DCL     SYSIN               STREAM INPUT;                              00750000
+ DCL     SYSPRINT            PRINT;                                     00760000
+ DCL     PUNCH               RECORD                                     00770000
+              ENV( FB RECSIZE(80) BLKSIZE(0) );                         00780000
+ dcl     fontoln             record input;                 /*20061031*/ 00790000
+                                                                        00800000
+ /*-------------------------------------------------------*/            00810000
+ /*      Parameters for IKJTSOEV                          */            00820000
+ /*-------------------------------------------------------*/            00830000
+ DCL     IKJTSOEV            ENTRY(                                     00840000
+                   FIXED BIN(31),      /* Reserved        */            00850000
+                   FIXED BIN(31),      /* Return code     */            00860000
+                   FIXED BIN(31),      /* Reason code     */            00870000
+                   FIXED BIN(31),      /* Add'l error inf */            00880000
+                   POINTER             /* A(CPPL)         */            00890000
+                             ) OPTIONS(ASM RETCODE INTER);              00900000
+                                                                        00910000
+ DCL     RSVD_1              FIXED BIN(31);                             00920000
+ DCL     IKJTSOEV_RC         FIXED BIN(31);                             00930000
+ DCL     IKJTSOEV_REAS       FIXED BIN(31);                             00940000
+ DCL     IKJTSOEV_ADDL       FIXED BIN(31);                             00950000
+                                                                        00960000
+ /*-------------------------------------------------------*/            00970000
+ /*      Command Processor Parameter List (CPPL)          */            00980000
+ /*-------------------------------------------------------*/            00990000
+ DCL     CPPL_ADDR           POINTER;                                   01000000
+ DCL   1 CPPL                BASED(CPPL_ADDR),                          01010000
+         5 CPPLCBUF          PTR,      /* A(Command Buffer)          */ 01020000
+         5 CPPLUPT           PTR,      /* A(User Profile Table) UPT  */ 01030000
+         5 CPPLPSCB          PTR,      /* A(Prot Step Ctl Blk)  PSCB */ 01040000
+         5 CPPLECT           PTR;      /* A(Env. Ctl Table)     ECT  */ 01050000
+                                                                        01060000
+ /*-------------------------------------------------------*/            01070000
+ /*      Parameters for IKJEFTSR                          */            01080000
+ /*-------------------------------------------------------*/            01090000
+ DCL     IKJEFTSR            ENTRY(                                     01100000
+              1,                                                        01110000
+                5 FIXED BIN(15),  /* Reserved        */                 01120000
+                5 BIT(8),         /* Abend Flag      */                 01130000
+                5 BIT(8),         /* Function Code   */                 01140000
+              CHARACTER(*),       /* Command or Pgm  */                 01150000
+              FIXED BIN(31),      /* Length of Cmnd  */                 01160000
+              FIXED BIN(31),      /* Return code     */                 01170000
+              FIXED BIN(31),      /* Reason code     */                 01180000
+              FIXED BIN(31),      /* Abend code      */                 01190000
+                             ) OPTIONS(ASM RETCODE INTER);              01200000
+                                                                        01210000
+ DCL   1 IKJEFTSR_1          UNALIGNED,                                 01220000
+         5 FIL1              FIXED BIN(15),                             01230000
+         5 IKJEFTSR_ABEND_F  BIT(8),                                    01240000
+         5 IKJEFTSR_FUNCT    BIT(8);                                    01250000
+ DCL     IKJEFTSR_CMND_LEN   FIXED BIN(31);                             01260000
+ DCL     IKJEFTSR_RC         FIXED BIN(31);                             01270000
+ DCL     IKJEFTSR_REAS       FIXED BIN(31);                             01280000
+ DCL     IKJEFTSR_ABEND      FIXED BIN(31);                             01290000
+ DCL     CMND_BUF            CHAR(512) VARYING;                         01300000
+                                                                        01310000
+ DCL     RC                  FIXED BIN(15);                             01320000
+ DCL     MAX_RC              FIXED BIN(15) INIT(0);                     01330000
+ DCL     CARD                CHAR(80) VARYING;                          01340000
+ DCL     PUNCH_REC           CHAR(80);                                  01350000
+ DCL    (RUN_DATE,RUN_TIME)  CHAR(8);                                   01360000
+ DCL     JOB_ID              CHAR(8);                                   01370000
+ DCL     PUNCH_DSN           CHAR(44) VARYING INIT('');                 01380000
+ DCL     OUT_DSN             CHAR(44) VARYING INIT('');    /*20061030*/ 01390000
+ DCL     TEMP                CHAR(100) VARYING;                         01400000
+ dcl     jfcb_fontoln        ptr;                                       01410000
+ dcl     scrptfnt_dsn        char(44)  varying;                         01420000
+ dcl     writer_name         char(8)   varying   init('PCL');           01430000
+ dcl     first_card          char(80)  varying;            /*20061030*/ 01440000
+                                                                        01450000
+ /*-------------------------*/                                          01460000
+ /* $PRINT Parameters       */                                          01470000
+ /*-------------------------*/                                          01480000
+ DCL     DEVICE              CHAR(8)  VARYING INIT('PG4');              01490000
+ DCL     PAPER_SIZE          CHAR(1)  VARYING INIT('A');                01500000
+ DCL     ROTATION            CHAR(3)  VARYING INIT('');                 01510000
+ DCL     DEST                CHAR(8)  VARYING INIT('');                 01520000
+ DCL     CHARS               CHAR(8)  VARYING              /*20090309*/ 01530000
+                             INIT('X0TTN10M');             /*20090309*/ 01531001
+                                                                        01540000
+ /*-------------------------*/                                          01550000
+ /* PARM Overrides          */                                          01560000
+ /*-------------------------*/                                          01570000
+ DCL     DCF_REL             CHAR(17) VARYING INIT('');                 01580000
+ DCL     MSG_CLASS           CHAR(1)          INIT('Z');                01590000
+ DCL     DEST_OVERRIDE       CHAR(8)  VARYING INIT('');                 01600000
+ DCL     TRAY_OVERRIDE       CHAR(8)  VARYING INIT('');                 01610000
+ DCL     COPIES              CHAR(3)  VARYING INIT('');                 01620000
+ DCL     SYSOUT_CLASS        CHAR(3)  VARYING INIT('');                 01630000
+ DCL     PAGE_RANGE          CHAR(80) VARYING INIT('');                 01640000
+ DCL     SYSVAR_OPT          CHAR(80) VARYING INIT('');                 01650000
+ DCL     TEST_MODE           BIT(1)           INIT('0'B);               01660000
+ DCL     POSTSCRIPT          BIT(1)           INIT('0'B);               01670000
+ DCL     SPELLCHK_OPT        BIT(1)           INIT('0'B);               01680000
+ DCL     TWOPASS_OPT         BIT(1)           INIT('0'B);               01690000
+ DCL     NOTRACE_OPT         BIT(1)           INIT('1'B);  /*20061127*/ 01700000
+ DCL     DUPLEX_OPT          BIT(1)           INIT('0'B);               01710000
+ DCL     STAPLE_OPT          BIT(1)           INIT('0'B);  /*PF050127*/ 01720000
+ DCL     PUNCH_OPT           BIT(1)           INIT('0'B);  /*PF050621*/ 01730000
+                                                                        01740000
+ DCL     EOF                 BIT(1)   INIT(FALSE);                      01750000
+ DCL     KEEP_PUNCH          BIT(1)   INIT(FALSE);                      01760000
+ DCL     NO_WRITER           BIT(1)   INIT(FALSE);         /*PF060810*/ 01770000
+                                                                        01780000
+ DCL     ALLOC               ENTRY( CHAR(*) VARYING, )                  01790000
+                             OPTIONS( ASM INTER RETCODE );              01800000
+ DCL     GETSYSI             ENTRY( CHAR(*), CHAR(*) )                  01810000
+                             RETURNS( FIXED BIN(31) );                  01820000
+ DCL     AJFCB               ENTRY(*) RETURNS( PTR );      /*20061030*/ 01830000
+                                                                        01840000
+ DCL   1 ALLOC_STATUS        UNALIGNED,                                 01850000
+         5 AL_DSORG          CHAR(4),                                   01860000
+         5 AL_RC             FIXED BIN(31),                             01870000
+         5 AL_S99RC          FIXED BIN(31),                             01880000
+         5 AL_S99RSC         FIXED BIN(31),                             01890000
+         5 FIL               CHAR(32);                                  01900000
+                                                                        01910000
+ %INCLUDE BUILTINS;                                                     01920000
+ %INCLUDE PLIJFCBN;                                                     01930000
+                                                                        01940000
+ %PAGE;                                                                 01950000
+ /*------------------------------------------------------------------*/ 01960000
+ /*                  M A I N L I N E                                 */ 01970000
+ /*------------------------------------------------------------------*/ 01980000
+                                                                        01990000
+                                                                        02000000
+ ON ENDFILE(SYSIN) EOF=TRUE;                                            02010000
+                                                                        02020000
+ CALL PROCESS_PARM;                                                     02030000
+                                                                        02040000
+ RC = GETSYSI( 'JOBID', JOB_ID );                                       02050000
+ RUN_DATE=DATE();                                                       02060000
+ RUN_TIME=TIME();                                                       02070000
+ PUNCH_DSN = 'PCLTMP.' || JOB_ID ||                                     02080000
+             '.D' || SUBSTR(RUN_DATE,1,6) ||                            02090000
+             '.T' || SUBSTR(RUN_TIME,1,6) ||                            02100000
+             '.SCRIPT';                                                 02110000
+ OUT_DSN   = 'PCLTMP.' || JOB_ID ||                        /*20061030*/ 02120000
+             '.D' || SUBSTR(RUN_DATE,1,6) ||               /*20061030*/ 02130000
+             '.T' || SUBSTR(RUN_TIME,1,6) ||               /*20061030*/ 02140000
+             '.AFP';                                       /*20061030*/ 02150000
+                                                                        02160000
+ jfcb_fontoln = AJFCB(fontoln);                                         02170000
+                                                                        02180000
+ /*-----------------------------------------*/                          02190000
+ /*     Allocate Punch file                 */                          02200000
+ /*-----------------------------------------*/                          02210000
+                                                                        02220000
+ CALL ALLOC( 'ALLOC FI(PUNCH) ' ||                                      02230000
+             'DA(' || PUNCH_DSN || ') ' ||                              02240000
+             'NEW CAT UNIT(3390) SPACE(20 20) CYL RELEASE',             02250000
+             ALLOC_STATUS );                                            02260000
+ IF AL_RCª=0 THEN DO;                                                   02270000
+   PUT SKIP EDIT('SCR002E PUNCH ALLOC RC=',AL_RC)(A,P'Z9');             02280000
+   CALL DELETE_PUNCH;                                                   02290000
+   CALL PLIRETC(16);                                                    02300000
+   RETURN;                                                              02310000
+   END;                                                                 02320000
+                                                                        02330000
+ /*-----------------------------------------*/                          02340000
+ /*     Copy SYSIN                          */                          02350000
+ /*-----------------------------------------*/                          02360000
+                                                                        02370000
+ OPEN FILE(SYSIN) INPUT,                                                02380000
+      FILE(PUNCH) OUTPUT;                                               02390000
+                                                                        02400000
+ GET FILE(SYSIN) EDIT(CARD)( A(80) );                                   02410000
+ CALL TRIM(CARD);                                                       02420000
+ first_card = card;          /* Save header card             20061030*/ 02430000
+ GET FILE(SYSIN) EDIT(CARD)( A(80) );                                   02440000
+                                                                        02450000
+ DO WHILE( EOF=FALSE );                                                 02460000
+   CALL TRIM(CARD);                                                     02470000
+   PUNCH_REC = CARD;                                                    02480000
+   WRITE FILE(PUNCH) FROM(PUNCH_REC);                                   02490000
+   GET FILE(SYSIN) EDIT(CARD)( A(80) );                                 02500000
+   END; /* DO WHILE */                                                  02510000
+                                                                        02520000
+ CLOSE FILE(SYSIN), FILE(PUNCH);                                        02530000
+                                                                        02540000
+ CALL ALLOC( 'FREE FI(PUNCH)', ALLOC_STATUS );                          02550000
+                                                                        02560000
+ /*-----------------------------------------*/                          02570000
+ /*     Allocate SCRIPT files               */                          02580000
+ /*-----------------------------------------*/                          02590000
+                                                                        02600000
+ /*-------------------------*/                                          02610000
+ /*      SCRIPT Output      */                                          02620000
+ /*-------------------------*/                                          02630000
+                                                           /*20061030*/ 02640000
+ CALL ALLOC( 'ALLOC FI(SCRPTFIL) ' ||                      /*20061030*/ 02650000
+             'DA(' || OUT_DSN || ') ' ||                   /*20061030*/ 02660000
+             'NEW CAT UNIT(3390) SPACE(20 20) CYL RELEASE',/*20061030*/ 02670000
+             ALLOC_STATUS );                               /*20061030*/ 02680000
+                                                                        02690000
+ IF AL_RCª=0 THEN DO;                                                   02700000
+   PUT SKIP EDIT('SCR005E SCRPTFIL ALLOC RC=',AL_RC)(A,P'Z9');          02710000
+   PUT SKIP EDIT('                 SVC99 RC=',                          02720000
+                 HEX( ADDR(AL_S99RC)+2,2) )(A);                         02730000
+   PUT SKIP EDIT('                 SVC99 RS=',                          02740000
+                 HEX( ADDR(AL_S99RSC)+2,2) )(A);                        02750000
+   CALL DELETE_PUNCH;                                                   02760000
+   CALL PLIRETC(16);                                                    02770000
+   RETURN;                                                              02780000
+   END;                                                                 02790000
+                                                                        02800000
+ /*-------------------------*/                                          02810000
+ /*      FONTLIB            */                                          02820000
+ /*-------------------------*/                                          02830000
+ scrptfnt_dsn = jfcb_fontoln->JFCBDSNM;                    /*20061030*/ 02840000
+ call trim(scrptfnt_dsn);                                               02850000
+                                                                        02860000
+ CALL ALLOC( 'ALLOC FI(SCRPTFNT) ' ||                                   02870000
+             'DA(' || scrptfnt_dsn || ') SHR',                          02880000
+             ALLOC_STATUS );                                            02890000
+ IF AL_RCª=0 THEN DO;                                                   02900000
+   PUT SKIP EDIT('SCR006E SCRPTFNT ALLOC RC=',AL_RC)(A,P'Z9');          02910000
+   CALL DELETE_PUNCH;                                                   02920000
+   CALL PLIRETC(16);                                                    02930000
+   RETURN;                                                              02940000
+   END;                                                                 02950000
+                                                                        02960000
+ /*-------------------------*/                                          02970000
+ /*      GML Macros         */                                          02980000
+ /*-------------------------*/                                          02990000
+ CALL ALLOC( 'ALLOC FI(SCRPTLIB) ' ||                                   03000000
+             'DA(' || DCF_REL || '.MACLIB) ' ||                         03010000
+             'SHR',                                                     03020000
+             ALLOC_STATUS );                                            03030000
+ IF AL_RCª=0 THEN DO;                                                   03040000
+   PUT SKIP EDIT('SCR007E SCRPTLIB ALLOC RC=',AL_RC)(A,P'Z9');          03050000
+   CALL DELETE_PUNCH;                                                   03060000
+   CALL PLIRETC(16);                                                    03070000
+   RETURN;                                                              03080000
+   END;                                                                 03090000
+                                                                        03100000
+ /*-------------------------*/                                          03110000
+ /*      DCF Profile        */                                          03120000
+ /*-------------------------*/                                          03130000
+ CALL ALLOC( 'ALLOC FI(SCRPTPRO) ' ||                                   03140000
+             'DA(' || DCF_REL || '.MACLIB(LBDPCL)) ' ||                 03150000
+             'SHR',                                                     03160000
+             ALLOC_STATUS );                                            03170000
+ IF AL_RCª=0 THEN DO;                                                   03180000
+   PUT SKIP EDIT('SCR008E SCRPTPRO ALLOC RC=',AL_RC)(A,P'Z9');          03190000
+   CALL DELETE_PUNCH;                                                   03200000
+   CALL PLIRETC(16);                                                    03210000
+   RETURN;                                                              03220000
+   END;                                                                 03230000
+                                                                        03240000
+ /*-------------------------*/                                          03250000
+ /*      SCRIPT messages    */                                          03260000
+ /*-------------------------*/                                          03270000
+ CALL ALLOC( 'ALLOC FI(SYSTSPRT) SYSOUT(' || MSG_CLASS || ') ',         03280000
+             ALLOC_STATUS );                                            03300000
+ IF AL_RCª=0 THEN DO;                                                   03310000
+   PUT SKIP EDIT('SCR010E SYSTSPRT ALLOC RC=',AL_RC)(A,P'Z9');          03320000
+   CALL DELETE_PUNCH;                                                   03330000
+   CALL PLIRETC(16);                                                    03340000
+   RETURN;                                                              03350000
+   END;                                                                 03360000
+                                                                        03370000
+ /*-------------------------*/                                          03380000
+ /*      TOC File           */                                          03390000
+ /*-------------------------*/                                          03400000
+ TEMP      = 'PCLTMP.' || JOB_ID ||                                     03410000
+             '.D' || SUBSTR(RUN_DATE,1,6) ||                            03420000
+             '.T' || SUBSTR(RUN_TIME,1,6) ||                            03430000
+             '.TOC';                                                    03440000
+ CALL ALLOC( 'ALLOC FI(DSMUTTOC) ' ||                                   03450000
+             'DA(' || temp || ') ' ||                                   03460000
+             'NEW CAT UNIT(3390) SPACE(0 1) CYL RELEASE ' ||            03470000
+             'BLK(4096) LRECL(256) RECFM(V B)',                         03480000
+             ALLOC_STATUS );                                            03490000
+ IF AL_RCª=0 THEN DO;                                                   03500000
+   PUT SKIP EDIT('SCR011E DSMUTTOC ALLOC RC=',AL_RC)(A,P'Z9');          03510000
+   PUT SKIP EDIT('                 SVC99 RC=',                          03520000
+                 HEX( ADDR(AL_S99RC)+2,2) )(A);                         03530000
+   PUT SKIP EDIT('                 SVC99 RS=',                          03540000
+                 HEX( ADDR(AL_S99RSC)+2,2) )(A);                        03550000
+   CALL DELETE_PUNCH;                                                   03560000
+   CALL PLIRETC(16);                                                    03570000
+   RETURN;                                                              03580000
+   END;                                                                 03590000
+                                                                        03600000
+ /*-----------------------------------------*/                          03610000
+ /*     Initialize TSO environment          */                          03620000
+ /*-----------------------------------------*/                          03630000
+                                                                        03640000
+ CALL IKJTSOEV(                                                         03650000
+      RSVD_1, IKJTSOEV_RC, IKJTSOEV_REAS, IKJTSOEV_ADDL, CPPL_ADDR      03660000
+              );                                                        03670000
+                                                                        03680000
+   IF IKJTSOEV_RCª=0 THEN DO;                                           03690000
+     PUT SKIP EDIT('SCR012E Return code from IKJTSOEV is ',             03700000
+                   IKJTSOEV_RC, IKJTSOEV_REAS, IKJTSOEV_ADDL)           03710000
+                  (A,P'z9',(2)(P'ZZ9'));                                03720000
+     END;                                                               03730000
+                                                                        03740000
+ /*-----------------------------------------*/                          03750000
+ /*     Build SCRIPT Command                */                          03760000
+ /*-----------------------------------------*/                          03770000
+                                                                        03780000
+ DEVICE = DEVICE || PAPER_SIZE || ROTATION;                             03790000
+                                                                        03800000
+ CMND_BUF = 'SCRIPT ''' || PUNCH_DSN || ''' ';             /*PF990505*/ 03810000
+ IF NOTRACE_OPT='1'b                                       /*PF990505*/ 03820000
+ THEN CMND_BUF = CMND_BUF || 'SYS(X NO) ';                 /*PF990505*/ 03830000
+ CMND_BUF = CMND_BUF ||                                    /*PF990505*/ 03840000
+            'SEGLIB CO DDUT CHAR(' || chars ||' ) ' ||     /*PF990316*/ 03850000
+            'DEV(' || DEVICE || ')';                                    03860000
+ IF twopass_opt                                            /*PF990124*/ 03870000
+ THEN CMND_BUF = CMND_BUF || ' TWOPASS';                   /*PF990124*/ 03880000
+ IF sysvar_optª=''                                         /*PF001108*/ 03890000
+ THEN CMND_BUF = CMND_BUF || ' SYSVAR(' || sysvar_opt || ')';           03900000
+                                                                        03901000
+ /* display( cmnd_buf );                                     LE100422*/ 03902002
+                                                                        03903000
+ /*-----------------------------------------*/                          03910000
+ /*     Script the document                 */                          03920000
+ /*-----------------------------------------*/                          03930000
+                                                                        03940000
+ IKJEFTSR_1.FIL1 = 1;                                                   03950000
+ IKJEFTSR_1.IKJEFTSR_ABEND_F = '00000000'B; /* NO ABEND    */           03960000
+ /*IKJEFTSR_1.IKJEFTSR_ABEND_F = '00000001'B; **    ABEND    */         03970000
+ IKJEFTSR_1.IKJEFTSR_FUNCT   = '00000001'B;                             03980000
+ IKJEFTSR_ABEND = 0;                                                    03990000
+ CALL IKJEFTSR(                                                         04000000
+      IKJEFTSR_1, CMND_BUF, FIXED(LENGTH(CMND_BUF),31),                 04010000
+      IKJEFTSR_RC, IKJEFTSR_REAS, IKJEFTSR_ABEND                        04020000
+              );                                                        04030000
+                                                                        04040000
+   /* IF IKJEFTSR_ABENDª=0                            */                04050000
+   /* THEN PUT SKIP EDIT('SCR013E Command abended, code is ', */        04060000
+   /*                    IKJEFTSR_ABEND)(A,P'9999');  */                04070000
+ IF IKJEFTSR_RC>0 THEN DO;                                              04080000
+   PUT SKIP EDIT('SCR014W SCRIPT Return code is ',IKJEFTSR_RC)          04090000
+                (A,P'--9');                                             04100000
+   END; /* IKJEFTSR_RC */                                               04110000
+                                                                        04120000
+ IF IKJEFTSR_RC>MAX_RC THEN MAX_RC=IKJEFTSR_RC;                         04130000
+                                                                        04140000
+ IF KEEP_PUNCH = FALSE                                                  04150000
+ THEN CALL DELETE_PUNCH;                                                04160000
+                                                                        04170000
+ /*-------------------------*/                                          04180000
+ /*  Free TOC file          */                                          04190000
+ /*-------------------------*/                                          04200000
+ CALL ALLOC( 'FREE FI(DSMUTTOC)', ALLOC_STATUS );                       04210000
+ CALL ALLOC( 'ALLOC FI(DSMUTTOC) ' ||                                   04220000
+             'DA(' || temp || ') OLD DEL',                              04230000
+             ALLOC_STATUS );                                            04240000
+ IF AL_RCª=0 THEN DO;                                                   04250000
+   PUT SKIP EDIT('SCR015E DSMUTTOC ALLOC RC=',AL_RC)(A,P'Z9');          04260000
+   PUT SKIP EDIT('                 SVC99 RC=',                          04270000
+                 HEX( ADDR(AL_S99RC)+2,2) )(A);                         04280000
+   PUT SKIP EDIT('                 SVC99 RS=',                          04290000
+                 HEX( ADDR(AL_S99RSC)+2,2) )(A);                        04300000
+   CALL DELETE_PUNCH;                                                   04310000
+   CALL PLIRETC(16);                                                    04320000
+   RETURN;                                                              04330000
+   END;                                                                 04340000
+                                                                        04350000
+ CALL ALLOC( 'FREE FI(DSMUTTOC)', ALLOC_STATUS );                       04360000
+                                                                        04370000
+ /*-------------------------*/                                          04380000
+ /*  Free SCRPTFIL          */                                          04390000
+ /*-------------------------*/                                          04400000
+ CALL ALLOC( 'FREE FI(SCRPTFIL)', ALLOC_STATUS );                       04410000
+                                                                        04420000
+ /*-------------------------*/                                          04430000
+ /*  Transmit the file      */                                          04440000
+ /*-------------------------*/                                          04450000
+ call LBDXMIT( out_dsn, first_card );                                   04460000
+                                                                        04470000
+ /*-------------------------*/                                          04471000
+ /*  Delete AFP file        */                                          04472000
+ /*-------------------------*/                                          04473000
+ CALL ALLOC( 'ALLOC FI(SCRPTFIL) ' ||                      /*20061127*/ 04481000
+             'DA(' || OUT_DSN || ') ' ||                   /*20061127*/ 04482000
+             ' OLD DELETE',                                /*20061127*/ 04483000
+             ALLOC_STATUS );                               /*20061127*/ 04484000
+ CALL ALLOC( 'FREE FI(SCRPTFIL)', ALLOC_STATUS );          /*20061127*/ 04485000
+                                                                        04490000
+ CALL PLIRETC(MAX_RC);                                                  04500000
+                                                                        04510000
+ RETURN;                                                                04520000
+                                                                        04530000
+ %PAGE;                                                                 04540000
+ /*-----------------------------------------*/                          04550000
+ /*     Parse PARM information              */                          04560000
+ /*-----------------------------------------*/                          04570000
+ PROCESS_PARM: PROCEDURE;                                               04580000
+ dcl     command_text        char(80)       varying;                    04590000
+ dcl     w                   char(80)       varying;                    04600000
+ dcl     command             char(8)        varying;                    04610000
+ dcl     i                   fixed bin(15);                             04620000
+                                                                        04630000
+ i = index( parm, 'CLASS(' );                              /*PF000522*/ 04640000
+ if i>0 then do;                                           /*PF000522*/ 04650000
+   w = substr(parm,i+6);                                   /*PF000522*/ 04660000
+   i = index(w,')');                                       /*PF000522*/ 04670000
+   if i>0 then w=substr(w,1,i-1);                          /*PF000522*/ 04680000
+   SYSOUT_CLASS=w;                                         /*PF000522*/ 04690000
+   end; /* CLASS */                                        /*PF000522*/ 04700000
+                                                                        04710000
+ i = index( parm, 'DCF(' );                                             04720000
+ if i>0 then do;                                                        04730000
+   w = substr(parm,i+4);                                                04740000
+   i = index(w,')');                                                    04750000
+   if i>0 then w=substr(w,1,i-1);                                       04760000
+   dcf_rel = w;                                                         04770000
+   end; /* DCF */                                                       04780000
+                                                                        04790000
+ i = index( parm, 'DEST(' );                                            04800000
+ if i>0 then do;                                                        04810000
+   w = substr(parm,i+5);                                                04820000
+   i = index(w,')');                                                    04830000
+   if i>0 then w=substr(w,1,i-1);                                       04840000
+   dest_override = w;                                                   04850000
+   end; /* DEST */                                                      04860000
+                                                                        04870000
+ i = index( parm, 'FORMAT(' );                                          04880000
+ if i>0 then do;                                                        04890000
+   w = substr(parm,i+7);                                                04900000
+   i = index(w,')');                                                    04910000
+   if i>0 then w=substr(w,1,i-1);                                       04920000
+   if w='L' then rotation = '270';                                      04930000
+   else          rotation = '';                                         04940000
+   end; /* FORMAT */                                                    04950000
+                                                                        04960000
+ i = index( parm, 'KEEP(' );                                            04970000
+ if i>0 then do;                                                        04980000
+   w = substr(parm,i+5);                                                04990000
+   i = index(w,')');                                                    05000000
+   if i>0 then w=substr(w,1,i-1);                                       05010000
+   if w='Y' then keep_punch = true;                                     05020000
+   end; /* KEEP */                                                      05030000
+                                                                        05040000
+ i = index( parm, 'MSG(' );                                             05050000
+ if i>0 then do;                                                        05060000
+   w = substr(parm,i+4);                                                05070000
+   i = index(w,')');                                                    05080000
+   if i>0 then w=substr(w,1,i-1);                                       05090000
+   msg_class = w;                                                       05100000
+   end; /* MSG */                                                       05110000
+                                                                        05120000
+ i = index( parm, 'SIZE(' );                                            05130000
+ if i>0 then do;                                                        05140000
+   w = substr(parm,i+5);                                                05150000
+   i = index(w,')');                                                    05160000
+   if i>0 then w=substr(w,1,i-1);                                       05170000
+   paper_size = w;                                                      05180000
+   end; /* SIZE */                                                      05190000
+                                                                        05200000
+ i = index( parm, 'SYSVAR(' );                             /*PF001108*/ 05210000
+ if i>0 then do;                                           /*PF001108*/ 05220000
+   w = substr(parm,i+7);                                   /*PF001108*/ 05230000
+   i = index(w,')');                                       /*PF001108*/ 05240000
+   if i>0 then w=substr(w,1,i-1);                          /*PF001108*/ 05250000
+   sysvar_opt = w;                                         /*PF001108*/ 05260000
+   end; /* SYSVAR */                                       /*PF001108*/ 05270000
+                                                                        05280000
+ i = index( parm, 'TEST(' );                                            05290000
+ if i>0 then do;                                                        05300000
+   w = substr(parm,i+5);                                                05310000
+   i = index(w,')');                                                    05320000
+   if i>0 then w=substr(w,1,i-1);                                       05330000
+   if w='Y' then do;                                       /*PF000614*/ 05340000
+     test_mode = '1'b;                                     /*PF000614*/ 05350000
+     writer_name = 'PCLTEST';                              /*PF000614*/ 05360000
+     end;                                                  /*PF000614*/ 05370000
+   end; /* TEST */                                                      05380000
+                                                                        05390000
+ i = index( parm, 'TWOPASS' );                             /*PF990124*/ 05400000
+ if i>0 then twopass_opt='1'b;                             /*PF990124*/ 05410000
+                                                                        05420000
+ i = index( parm, 'NOTRACE' );                             /*PF990505*/ 05430000
+ if i>0 then notrace_opt='1'b;                             /*PF990505*/ 05440000
+                                                                        05450000
+   END PROCESS_PARM;                                                    05460000
+                                                                        05470000
+ %PAGE;                                                                 05480000
+ /*-----------------------------------------*/                          05490000
+ /*     Delete the punch file               */                          05500000
+ /*-----------------------------------------*/                          05510000
+ DELETE_PUNCH: PROCEDURE;                                               05520000
+                                                                        05530000
+   CALL ALLOC( 'ALLOC FI(PUNCH) ' ||                                    05540000
+               'DA(' || PUNCH_DSN || ') ' ||                            05550000
+               'OLD DELETE',                                            05560000
+               ALLOC_STATUS );                                          05570000
+                                                                        05580000
+   CALL ALLOC( 'FREE FI(PUNCH)', ALLOC_STATUS );                        05590000
+                                                                        05600000
+   END DELETE_PUNCH;                                                    05610000
+                                                                        05620000
+ /*-----------------------------------------*/                          05630000
+ /*     Trim trailing blanks                */                          05640000
+ /*-----------------------------------------*/                          05650000
+                                                                        05660000
+ TRIM: PROCEDURE(S);                                                    05670000
+ DCL S CHAR(*) VARYING;                                                 05680000
+                                                                        05690000
+   /* TRIM TRAILING BLANKS */                                           05700000
+   DO FOREVER;                                                          05710000
+     IF LENGTH(S)=0                THEN RETURN;                         05720000
+     IF SUBSTR(S,LENGTH(S),1)ª=' ' THEN LEAVE;                          05730000
+     S=SUBSTR(S,1,LENGTH(S)-1);                                         05740000
+     END; /* FOREVER */                                                 05750000
+                                                                        05760000
+ END TRIM;                                                              05770000
+                                                                        05780000
+ %INCLUDE HEX;                                                          05790000
+ %INCLUDE LOWERCAS;                                                     05800000
+ %INCLUDE WORD;                                                         05810000
+ %INCLUDE WORDPOS;                                                      05820000
+ %page;                                                                 05850000
+                                                                        05860000
+ /* LBDXMIT:       Format file for transmission                      */ 05870000
+ /********************************************************************/ 05880000
+ /*                                                                  */ 05890000
+ /* Module:        LBDXMIT                                           */ 05900000
+ /*                                                                  */ 05910000
+ /* Author:        Peter Flass, NYS LBDC <flass@lbdc.state.ny.us>    */ 05920000
+ /*                April, 2006                                       */ 05930000
+ /*                                                                  */ 05940000
+ /* Function:      Mimic TSO-transmit for single file transmission.  */ 05950000
+ /*                                                                  */ 05960000
+ /* Input:         DDNAME 'INPUT' defines any sequential file or     */ 05970000
+ /*                PDS member.                                       */ 05980000
+ /*                                                                  */ 05990000
+ /* Output:        DDNAME 'OUTPUT' defines sequential file or        */ 06000000
+ /*                SYSOUT dataset.  The LRECL is always 80.          */ 06010000
+ /*                                                                  */ 06020000
+ /* Parm:          DEST(destid) supplies 'to' node and userid        */ 06030000
+ /*                for NETDATA control records.  Actual destination  */ 06040000
+ /*                is defined by //OUTPUT JCL.                       */ 06050000
+ /*                                                                  */ 06060000
+ /*                NAME(dsname) supplies dataset name for NETDATA    */ 06070000
+ /*                control records.  If not coded, dsname from       */ 06080000
+ /*                the //OUTPUT DD statement is used.                */ 06090000
+ /*                                                                  */ 06100000
+ /* Calls:         RDJFCB.                                           */ 06110000
+ /*                                                                  */ 06120000
+ /* Modifications:                                                   */ 06130000
+ /*     2006-10-30: Base version.                                    */ 06140000
+ /*                                                                  */ 06150000
+ /********************************************************************/ 06160000
+                                                                        06170000
+ LBDXMIT: proc(filename,header);                           /*20061030*/ 06180000
+   dcl   filename            char(44)  varying;            /*20061030*/ 06200000
+   dcl   header              char(80)  varying;            /*20061030*/ 06201000
+   dcl   new_header          char(80)  varying;            /*20061030*/ 06202000
+   dcl   INPUT               record input;                              06210000
+   dcl   OUTPUT              record output env( FB RECSIZE(80) );       06220000
+   dcl   SYSPRINT            print;                                     06230000
+                                                                        06240000
+   /*---------------------------------*/                                06250000
+   /* Automatic Data                  */                                06260000
+   /*---------------------------------*/                                06270000
+   dcl   buffer              char(*)   varying   controlled;            06280000
+   dcl   output_buffer       char(80);                                  06290000
+   dcl   eof                 bit(1)              init( '0'b );          06300000
+   dcl  (inp,outp)           ptr;                                       06310000
+   dcl  (in_cnt,out_cnt,ctl_cnt)                                        06320000
+                             fixed bin(31)       init(0);               06330000
+                                                                        06340000
+   /*---------------------------------*/                                06350000
+   /* Control Record Information      */                                06360000
+   /*---------------------------------*/                                06370000
+   dcl   phys_rec_size       fixed bin(31);      /* Output LRECL     */ 06380000
+   dcl   dt                  char(14);           /* YYYYMMDDHHMMSS   */ 06390000
+   dcl   to_node             char(8)   varying;                         06400000
+   dcl   to_user             char(8)   varying;                         06410000
+   dcl   dsname              char(44)  varying;                         06420000
+   dcl   member              char(8)   varying;                         06430000
+   dcl   record_length       fixed bin(31);      /* Input Lrecl      */ 06440000
+   dcl   file_size           fixed bin(31);      /* File size est.   */ 06450000
+   dcl   recfm               bit(16);                                   06460000
+   dcl 1 system_info,                  /* Info from SMF Type 30 rec  */ 06470000
+         5 node_name         char(8)   varying,                         06480000
+         5 job_name          char(8)   varying;                         06490000
+                                                                        06500000
+   /*---------------------------------*/                                06510000
+   /* Static Data                     */                                06520000
+   /*---------------------------------*/                                06530000
+   dcl   zerob               bit(8)        static     init( '00'bx );   06540000
+   dcl   one                 fixed bin(15) static     init(1);          06550000
+                                                                        06560000
+   /* Text Unit Keys                  */                                06570000
+   dcl   INMBLKSZ            char(2)   static    init( '0030'x );       06580000
+   dcl   INMCREAT            char(2)   static    init( '1022'x );       06590000
+   dcl   INMDDNAM            char(2)   static    init( '0001'x );       06600000
+   dcl   INMDIR              char(2)   static    init( '000C'x );       06610000
+   dcl   INMDSNAM            char(2)   static    init( '0002'x );       06620000
+   dcl   INMDSORG            char(2)   static    init( '003C'x );       06630000
+   dcl   INMERRCD            char(2)   static    init( '1027'x );       06640000
+   dcl   INMEXPDT            char(2)   static    init( '0022'x );       06650000
+   dcl   INMFACK             char(2)   static    init( '1026'x );       06660000
+   dcl   INMFFM              char(2)   static    init( '102D'x );       06670000
+   dcl   INMFNODE            char(2)   static    init( '1011'x );       06680000
+   dcl   INMFTIME            char(2)   static    init( '1024'x );       06690000
+   dcl   INMFUID             char(2)   static    init( '1012'x );       06700000
+   dcl   INMFVERS            char(2)   static    init( '1023'x );       06710000
+   dcl   INMLCHG             char(2)   static    init( '1021'x );       06720000
+   dcl   INMLRECL            char(2)   static    init( '0042'x );       06730000
+   dcl   INMLREF             char(2)   static    init( '1020'x );       06740000
+   dcl   INMMEMBR            char(2)   static    init( '0003'x );       06750000
+   dcl   INMNUMF             char(2)   static    init( '102F'x );       06760000
+   dcl   INMRECCT            char(2)   static    init( '102A'x );       06770000
+   dcl   INMRECFM            char(2)   static    init( '0049'x );       06780000
+   dcl   INMSIZE             char(2)   static    init( '102C'x );       06790000
+   dcl   INMTERM             char(2)   static    init( '0028'x );       06800000
+   dcl   INMTNODE            char(2)   static    init( '1001'x );       06810000
+   dcl   INMTTIME            char(2)   static    init( '1025'x );       06820000
+   dcl   INMTUID             char(2)   static    init( '1002'x );       06830000
+   dcl   INMUSERP            char(2)   static    init( '1029'x );       06840000
+   dcl   INMUTILN            char(2)   static    init( '1028'x );       06850000
+                                                                        06860000
+   dcl   INMR01              char(6)   static    init( 'INMR01' );      06870000
+   dcl   INMR02              char(6)   static    init( 'INMR02' );      06880000
+   dcl   INMR03              char(6)   static    init( 'INMR03' );      06890000
+   dcl   INMR06              char(6)   static    init( 'INMR06' );      06900000
+   dcl   INMCOPY             char(7)   static    init( 'INMCOPY' );     06910000
+                                                                        06920000
+   /* Values for 'flags' field                                       */ 06930000
+   dcl   flags_first         bit(8)    static    init( '80'bx );        06940000
+   dcl   flags_last          bit(8)    static    init( '40'bx );        06950000
+   dcl   flags_ctl           bit(8)    static    init( '20'bx );        06960000
+                                                                        06970000
+   /*---------------------------------*/                                06980000
+   /* Prototypes                      */                                06990000
+   /*---------------------------------*/                                07000000
+   dcl   s                   char(128) based;                           07010000
+   dcl 1 netdata_header      based,    /* NETDATA control record hdr */ 07020000
+         5 nh_len            bit(8),   /* Length of this record      */ 07030000
+         5 nh_flags          bit(8),   /* Flags                      */ 07040000
+         /* x'80' - First segment of record                          */ 07050000
+         /* x'40' - Last  segment of record                          */ 07060000
+         /* x'20' - Control record or part thereof                   */ 07070000
+         /* x'10' - Record number of next record                     */ 07080000
+         /* x'0F' - (reserved)                                       */ 07090000
+         5 nh_name           char(6),  /* Control record name        */ 07100000
+         5 nh_end            char(0);  /* End of record header       */ 07110000
+   dcl 1 netdata_text_unit   based,                                     07120000
+         5 nt_key            char(2),                                   07130000
+         5 nt_count          fixed bin(15),                             07140000
+         5 nt_length_value   char(0);  /* First length-value pair    */ 07150000
+   dcl 1 netdata_len_val     based,    /* One length-vallue pair     */ 07160000
+         5 nt_len            fixed bin(15),                             07170000
+         5 nt_val            char(0);                                   07180000
+                                                                        07190000
+   /*---------------------------------*/                                07200000
+   /* External Entries                */                                07210000
+   /*---------------------------------*/                                07220000
+   dcl   AJFCB               entry(*) returns( ptr );                   07230000
+   dcl   ALLOC               ENTRY( CHAR(*) VARYING, )                  07231000
+                             OPTIONS( ASM INTER RETCODE );              07232000
+   dcl  (                                                               07240000
+         addr,                                                          07250000
+         datetime,                                                      07260000
+         index,                                                         07270000
+         length,                                                        07280000
+         min,                                                           07290000
+         null,                                                          07300000
+         ptrvalue,                                                      07310000
+         stg,                                                           07320000
+         substr                                                         07330000
+        )                    builtin;                                   07340000
+                                                                        07350000
+   %page;                                                               07360000
+   /*---------------------------------*/                                07370000
+   /* Program Entry                   */                                07380000
+   /*---------------------------------*/                                07390000
+   new_header = parse_header(header);                      /*20061127*/ 07400000
+   call ALLOC( 'ALLOC FI(INPUT) DA(' || filename || ') SHR' );          07401000
+                                                                        07410000
+   on endfile(INPUT) eof='1'b;                                          07420000
+                                                                        07440000
+   call parse_parm;                    /* Get destination info       */ 07450000
+                                                                        07450100
+   to_user = 'PDFSERV';                                                 07451000
+   to_node = 'LBDRSCS';                                                 07452000
+   /* 'to_user' and 'to_node' are plugged into the NETDATA file      */ 07452100
+   /* and appear in SYSPRINT output, but are not really use by       */ 07452200
+   /* Transmit.  The actual values are taken from the DEST           */ 07452300
+   /* parameter of the OUTPUT DD statement.  Unfortunately, I don't  */ 07452400
+   /* believe there is any way to retrieve this information.         */ 07452500
+                                                                        07453000
+   file_size = 32760;                  /* Dummy file size estimate   */ 07460000
+   /* This is an estimate of the file size in bytes.  We should      */ 07470000
+   /* compute some reasonable value for this.  For now just plug     */ 07480000
+   /* a constant.                                                    */ 07490000
+   dt = datetime();                    /* Timestamp                  */ 07500000
+   call sysinfo( addr(system_info) );  /* Get my system info         */ 07510000
+   phys_rec_size = 80;                 /* Output LRECL               */ 07520000
+   output_buffer = '';                 /* Clear first buffer         */ 07530000
+   /* We should get the output LRECL from the DD statement and       */ 07540000
+   /* allocate 'output_buffer' accordingly.                          */ 07550000
+   open file(SYSPRINT);                                                 07560000
+   put file(SYSPRINT) skip edit( 'LBDXMIT Version 1.0 ',                07570000
+                                 substr(dt,1,4), '-',                   07580000
+                                 substr(dt,5,2), '-',                   07590000
+                                 substr(dt,7,2), ' ',                   07600000
+                                 substr(dt,9,2), ':',                   07610000
+                                 substr(dt,11,2), ':',                  07620000
+                                 substr(dt,13,2) )(a);                  07630000
+   open file(INPUT)  input;                                             07640000
+   close file(input);                                                   07650000
+   /* This sux, but we need to open and close the input file in      */ 07660000
+   /* order to merge all the file attributes back into the JFCB      */ 07670000
+   /* before reading the JFCB.                                       */ 07680000
+   jfcbp = AJFCB(INPUT);               /* Get input dataset info     */ 07690000
+   dsname = trim(jfcbp->JFCBDSNM);                                      07710000
+   member = trim(jfcbp->JFCBELNM);                                      07720000
+   recfm  = jfcbp->JFCRECFM || '00'bx;                                  07740000
+   if substr(recfm,1,2)='01'b          /* RECFM=V?                   */ 07750000
+   then substr(recfm,9,8)='02'bx;      /* .. yes, indicate no hdrs   */ 07760000
+   record_length = jfcbp->JFCLRECL;    /* .. record length           */ 07770000
+   if substr(recfm,1,2)='01'b          /* RECFM V?                   */ 07780000
+   then record_length = record_length-4; /* .. yes, subtract L'VRL   */ 07790000
+                                                                        07800000
+   /* Print all control information.                                 */ 07810000
+   /* If you don't want it, code //SYSPRINT DD DUMMY in your JCL.    */ 07820000
+   put file(SYSPRINT) skip edit( 'Sending file ', dsname )(a);          07830000
+   if memberª=''                                                        07840000
+   then put file(SYSPRINT) edit( '(', member, ')' )(a);                 07850000
+   put file(SYSPRINT) edit( ' to ', trim(to_user), ' AT ',              07860000
+                            trim(to_node) )(a);                         07870000
+   put file(SYSPRINT) skip edit( 'RECFM=', HEX(addr(recfm),2), ', ',    07880000
+                                 'LRECL=', itod(record_length) )(a);    07890000
+   allocate buffer character(record_length);                            07900000
+   outp = addr(output_buffer);                                          07910000
+                                                                        07920000
+   open file(INPUT)  input,                                             07930000
+        file(OUTPUT) output;                                            07940000
+   call build_headers;                                                  07950000
+   call send_data(new_header);                                          07961000
+   call build_trailer;                                                  07970000
+                                                                        07980000
+   put file(SYSPRINT) skip edit( 'File sent successfully.' )(a);        07990000
+   put file(SYSPRINT) edit( 'Records in       ', itod(in_cnt),          08000000
+                            'Control Records  ', itod(ctl_cnt),         08010000
+                            'Data Records     ', itod(out_cnt) )        08020000
+                          (skip,a,a);                                   08030000
+   close file(INPUT), file(OUTPUT), file(SYSPRINT);                     08040000
+   return;                                                              08050000
+   %page;                                                               08060000
+                                                                        08070000
+   /*---------------------------------*/                                08080000
+   /* Build NETDATA Headers           */                                08090000
+   /* (No header exceeds 253 bytes)   */                                08100000
+   /*---------------------------------*/                                08110000
+   build_headers: proc;                                                 08120000
+     call build_inmr01;                /* Header record              */ 08130000
+     call build_inmr02;                /* File utility control       */ 08140000
+     call build_inmr03;                /* Data control               */ 08150000
+                                                                        08160000
+   /* INMR01: Header Record                                          */ 08170000
+   /*   Required: INMFNODE, INMFTIME, INMFUID,  INMLRECL,            */ 08180000
+   /*             INMTNODE, INMTUID   INMNUMF.                       */ 08190000
+   /*   Optional: INMFACK,  INMFVERS, INMUSERP.                      */ 08200000
+   build_inmr01: proc;                                                  08210000
+     /* Maximum-sized structure for INMR01 record                    */ 08220000
+     /* (used to compute maximum size of buffer)                     */ 08230000
+     dcl 1 inmr01_keys       unaligned based,                           08240000
+           5 inmr01_header,                                             08250000
+             10 n1_len       bit(8),                                    08260000
+             10 n1_flags     bit(8),                                    08270000
+             10 n1_name      char(6),                                   08280000
+           5 inmr01_ftime,                                              08290000
+             10 ft_key       char(2),                                   08300000
+             10 ft_count     fixed bin(15),                             08310000
+             10 ft_len       fixed bin(15),                             08320000
+             10 ft_val       char(8),                                   08330000
+           5 inmr01_fnode,                                              08340000
+             10 fn_key       char(2),                                   08350000
+             10 fn_count     fixed bin(15),                             08360000
+             10 fn_len       fixed bin(15),                             08370000
+             10 fn_val       char(8),                                   08380000
+           5 inmr01_fuser,                                              08390000
+             10 fu_key       char(2),                                   08400000
+             10 fu_count     fixed bin(15),                             08410000
+             10 fu_len       fixed bin(15),                             08420000
+             10 fu_val       char(8),                                   08430000
+           5 inmr01_tnode,                                              08440000
+             10 tn_key       char(2),                                   08450000
+             10 tn_count     fixed bin(15),                             08460000
+             10 tn_len       fixed bin(15),                             08470000
+             10 tn_val       char(8),                                   08480000
+           5 inmr01_tuser,                                              08490000
+             10 tu_key       char(2),                                   08500000
+             10 tu_count     fixed bin(15),                             08510000
+             10 tu_len       fixed bin(15),                             08520000
+             10 tu_val       char(8),                                   08530000
+           5 inmr01_numf,                                               08540000
+             10 nf_key       char(2),                                   08550000
+             10 nf_count     fixed bin(15),                             08560000
+             10 nf_len       fixed bin(15),                             08570000
+             10 nf_val       bit(8),                                    08580000
+           5 inmr01_lrecl,                                              08590000
+             10 rl_key       char(2),                                   08600000
+             10 rl_count     fixed bin(15),                             08610000
+             10 rl_len       fixed bin(15),                             08620000
+             10 rl_val       fixed bin(31),                             08630000
+           5 inmr01_end      char(0);  /* End of structure           */ 08640000
+     dcl   inmr01_buf        char( stg(null()->inmr01_keys) );          08650000
+     dcl   p                 ptr;                                       08660000
+     dcl   f                 bit(8);                                    08670000
+     dcl   l                 fixed bin(15);                             08680000
+                                                                        08690000
+     p = addr(inmr01_buf);             /* ->Starting address         */ 08700000
+     /* Initialize record header      */                                08710000
+     call mv(p,addr(zerob),stg(zerob));          /* Zero for length  */ 08720000
+     f = flags_first | flags_ctl | flags_last;   /* Seg. flags       */ 08730000
+     call mv(p,addr(f),stg(f));                                         08740000
+     call mv(p,addr(INMR01),length(INMR01));                            08750000
+                                                                        08760000
+     /*-----------------------------------------*/                      08770000
+     /* For each text unit move key (2 bytes)   */                      08780000
+     /* count (2 bytes), value-length (2 bytes) */                      08790000
+     /* and value (length varies).              */                      08800000
+     /* There are 'count' length-value pairs    */                      08810000
+     /* for each text unit.                     */                      08820000
+     /*-----------------------------------------*/                      08830000
+                                                                        08840000
+     call mv(p,addr(INMFTIME),length(INMFTIME)); /* Timestamp        */ 08850000
+     call mv(p,addr(one),stg(one));                                     08860000
+     l = length(dt);                                                    08870000
+     call mv(p,addr(l),stg(l));                                         08880000
+     call mv(p,addr(dt),l);                                             08890000
+                                                                        08900000
+     call mv(p,addr(INMFNODE),length(INMFNODE)); /* 'From' node      */ 08910000
+     call mv(p,addr(one),stg(one));                                     08920000
+     l = length(node_name);                                             08930000
+     call mv(p,addr(l),stg(l));                                         08940000
+     call mv(p,addr(node_name)+2,l);                                    08950000
+                                                                        08960000
+     call mv(p,addr(INMFUID),length(INMFUID));  /* 'From' userid    */  08970000
+     call mv(p,addr(one),stg(one));                                     08980000
+     l = length(job_name);                                              08990000
+     call mv(p,addr(l),stg(l));                                         09000000
+     call mv(p,addr(job_name)+2,l);                                     09010000
+                                                                        09020000
+     call mv(p,addr(INMTNODE),length(INMTNODE)); /* 'To' node        */ 09030000
+     call mv(p,addr(one),stg(one));                                     09040000
+     l = length(to_node);                                               09050000
+     call mv(p,addr(l),stg(l));                                         09060000
+     call mv(p,addr(to_node)+2,l);                                      09070000
+                                                                        09080000
+     call mv(p,addr(INMTUID),length(INMTUID));  /* 'To' userid      */  09090000
+     call mv(p,addr(one),stg(one));                                     09100000
+     l = length(to_user);                                               09110000
+     call mv(p,addr(l),stg(l));                                         09120000
+     call mv(p,addr(to_user)+2,l);                                      09130000
+                                                                        09140000
+     call mv(p,addr(INMNUMF),length(INMNUMF));  /* Number of files  */  09150000
+     call mv(p,addr(one),stg(one));                                     09160000
+     f = '01'bx;                                /* (always one)     */  09170000
+     l = stg(f);                                                        09180000
+     call mv(p,addr(l),stg(l));                                         09190000
+     call mv(p,addr(f),l);                                              09200000
+                                                                        09210000
+     call mv(p,addr(INMLRECL),length(INMLRECL));/* Input LRECL      */  09220000
+     call mv(p,addr(one),stg(one));                                     09230000
+     l = stg(phys_rec_size);                                            09240000
+     call mv(p,addr(l),stg(l));                                         09250000
+     call mv(p,addr(record_length),l);                                  09260000
+                                                                        09270000
+     l = p - addr(inmr01_buf);         /* Compute length of INMR01   */ 09280000
+     call sb(addr(inmr01_buf),l);      /* Set length (<=255)         */ 09290000
+     call move_to_buffer(addr(inmr01_buf),l);                           09300000
+     ctl_cnt = ctl_cnt+1;              /* Count this record          */ 09310000
+                                                                        09320000
+     end build_inmr01;                                                  09330000
+                                                                        09340000
+   /* INMR02: File Utility Control Record                            */ 09350000
+   /*   Required: INMDSORG, INMLRECL, INMRECFM, INMSIZE,             */ 09360000
+   /*             INMUTILN, INMDSNAM.                                */ 09370000
+   /*   Optional: INMBLKSZ, INMCREAT, INMDIR,   INMEXPDT,            */ 09380000
+   /*             INMFM,    INMLCHG,  INMLREF,  INMMEMBR,            */ 09390000
+   /*             INMUSERP.                                          */ 09400000
+   build_inmr02: proc;                                                  09410000
+     /* Maximum-sized structure for INMR02 record                    */ 09420000
+     /* (used to compute maximum size of buffer)                     */ 09430000
+     dcl 1 inmr02_keys       unaligned based,                           09440000
+           5 inmr02_header,                                             09450000
+             10 n2_len       bit(8),                                    09460000
+             10 n2_flags     bit(8),                                    09470000
+             10 n2_name      char(6),                                   09480000
+             10 n2_fnum      fixed bin(31),                             09490000
+           5 inmr02_dsorg,                                              09500000
+             10 do_key       char(2),                                   09510000
+             10 do_count     fixed bin(15),                             09520000
+             10 do_len       fixed bin(15),                             09530000
+             10 do_val       char(2),                                   09540000
+           5 inmr02_lrecl,                                              09550000
+             10 lr_key       char(2),                                   09560000
+             10 lr_count     fixed bin(15),                             09570000
+             10 lr_len       fixed bin(15),                             09580000
+             10 lr_val       char(4),                                   09590000
+           5 inmr02_recfm,                                              09600000
+             10 rf_key       char(2),                                   09610000
+             10 rf_count     fixed bin(15),                             09620000
+             10 rf_len       fixed bin(15),                             09630000
+             10 rf_val       char(2),                                   09640000
+           5 inmr02_size,                                               09650000
+             10 sz_key       char(2),                                   09660000
+             10 sz_count     fixed bin(15),                             09670000
+             10 sz_len       fixed bin(15),                             09680000
+             10 sz_val       fixed bin(31),                             09690000
+           5 inmr02_utiln,                                              09700000
+             10 ut_key       char(2),                                   09710000
+             10 ut_count     fixed bin(15),                             09720000
+             10 ut_len       fixed bin(15),                             09730000
+             10 ut_val       char(8),                                   09740000
+           5 inmr02_dsnam,                                              09750000
+             10 ds_key       char(2),                                   09760000
+             10 ds_count     fixed bin(15),                             09770000
+             10 ds_len       fixed bin(15),                             09780000
+             10 ds_val       char(66),                                  09790000
+             /* Reserve space for the *parsed* dsname.               */ 09800000
+             /* Each component of the name (separated by '.')        */ 09810000
+             /* generates a length-value pair.  In the worst case,   */ 09820000
+             /* 22 '.' will be replaced by 2-byte lengths, expanding */ 09830000
+             /* a 44-byte dsname 'A.B.C...' to 44+22 bytes.          */ 09840000
+           5 inmr02_end      char(0);  /* End of structure           */ 09850000
+     dcl   inmr02_buf        char( stg(null()->inmr02_keys) );          09860000
+     dcl  (p,q)              ptr;                                       09870000
+     dcl   f                 bit(8);                                    09880000
+     dcl   c8                char(8);                                   09890000
+     dcl   l                 fixed bin(15);                             09900000
+     dcl  (i,n)              fixed bin(15);                             09910000
+     dcl   file_num          fixed bin(31)       init(1);               09920000
+                                                                        09930000
+     p = addr(inmr02_buf);             /* ->Starting address         */ 09940000
+     /* Initialize record header      */                                09950000
+     /* INMR02 has file sequence num  */                                09960000
+     /* after record id.              */                                09970000
+     call mv(p,addr(zerob),stg(zerob));          /* Zero for length  */ 09980000
+     f = flags_first | flags_ctl | flags_last;   /* Seg. flags       */ 09990000
+     call mv(p,addr(f),stg(f));                                         10000000
+     call mv(p,addr(INMR02),length(INMR02));     /* Ident            */ 10010000
+     call mv(p,addr(file_num),stg(file_num));    /* File seq. num.   */ 10020000
+                                                                        10030000
+     /* For each text unit move key, count, length, value            */ 10040000
+     call mv(p,addr(INMDSORG),length(INMDSORG)); /* DSORG            */ 10050000
+     call mv(p,addr(one),stg(one));                                     10060000
+     l = stg(null()->do_val);                                           10070000
+     call mv(p,addr(l),stg(l));                                         10080000
+     c8 = '4000'x;                               /* Always sequential*/ 10090000
+     call mv(p,addr(c8),l);                                             10100000
+                                                                        10110000
+     call mv(p,addr(INMLRECL),length(INMLRECL)); /* LRECL            */ 10120000
+     call mv(p,addr(one),stg(one));                                     10130000
+     l = stg(record_length);                                            10140000
+     call mv(p,addr(l),stg(l));                                         10150000
+     call mv(p,addr(record_length),l);                                  10160000
+                                                                        10170000
+     call mv(p,addr(INMRECFM),length(INMRECFM)); /* RECFM            */ 10180000
+     call mv(p,addr(one),stg(one));                                     10190000
+     l = stg(recfm);                                                    10200000
+     call mv(p,addr(l),stg(l));                                         10210000
+     call mv(p,addr(recfm),l);                                          10220000
+                                                                        10230000
+     call mv(p,addr(INMSIZE),length(INMSIZE));   /* File size est.   */ 10240000
+     call mv(p,addr(one),stg(one));                                     10250000
+     l = stg(file_size);                                                10260000
+     call mv(p,addr(l),stg(l));                                         10270000
+     call mv(p,addr(file_size),l);                                      10280000
+                                                                        10290000
+     call mv(p,addr(INMUTILN),length(INMUTILN)); /* Utility operation*/ 10300000
+     call mv(p,addr(one),stg(one));                                     10310000
+     l = length(INMCOPY);                                               10320000
+     call mv(p,addr(l),stg(l));                                         10330000
+     call mv(p,addr(INMCOPY),l);                                        10340000
+                                                                        10350000
+     call mv(p,addr(INMDSNAM),length(INMDSNAM)); /* DSNAME           */ 10360000
+     n = field_count( addr(dsname) );                                   10370000
+     call mv(p,addr(n),stg(n));                                         10380000
+     /* Separate dsname into fields: a.b.c is three fields.          */ 10390000
+     q = addr(dsname)+2;                         /* ->Start          */ 10400000
+     do while( n>0 );                                                   10410000
+       i = field_length(q,             /* Get next field length      */ 10420000
+             addr(dsname)+2+length(dsname) );                           10430000
+       call mv(p,addr(i),stg(i));      /* Move length to record      */ 10440000
+       call mv(p,q,i);                 /* Move text to record        */ 10450000
+       q = q+i+1;                      /* Bump ptr                   */ 10460000
+       n = n-1;                        /* Decrement field count      */ 10470000
+       end; /* do while */                                              10480000
+                                                                        10490000
+     l = p - addr(inmr02_buf);         /* Compute length of INMR02   */ 10500000
+     call sb(addr(inmr02_buf),l);      /* Set length (<=255)         */ 10510000
+     call move_to_buffer(addr(inmr02_buf),l);                           10520000
+     ctl_cnt = ctl_cnt+1;              /* Count this record          */ 10530000
+                                                                        10540000
+     end build_inmr02;                                                  10550000
+                                                                        10560000
+   /* INMR03: Data Control Record                                    */ 10570000
+   /*   Required: INMDSORG, INMLRECL, INMRECFM, INMSIZE.             */ 10580000
+   build_inmr03: proc;                                                  10590000
+     /* Maximum-sized structure for INMR03 record                    */ 10600000
+     /* (used to compute maximum size of buffer)                     */ 10610000
+     dcl 1 inmr03_keys       unaligned based,                           10620000
+           5 inmr03_header,                                             10630000
+             10 n3_len       bit(8),                                    10640000
+             10 n3_flags     bit(8),                                    10650000
+             10 n3_name      char(6),                                   10660000
+           5 inmr03_dsorg,                                              10670000
+             10 do_key       char(2),                                   10680000
+             10 do_count     fixed bin(15),                             10690000
+             10 do_len       fixed bin(15),                             10700000
+             10 do_val       char(2),                                   10710000
+           5 inmr03_lrecl,                                              10720000
+             10 lr_key       char(2),                                   10730000
+             10 lr_count     fixed bin(15),                             10740000
+             10 lr_len       fixed bin(15),                             10750000
+             10 lr_val       char(4),                                   10760000
+           5 inmr03_recfm,                                              10770000
+             10 rf_key       char(2),                                   10780000
+             10 rf_count     fixed bin(15),                             10790000
+             10 rf_len       fixed bin(15),                             10800000
+             10 rf_val       char(2),                                   10810000
+           5 inmr03_size,                                               10820000
+             10 sz_key       char(2),                                   10830000
+             10 sz_count     fixed bin(15),                             10840000
+             10 sz_len       fixed bin(15),                             10850000
+             10 sz_val       fixed bin(31),                             10860000
+           5 inmr03_end      char(0);  /* End of structure           */ 10870000
+     dcl   inmr03_buf        char( stg(null()->inmr03_keys) );          10880000
+     dcl   p                 ptr;                                       10890000
+     dcl   f                 bit(8);                                    10900000
+     dcl   c8                char(8);                                   10910000
+     dcl   l                 fixed bin(15);                             10920000
+                                                                        10930000
+     p = addr(inmr03_buf);             /* ->Starting address         */ 10940000
+     /* Initialize record header      */                                10950000
+     call mv(p,addr(zerob),stg(zerob));          /* Zero for length  */ 10960000
+     f = flags_first | flags_ctl | flags_last;   /* Seg. flags       */ 10970000
+     call mv(p,addr(f),stg(f));                                         10980000
+     call mv(p,addr(INMR03),length(INMR03));                            10990000
+                                                                        11000000
+     /* For each text unit move key, count, length, value            */ 11010000
+     call mv(p,addr(INMDSORG),length(INMDSORG)); /* DSORG            */ 11020000
+     call mv(p,addr(one),stg(one));                                     11030000
+     l = stg(null()->do_val);                                           11040000
+     call mv(p,addr(l),stg(l));                                         11050000
+     c8 = '4000'x;                               /* Always sequential*/ 11060000
+     call mv(p,addr(c8),l);                                             11070000
+                                                                        11080000
+     call mv(p,addr(INMLRECL),length(INMLRECL)); /* LRECL            */ 11090000
+     call mv(p,addr(one),stg(one));                                     11100000
+     l = stg(record_length);                                            11110000
+     call mv(p,addr(l),stg(l));                                         11120000
+     call mv(p,addr(record_length),l);                                  11130000
+                                                                        11140000
+     call mv(p,addr(INMRECFM),length(INMRECFM)); /* RECFM            */ 11150000
+     call mv(p,addr(one),stg(one));                                     11160000
+     l = stg(recfm);                                                    11170000
+     call mv(p,addr(l),stg(l));                                         11180000
+     call mv(p,addr(recfm),l);                                          11190000
+                                                                        11200000
+     call mv(p,addr(INMSIZE),length(INMSIZE));   /* File size est.   */ 11210000
+     call mv(p,addr(one),stg(one));                                     11220000
+     l = stg(file_size);                                                11230000
+     call mv(p,addr(l),stg(l));                                         11240000
+     call mv(p,addr(file_size),l);                                      11250000
+                                                                        11260000
+     l = p - addr(inmr03_buf);         /* Compute length of INMR03   */ 11270000
+     call sb(addr(inmr03_buf),l);      /* Set length (<=255)         */ 11280000
+     call move_to_buffer(addr(inmr03_buf),l);                           11290000
+     ctl_cnt = ctl_cnt+1;              /* Count this record          */ 11300000
+                                                                        11310000
+     end build_inmr03;                                                  11320000
+                                                                        11330000
+     end build_headers;                                                 11340000
+                                                                        11350000
+   /*---------------------------------*/                                11360000
+   /* Build NETDATA Trailers          */                                11370000
+   /*---------------------------------*/                                11380000
+   build_trailer: proc;                                                 11390000
+     /* Maximum-sized structure for INMR06 record                    */ 11400000
+     /* (used to compute maximum size of buffer)                     */ 11410000
+     dcl 1 inmr06_keys       unaligned based,                           11420000
+           5 inmr06_header,                                             11430000
+             10 n6_len       bit(8),                                    11440000
+             10 n6_flags     bit(8),                                    11450000
+             10 n6_name      char(6),                                   11460000
+           5 inmr06_end      char(0);  /* End of structure           */ 11470000
+     dcl   inmr06_buf        char( stg(null()->inmr06_keys) );          11480000
+     dcl   p                 ptr;                                       11490000
+     dcl   f                 bit(8);                                    11500000
+     dcl   l                 fixed bin(15);                             11510000
+                                                                        11520000
+     p = addr(inmr06_buf);             /* ->Starting address         */ 11530000
+     /* Initialize record header      */                                11540000
+     call mv(p,addr(zerob),stg(zerob));          /* Zero for length  */ 11550000
+     f = flags_first | flags_ctl | flags_last;   /* Seg. flags       */ 11560000
+     call mv(p,addr(f),stg(f));                                         11570000
+     call mv(p,addr(INMR06),length(INMR06));                            11580000
+                                                                        11590000
+     /* No text units for INMR06      */                                11600000
+                                                                        11610000
+     l = p - addr(inmr06_buf);         /* Compute length of INMR06   */ 11620000
+     call sb(addr(inmr06_buf),l);      /* Set length (<=255)         */ 11630000
+     call move_to_buffer(addr(inmr06_buf),l);                           11640000
+     ctl_cnt = ctl_cnt+1;              /* Count this record          */ 11650000
+                                                                        11660000
+     /* Make sure to write last record */                               11670000
+     if outpª=addr(output_buffer) then do;                              11680000
+       write file(OUTPUT) from(output_buffer);                          11690000
+       out_cnt = out_cnt+1;                                             11700000
+       end;                                                             11710000
+                                                                        11720000
+     end build_trailer;                                                 11730000
+                                                                        11740000
+   /*---------------------------------*/                                11750000
+   /* Process Input Data              */                                11760000
+   /*---------------------------------*/                                11770000
+   send_data: proc(header);                                             11780000
+     dcl header              char(80) varying;                          11790000
+     dcl rec_size            fixed bin(31);                             11791000
+     buffer = header;                  /* Send LBD header            */ 11792000
+     in_cnt = in_cnt-1;                /* Don't count it             */ 11793000
+     do while( ªeof );                                                  11810000
+       in_cnt = in_cnt+1;                                               11820000
+       rec_size = length(buffer);      /* Get size of record         */ 11830000
+       /* NOTE: There is no compression.  We could at least drop     */ 11840000
+       /*       trailing blanks and/or do RLE compression.           */ 11850000
+       call process_input_record;                                       11860000
+       read file(INPUT) into(buffer);                                   11870000
+       end; /* do while */                                              11880000
+                                                                        11890000
+   process_input_record: procedure;                                     11900000
+     dcl   f                 bit(8);                                    11910000
+     dcl   b                 bit(8);                                    11920000
+     dcl   n                 fixed bin(31);                             11930000
+     dcl   l                 fixed bin(15);                             11940000
+     dcl   p                 ptr;                                       11950000
+                                                                        11960000
+     n = rec_size;                                                      11970000
+     f = flags_first;                  /* Set 'start_of_record'      */ 11980000
+     p = addr(buffer)+2;               /* ->Data                     */ 11990000
+     do until( n=0 );                                                   12000000
+       if n<=253 then f = f | flags_last; /* Set 'last seg' flag     */ 12010000
+       l = min(n,253);                 /* Get segment length         */ 12020000
+       n = n-l;                        /* Decrement size rem         */ 12030000
+       call sb( addr(b), l+2 );        /* Generate count byte        */ 12040000
+       call move_to_buffer(addr(b),1); /* Move count byte            */ 12050000
+       call move_to_buffer(addr(f),1); /* Move flag byte             */ 12060000
+       call move_to_buffer(p,l);       /* Move data segment          */ 12070000
+       f = f & ªflags_first;           /* Reset 'first seg' bit      */ 12080000
+       end; /* do until */                                              12090000
+     end process_input_record;                                          12100000
+                                                                        12110000
+     end send_data;                                                     12120000
+                                                                        12130000
+   /*---------------------------------*/                                12140000
+   /* Move record to output buffer    */                                12150000
+   /*---------------------------------*/                                12160000
+   move_to_buffer: proc(pf,len);                                        12170000
+     dcl  pf                 ptr;                                       12180000
+     dcl  len                fixed bin(31);                             12190000
+     dcl  avail              fixed bin(31);                             12200000
+     dcl  l                  fixed bin(31);                             12210000
+     dcl  b                  bit(8)    based;                           12220000
+     avail = length(output_buffer) -   /* Space left in current buf  */ 12230000
+             (outp-addr(output_buffer));                                12240000
+     do while(len>0);                                                   12250000
+       l = min(len,avail);             /* Length to move             */ 12260000
+       substr(outp->s,1,l) = substr(pf->s,1,l);                         12270000
+       len   = len-l;                  /* Subtract length moved      */ 12280000
+       pf   = pf+l;                    /* Update 'from' address      */ 12290000
+       outp = outp+l;                  /* Update 'to' address        */ 12300000
+       if len>0 then do;               /* More data to move?         */ 12310000
+         write file(OUTPUT) from(output_buffer);                        12320000
+         out_cnt = out_cnt+1;                                           12330000
+         output_buffer = '';                                            12340000
+         outp  = addr(output_buffer);  /* Reset output pointer       */ 12350000
+         avail = length(output_buffer);                                 12360000
+         end; /* len>0 */                                               12370000
+       end; /* do while */                                              12380000
+     end move_to_buffer;                                                12390000
+                                                                        12400000
+   /*---------------------------------*/                                12410000
+   /* Data Mover (no length check)    */                                12420000
+   /*---------------------------------*/                                12430000
+   mv: proc(pt,pf,len);                                                 12440000
+     dcl (pt,pf)             ptr;                                       12450000
+     dcl  len                fixed bin(31);                             12460000
+     substr(pt->s,1,len) = substr(pf->s,1,len);                         12470000
+     pt = pt+len;                      /* Update 'to' address        */ 12480000
+     end mv;                                                            12490000
+                                                                        12500000
+   /*---------------------------------*/                                12510000
+   /* Set a bit length value          */                                12520000
+   /*---------------------------------*/                                12530000
+   sb: proc(pt,len);                                                    12540000
+     dcl  pt                 ptr;                                       12550000
+     dcl  len                fixed bin(31);                             12560000
+     dcl  bit31              bit(31);                                   12570000
+     dcl  b                  bit(8)    based;                           12580000
+     bit31 = len;                      /* Convert len to bit string  */ 12590000
+     pt->b = substr(bit31,24,8);       /* Move low-order 8 bits      */ 12600000
+     end sb;                                                            12610000
+                                                                        12620000
+   /*---------------------------------*/                                12630000
+   /* Trim trailing blanks            */                                12640000
+   /*---------------------------------*/                                12650000
+   trim: proc(cs) returns( char(256) varying );                         12660000
+     dcl  cs                 char(*)   varying;                         12670000
+     dcl  i                  fixed bin(31);                             12680000
+     do i = length(cs) to 1 by -1;                                      12690000
+       if substr(cs,i,1)ª=' ' then leave;                               12700000
+       end;                                                             12710000
+     if i<=0  then return('');         /* Null string                */ 12720000
+     if i>256 then return( '***' );                                     12730000
+     return( substr(cs,1,i) );                                          12740000
+     end trim;                                                          12750000
+                                                                        12760000
+   /*----------------------------------------------------------------*/ 12770000
+   /*    Parse dataset names                                         */ 12780000
+   /*----------------------------------------------------------------*/ 12790000
+   field_count: proc(pdsn) returns( fixed bin(15) );                    12800000
+     dcl pdsn                ptr;                                       12810000
+     dcl dsn                 char(44)  varying   based(pdsn);           12820000
+     dcl c                   fixed bin(15)       init(0);               12830000
+     dcl (p,q)               ptr;                                       12840000
+     dcl x                   char(1)             based;                 12850000
+                                                                        12860000
+     p = pdsn+2;                       /* ->Start of dsname          */ 12870000
+     q = p + length(dsn);              /* ->Last char+1              */ 12880000
+     do while( p<q );                                                   12890000
+       if p->x = '.' then c=c+1;                                        12900000
+       p = p+1;                                                         12910000
+       end; /* do while */                                              12920000
+     return(c+1);                      /* Field count is num '.' + 1 */ 12930000
+     end field_count;                                                   12940000
+                                                                        12950000
+   field_length: proc(pf,q) returns( fixed bin(15) );                   12960000
+     dcl (p,q)               ptr;                                       12970000
+     dcl pf                  ptr;                                       12980000
+     dcl x                   char(1)             based;                 12990000
+     dcl l                   fixed bin(15)       init(0);               13000000
+                                                                        13010000
+     p = pf;                                                            13020000
+     do while( p<q );                                                   13030000
+       if p->x = '.' then leave;                                        13040000
+       l = l+1;                                                         13050000
+       p = p+1;                                                         13060000
+       end; /* do while */                                              13070000
+     return(l);                                                         13080000
+     end field_length;                                                  13090000
+                                                                        13100000
+   /*----------------------------------------------------------------*/ 13110000
+   /*    Parse Parm to get Destination Info                          */ 13120000
+   /*    Valid Destid formats for this program are:                  */ 13130000
+   /*      nodename.userid                                           */ 13140000
+   /*      nodename:userid                                           */ 13150000
+   /*      nodename/userid                                           */ 13160000
+   /*      nodename(userid)                                          */ 13170000
+   /*----------------------------------------------------------------*/ 13180000
+   parse_parm: proc;                                                    13190000
+     end parse_parm;                                                    13200000
+                                                                        13201000
+   /*----------------------------------------------------------------*/ 13202000
+   /*    Build new header                                            */ 13203000
+   /*----------------------------------------------------------------*/ 13209000
+   parse_header: proc(h) returns( char(80) varying );                   13209100
+     dcl h                   char(80)  varying;                         13209200
+     dcl hdr                 char(80)  varying;                         13209300
+     dcl i                   fixed bin(15);                             13209400
+     if substr(h,1,5)='$$AFP' then do;                     /*20100315*/ 13209600
+       put skip edit( 'New header is ', h )(a);            /*20100315*/ 13209700
+       return(h);            /* Use header as-is             20100315*/ 13210000
+       end;                                                /*20100315*/ 13210100
+     hdr = h;                                                           13210200
+     i = index(hdr,',');     /* Skip '$$DCFLBD'                      */ 13210300
+     if i>0 then hdr = substr(hdr,i+1);                                 13210400
+     i = index(hdr,',');     /* Skip 'INLINE'                        */ 13210500
+     if i>0 then hdr = substr(hdr,i+1);                                 13210600
+     hdr = '$$AFP,INLINE,' || hdr;                         /*20100315*/ 13210700
+     put skip edit( 'New header is ', hdr )(a);                         13210800
+     return(hdr);                                                       13210900
+     end parse_header;                                                  13211000
+                                                                        13212000
+   /*----------------------------------------------------------------*/ 13220000
+   /*    Access System Information from SMF Type 30 Record           */ 13230000
+   /*----------------------------------------------------------------*/ 13240000
+   sysinfo: proc(pOut);                                                 13250000
+     dcl pOut                ptr;      /* ->Output Area              */ 13260000
+     dcl 1 output_info       like system_info based(pOut);              13270000
+     dcl pTcb                ptr;      /* ->TCB                      */ 13280000
+     dcl (p,q)               ptr;                                       13290000
+     dcl pb                  ptr                 based;                 13300000
+                                                                        13310000
+     p = ptrvalue(16);                 /* CVT address     L R1,16    */ 13320000
+     p = p->pb;                        /* Addr(PSATNEW)   L R1,0(,R1)*/ 13330000
+     p = p->pb;                        /* PSATNEW         L R1,0(,R1)*/ 13340000
+     pTcb = p->pb;                     /* Addr(CURR_TCB)             */ 13350000
+     p = pTcb+'A4'bx;                  /*                            */ 13360000
+     p = p->pb;                        /* Addr(TCT)                  */ 13370000
+     p = p+'8C'bx;                     /* Addr(TCTT30J)              */ 13380000
+     p = p->pb;                        /* TCTT30J                    */ 13390000
+     p = p+8;                          /* Addr(SMF30 Record)         */ 13400000
+     q = p+4;                                                           13410000
+     node_name = trim(q->SMF30SID);    /* Get system id              */ 13420000
+     q = p+q->SMF30IOF;                /* Addr(Ident Sect)           */ 13430000
+     job_name  = trim(q->SMF30JBN);    /* Get job name               */ 13440000
+                                                                        13450000
+     end sysinfo;                                                       13460000
+                                                                        13470000
+   %include(hex);                                                       13480000
+   %include(itod);                                                      13490000
+   dcl   smfp                ptr;                                       13500000
+   %include(smf30);                                                     13510000
+   %include(iefjfcbn);                                                  13520000
+                                                                        13530000
+   end LBDXMIT;                                                         13540000
+                                                                        13541000
+   END SCRPDF;                                                          13542000
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 13570000
+//LKED.SYSLIB DD                                                        13580000
+//          DD   DSN=FLASS.PF.LOAD,DISP=SHR                             13590000
+//          DD   DSN=SYSTEMS.LINKLIB,DISP=SHR                           13600000
+//LKED.LINKLIB DD DSN=SYS1.LINKLIB,DISP=SHR                             13610000
+//LKED.LPALIB DD DSN=SYS1.LPALIB,DISP=SHR                               13620000
+//LKED.SYSLMOD DD DSN=SYSTEMS.AUTHLIB,DISP=SHR                          13630000
+//*LKED.SYSLMOD  DD DSN=SYSTEMS.LINKLIB,DISP=SHR                        13640000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  13650000
+//LKED.SYSIN DD  *                                                      13660000
+ MODE AMODE(31),RMODE(24)                                               13670000
+ INCLUDE LINKLIB(IKJTSOEV)                                              13680000
+ INCLUDE LPALIB(IKJEFTSR)                                               13690000
+ NAME SCRPDF1(R)                                                        13710000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 13720000

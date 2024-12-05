@@ -1,0 +1,337 @@
+//FLASSM   JOB  (),'METAFONT',CLASS=J,MSGCLASS=X,                       00001000
+//         NOTIFY=$                                                     00002000
+//********************************************************************* 00003000
+//*                PL/I COMPILE AND LINK                              * 00004000
+//********************************************************************* 00005000
+// EXEC PLIXCL,                                                         00006000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00007000
+//   PARM.LKED='LIST,MAP,XREF'                                          00008000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00009000
+//PLI.SYSLIB   DD DSN=FLASS.PF.PLIMAC,DISP=SHR                          00009100
+//PLI.SYSIN    DD *                                                     00009200
+ /*      METAFONT -- Metacode Font Dump                              */ 00009307
+ /********************************************************************/ 00010200
+ /*                                                                  */ 00011000
+ /* Program id:    METAFONT                                          */ 00011100
+ /* Author:        Peter Flass -- NYS LBDC                           */ 00011200
+ /*                Jan, 2000                                         */ 00011300
+ /* Function:      List Xerox Metacode font information              */ 00011400
+ /* Modifications:                                                   */ 00011500
+ /*                                                                  */ 00011600
+ /********************************************************************/ 00012000
+                                                                        00020000
+ METAFONT: proc(parm) options(main);                                    00030000
+   dcl   parm                char(100) varying;                         00030100
+   dcl   FONT                record input;                              00031000
+   dcl   SYSPRINT            print;                                     00032000
+   dcl   METRICS             print;                                     00032102
+   dcl   eof                 bit(1)              init( '0'b );          00032803
+   dcl   block               fixed dec(5)        init(0);               00032903
+   dcl   fname               char(6)   varying;                         00033003
+   dcl   fid                 char(10);                                  00033103
+   dcl   i                   fixed bin(15);                             00033203
+   dcl   highest_char        fixed bin(15);                             00033303
+   dcl   p                   ptr;                                       00033503
+   dcl   w                   fixed bin(15)       based;                 00033603
+   dcl   rec_cnt             fixed bin(15)       init(0);               00033703
+   dcl   font_table     (400)char(128);                                 00033806
+   dcl   fx                  ptr;                                       00034007
+   dcl   fp                  ptr;                                       00034107
+   dcl 1 font_block          based(fp),                                 00034207
+         5 font_rec1         char(128),                                 00034307
+         5 font_rec2         char(128),                                 00034407
+         5 font_recx         char(0);                                   00034507
+                                                                        00034603
+   %include builtins;                                                   00034703
+                                                                        00034803
+   on endfile(FONT) eof='1'b;                                           00034903
+                                                                        00035003
+   open file(FONT)     input,                                           00035103
+        file(METRICS)  output,                                          00035203
+        file(SYSPRINT) output;                                          00035303
+                                                                        00035403
+   /* Read font file formatted as 80-byte records into storage    */    00035503
+   do while(ªeof);                                                      00035603
+     rec_cnt = rec_cnt+1;                                               00035703
+     if rec_cnt>hbound(font_table,1) then do;                           00035803
+       put skip edit('Font too large to process')(a);                   00035903
+       stop;                                                            00036003
+       end;                                                             00036103
+     read file(FONT) into(font_table(rec_cnt));                         00036203
+     end; /* do while */                                                00036303
+   fx = addr(font_table(rec_cnt)); /* End address */                    00036406
+   rec_cnt = rec_cnt-1;                                                 00036503
+   put skip edit( rec_cnt*128,                                          00036603
+                  ' bytes of font data read')(p'zzzzz9',a);             00036703
+                                                                        00036803
+   /* Process the tape file header (the first 128 bytes)          */    00036903
+   fp = addr(font_table(1));                                            00037003
+   fname = substr(font_rec1,19,6);  /* Filename                   */    00037103
+   i = index(fname,'20'x);                         /* '20'x = ' ' */    00037203
+   if i>1 then fname=substr(fname,1,i-1);                               00037303
+   fid = fname || '2E'x || substr(font_rec1,28,3); /* '2E'x = '.' */    00037403
+   fid = translate(fid,EBCDIC);                                         00037503
+   fp = addr(font_rec2);                                                00037603
+   p = addr(font_rec1) + 16;                                            00037706
+   highest_char = swapbytes( p->w );                                    00037806
+   put file(METRICS) skip edit('Highest character in font is ',         00037906
+                                highest_char )(a,p'zzz9');              00038006
+                                                                        00038103
+   /* Octal dump of font file                                     */    00038203
+   do while( fp<fx );                                                   00038303
+     block = block+1;                                                   00038403
+     call octal_dump( (fp) );                                           00038506
+     fp = fp+512;                                                       00038807
+     end; /* do while */                                                00038903
+                                                                        00039003
+   /* Dump FSTs                                                   */    00039103
+   fp = addr(font_table(1)); /* -> Label     */                         00039203
+   fp = fp+128;              /* -> Header    */                         00039307
+   call print_widths( (fp) );                                           00039406
+   fp = addr(font_table(1)); /* -> Label     */                         00039507
+   fp = fp+640;              /* -> First FST */                         00039707
+   call print_fst( (fp) );                                              00039806
+                                                                        00039903
+   close file(FONT),                                                    00040003
+         file(METRICS),                                                 00040103
+         file(SYSPRINT);                                                00040203
+   return;                                                              00040303
+                                                                        00040403
+ %page;                                                                 00040503
+ /*------------------------------------------------------------------*/ 00040603
+ /* Octal dump a font block in Xerox dump format                     */ 00040703
+ /*------------------------------------------------------------------*/ 00040803
+ octal_dump: proc(fp);                                                  00040906
+   dcl   fp                  ptr;                                       00041006
+   dcl   p                   ptr;                                       00041106
+   dcl   i                   fixed bin(15);                             00041206
+   dcl   line                char(120)           init(' ');             00041306
+                                                                        00041406
+   put file(SYSPRINT) skip edit( ' BLK No. = ', block,                  00041506
+                                 ', BLK Size = 512 Bytes',              00041606
+                                 ', FID = ', fid )                      00041706
+                               (a,p'zzzzz9',a,a,a);                     00041806
+   p = fp;                                                              00041906
+   put file(SYSPRINT) skip;                                             00042006
+   do i=0 to 511 by 16;                                                 00042106
+     call format_line;                                                  00042206
+     put file(SYSPRINT) skip edit(line)(a);                             00042306
+     line=' ';                                                          00042406
+     end; /* do i */                                                    00042506
+   put file(SYSPRINT) skip;                                             00042606
+                                                                        00042706
+   /* Format 16 bytes of octal data                                  */ 00042806
+ format_line: proc;                                                     00042906
+     dcl j                   fixed bin(15);                             00043006
+     dcl w                   fixed bin(15)       based;                 00043106
+     dcl z                   fixed bin(15);                             00043206
+     dcl c                (2)char(1)             based;                 00043306
+     substr(line,074,1)='!';                                            00043406
+     substr(line,099,1)='!';                                            00043506
+     substr(line,116,1)='!';                                            00043606
+     substr(line,1,6)=OCT(i);                                           00043706
+     do j=0 to 15 by 2;                                                 00043806
+       z = swapbytes(p->w);                                             00043906
+       substr(line,9+j*4,6) = OCT(z);       /* Format octal word     */ 00044006
+       substr(line,75+floor(j/2)*3,3)  =    /* RAD50 characters      */ 00044106
+         RAD50(p->w);                                                   00044206
+       substr(line,100+j,1)  =              /* ASCII characters      */ 00044306
+         translate( p->c(1), EBCDIC );                                  00044406
+       substr(line,101+j,1)  =                                          00044506
+         translate( p->c(2), EBCDIC );                                  00044606
+       p=p+2;                                                           00044707
+       end; /* do j */                                                  00044806
+     end format_line;                                                   00044906
+                                                                        00045006
+   end octal_dump;                                                      00045106
+                                                                        00045206
+ %page;                                                                 00045306
+ /*------------------------------------------------------------------*/ 00045406
+ /* Print Font width tables                                          */ 00045506
+ /*------------------------------------------------------------------*/ 00045606
+ print_widths: proc(fp);                                                00045706
+   dcl   fp                  ptr;                                       00045806
+   dcl   i                   fixed bin(15);                             00045906
+   dcl   p                   ptr;                                       00046006
+   dcl   b                   char(1) based(p);                          00046106
+   dcl   c                   char(4);                                   00046503
+   dcl   w                   fixed bin(15);                             00046704
+   dcl   x                (2)char(1) based;                             00046804
+                                                                        00046903
+   p = fp+256; /* -> Width table in header */                           00047004
+   do i=0 to highest_char;                                              00047103
+     c = HEX( addr(i), 2 );                                             00047303
+     w = 0;                                                             00047404
+     addr(w)->x(2) = b;                                                 00047504
+     put file(METRICS) skip                                             00047703
+         edit(substr(c,3,2),' ('||substr(EBCDIC,i+1,1)||') ', w)        00047804
+             (a,a,p'-----9');                                           00048004
+     p = p+1;                                                           00048104
+     end; /* do i */                                                    00048203
+   put file(METRICS) page;                                              00048305
+                                                                        00048403
+   end print_widths;                                                    00048504
+                                                                        00048604
+ %page;                                                                 00048704
+ /*------------------------------------------------------------------*/ 00048804
+ /* Print FST entries                                                */ 00048904
+ /*------------------------------------------------------------------*/ 00049004
+ print_fst: proc(fp);                                                   00049104
+   dcl   fp                  ptr;                                       00049204
+   dcl   i                   fixed bin(15);                             00049304
+   dcl   p                   ptr;                                       00049404
+   dcl 1 fst_ent             unaligned based(p),                        00049504
+         5 fsa               fixed bin(15),                             00049604
+         5 bmo               fixed bin(15),                             00049704
+         5 x_y               fixed bin(15),                             00049804
+         5 fss               fixed bin(15),                             00049904
+         5 next_fst          char(0);                                   00050004
+   dcl  (x,y)                fixed bin(15);                             00050104
+   dcl   c                   char(4);                                   00050204
+   dcl   esc                 fixed bin(15);                             00050304
+   dcl   adj                 fixed bin(15);                             00050408
+                                                                        00050508
+   p = fp;                                                              00050608
+   do i=0 to highest_char;                                              00050708
+     c = HEX( addr(i), 2 );                                             00050808
+     y = getxy(p->x_y,2);                                               00050908
+     x = getxy(p->x_y,1);                                               00051008
+     x = (-x) * 8;                                                      00051104
+     y = -y;                                                            00051204
+     esc = swapbytes(p->fss);                                           00051304
+     adj = swapbytes(p->fsa);                                           00051408
+     put file(METRICS) skip                                             00051508
+         edit(substr(c,3,2),' ('||substr(EBCDIC,i+1,1)||') ',           00051608
+              x,' dots,',y,' scans,',' esc=',esc,', adj=',adj)          00051708
+             (a,a,p'-----9',a,p'-----9',a,a,p'-----9',a,p'-----9');     00051808
+     p = addr(p->next_fst);                                             00051908
+     end; /* do i */                                                    00052008
+                                                                        00052108
+   end print_fst;                                                       00052208
+ %page;                                                                 00052308
+                                                                        00052408
+   /* Extract byte value from a word                                 */ 00052508
+   getxy: proc(w,n) returns( fixed bin(15) );                           00052608
+     dcl w                   fixed bin(15);                             00052708
+     dcl n                   fixed bin(15);                             00052808
+     dcl t                   bit(16)   based;                           00052908
+     dcl r                   fixed bin(15);                             00053008
+     dcl 1 b                 based,                                     00053108
+           5 b1              bit(7),                                    00053208
+           5 b2              bit(9);                                    00053308
+     dcl z                   fixed bin(15);                             00053408
+     z = swapbytes(w);                                                  00053508
+     if n=1 then do;                                                    00053608
+       if substr(addr(z)->b1,1,1)='1'b                                  00053708
+       then addr(r)->t = '111111111'b || addr(z)->b1;                   00053808
+       else addr(r)->t = '000000000'b || addr(z)->b1;                   00053908
+       end; /* n=1 */                                                   00054008
+     else do;                                                           00054108
+       if substr(addr(z)->b2,1,1)='1'b                                  00054208
+       then addr(r)->t = '1111111'b || addr(z)->b2;                     00054308
+       else addr(r)->t = '0000000'b || addr(z)->b2;                     00054408
+       end; /* n=2 */                                                   00054508
+     return(r);                                                         00054608
+     end getxy;                                                         00054708
+                                                                        00054808
+   /* Swap bytes in a fixed bin(15) number                           */ 00054908
+   swapbytes: proc(w) returns( fixed bin(15) );                         00055008
+     dcl w                   fixed bin(15);                             00055108
+     dcl r                   fixed bin(15);                             00055208
+     dcl c                (2)char(1)   based;                           00055308
+     addr(r)->c(1) = addr(w)->c(2);                                     00055408
+     addr(r)->c(2) = addr(w)->c(1);                                     00055508
+     return(r);                                                         00055608
+     end swapbytes;                                                     00055708
+                                                                        00055808
+   /* Convert fixed bin(15) to 6 octal digits                        */ 00055908
+   OCT: proc(w) returns( char(6) );                                     00056008
+     dcl w                   fixed bin(15);                             00056108
+     dcl t                   fixed bin(15);                             00056208
+     dcl i                   fixed bin(15);                             00056308
+     dcl p                   ptr;                                       00056408
+     dcl 1 b                 based(p),                                  00056508
+           5 b0              bit(1),                                    00056608
+           5 b1           (5)bit(3);                                    00056708
+     dcl r                   char(6)   varying   init('');              00056808
+     p = addr(w);                                                       00056908
+     t = (13)'0'b || b0;                                                00057008
+     do i=1 to 6;                                                       00057108
+       r = r || substr('01234567',t+1,1);                               00057208
+       if i>5 then leave;                                               00057308
+       t = (11)'0'b || b1(i);                                           00057408
+       end; /* do i */                                                  00057508
+     return(r);                                                         00057608
+     end OCT;                                                           00057708
+                                                                        00057808
+   /* Convert fixed bin(15) to 3 RAD50 Characters                    */ 00057908
+   RAD50: proc(w) returns( char(3) );                                   00058008
+     dcl w                   fixed bin(15);                             00058108
+     dcl z                   fixed bin(15);                             00058208
+     dcl t                   fixed bin(15);                             00058308
+     dcl r                   char(3)   varying   init('');              00058408
+     dcl RAD50_set           char(40)  static                           00058508
+              init( ' ABCDEFGHIJKLMNOPQRSTUVWXYZ$./0123456789' );       00058608
+     /* '/' character position as 'not used'                         */ 00058708
+     z=swapbytes(w);                                                    00058808
+     t = mod(z,40);                     /* Third character           */ 00058908
+     z = floor(z/40);                   /* 40 Decimal = 50 Octal     */ 00059008
+     r = substr(RAD50_set,t+1,1);                                       00059108
+     t = mod(z,40);                     /* Second character          */ 00059208
+     z = floor(z/40);                                                   00059308
+     r = substr(RAD50_set,t+1,1) || r;                                  00059408
+     r = substr(RAD50_set,z+1,1) || r;  /* First character           */ 00059508
+     return(r);                                                         00059608
+     end RAD50;                                                         00059708
+ %page;                                                                 00059808
+                                                                        00059908
+ /********************************************************************/ 00060008
+ /*      ASCII to EBCDIC -- 7-bit ASCII with no control characters   */ 00060108
+ /********************************************************************/ 00060208
+ DCL     EBCDIC_1047     (32)CHAR(8)        INIT                        00060308
+        ('4040404040404040'X ,    /* ASCII 00-07 */                     00060408
+         '4040404040404040'X ,    /* ASCII 08-0F */                     00060508
+         '4040404040404040'X ,    /* ASCII 10-17 */                     00060608
+         '4040404040404040'X ,    /* ASCII 18-1F */                     00060708
+         '405A7F7B5B6C507D'X ,    /* ASCII 20-27 */                     00060808
+         '4D5D5C4E6B604B61'X ,    /* ASCII 28-2F */                     00060908
+         'F0F1F2F3F4F5F6F7'X ,    /* ASCII 30-37 */                     00061008
+         'F8F97A5E4C7E6E6F'X ,    /* ASCII 38-3F */                     00061108
+         '7CC1C2C3C4C5C6C7'X ,    /* ASCII 40-47 */                     00061208
+         'C8C9D1D2D3D4D5D6'X ,    /* ASCII 48-4F */                     00061308
+         'D7D8D9E2E3E4E5E6'X ,    /* ASCII 50-57 */                     00061408
+         'E7E8E9ADE0BD5F6D'X ,    /* ASCII 58-5F */                     00061508
+         '7981828384858687'X ,    /* ASCII 60-67 */                     00061608
+         '8889919293949596'X ,    /* ASCII 68-6F */                     00061708
+         '979899A2A3A4A5A6'X ,    /* ASCII 70-77 */                     00061808
+         'A7A8A9C04FD0A140'X ,    /* ASCII 78-7F */                     00061908
+         '4040404040404040'X ,    /* ASCII 80-87 */                     00062008
+         '4040404040404040'X ,    /* ASCII 88-8F */                     00062108
+         '4040404040404040'X ,    /* ASCII 90-97 */                     00062208
+         '4040404040404040'X ,    /* ASCII 98-9F */                     00062308
+         '4040404040404040'X ,    /* ASCII A0-A7 */                     00062408
+         '4040404040404040'X ,    /* ASCII A8-AF */                     00062508
+         '4040404040404040'X ,    /* ASCII B0-B7 */                     00062608
+         '4040404040404040'X ,    /* ASCII B8-BF */                     00062708
+         '4040404040404040'X ,    /* ASCII C0-C7 */                     00062808
+         '4040404040404040'X ,    /* ASCII C8-CF */                     00062908
+         '4040404040404040'X ,    /* ASCII D0-D7 */                     00063008
+         '4040404040404040'X ,    /* ASCII D8-DF */                     00063108
+         '4040404040404040'X ,    /* ASCII E0-E7 */                     00063208
+         '4040404040404040'X ,    /* ASCII E8-EF */                     00063308
+         '4040404040404040'X ,    /* ASCII F0-F7 */                     00063408
+         '4040404040404040'X ),   /* ASCII F8-FF */                     00063508
+         EBCDIC              CHAR(256)      defined EBCDIC_1047;        00063608
+                                                                        00063708
+   %include hex;                                                        00063808
+                                                                        00063908
+   end METAFONT;                                                        00064004
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00070000
+//LKED.SYSLIB DD                                                        00080000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        00090000
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      00100000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       00110000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00120000
+//LKED.SYSIN DD *                                                       00130000
+ NAME METAFONT(R)                                                       00140000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00150000

@@ -1,0 +1,21 @@
+ /*------------------------------------------------------------------*/ 00001000
+ /*      Declare all PL/I builtin functions                          */ 00002000
+ /*------------------------------------------------------------------*/ 00003000
+ dcl    (abs,      acos,     add,      addr,     all,      allocn,      00004000
+         any,      asin,     atan,     atand,    atanh,    binary,      00005000
+         binvalue, bit,      bool,     ceil,     char,     cpln,        00006000
+         complex,  conjg,    cos,      cosd,     cosh,     count,       00007000
+         cstg,     datafield,date,     datetime, decimal,  dim,         00008000
+         divide,   empty,    entryaddr,erf,      erfc,     exp,         00009000
+         fixed,    float,    floor,    graphic,  hbound,   high,        00010000
+         imag,     index,    lbound,   length,   lineno,   log,         00020000
+         log2,     log10,    low,      max,      min,      mod,         00030000
+         mpstr,    multiply, null,     offset,   onchar,   oncode,      00040000
+         oncount,  onfile,   onkey,    onloc,    onsource, plicanc,     00050000
+         plickpt,  plidump,  plirest,  pliretc,  pliretv,  plisrta,     00060000
+         plisrtb,  plisrtc,  plisrtd,  plitest,  pointer,  ptradd,      00070000
+         ptrvalue, poly,     prec,     priority, prod,     real,        00080000
+         repeat,   round,    samekey,  sign,     sin,      sind,        00090000
+         sinh,     sqrt,     status,   storage,  string,   substr,      00100000
+         sum,      sysnull,  tan,      tand,     tanh,     time,        00110000
+         translate,trunc,    unspec,   verify)   builtin;               00120000

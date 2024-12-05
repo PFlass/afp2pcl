@@ -1,0 +1,7 @@
+control replace all summary;                                            00010000
+overlay RCYCLE size 6.75 in 10.1 in offset 0 in 0 in ;                  00020000
+orient 0;                                                               00030000
+position absolute 0 in absolute 0 in ;                                  00040000
+position down 10  in right 2.88 in ;                                    00050000
+font REC18M charset CZREC18M codepage T1V10285 height 18 ;              00060000
+settext line REC18M 'AB' ;                                              00070000

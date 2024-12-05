@@ -1,0 +1,221 @@
+//FLASSA  JOB (),'SMF ANAL',CLASS=J,MSGCLASS=Z,NOTIFY=$                 00010000
+// EXEC PLIXCL,                                                         00020000
+//   PARM.PLI='M,NIS,XREF,GS,AG,LANGLVL(SPROG)',                        00030000
+//   PARM.LKED='LIST,MAP,XREF'                                          00040000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00050000
+//PLI.SYSLIB   DD DSN=FLASS.PF.PLIMAC,DISP=SHR                          00060000
+//PLI.SYSIN    DD *                                                     00070000
+ /*       Print PCL Font Usage Report from SMF type 255 records       */00080000
+                                                                        00090000
+ /*********************************************************************/00100000
+ /*                                                                   */00110000
+ /* Module: FONTRPT                                                   */00120000
+ /*                                                                   */00130000
+ /* Author: Peter Flass -- NYS LBDC                                   */00140000
+ /*         May, 1998                                                 */00150000
+ /*                                                                   */00160000
+ /* Function: Print PCL font usage report from SMF type 255 records.  */00170000
+ /*                                                                   */00171005
+ /* To Do:  Compute writer uptime.                                    */00172005
+ /*         Include count of jobs processed in SMF record.            */00180005
+ /*         Sort font stats in descending order by use count.         */00180106
+ /*                                                                   */00181005
+ /*********************************************************************/00190000
+                                                                        00200000
+ FONTRPT: proc(parm) options(main);                                     00210000
+ dcl     parm                      char(100) varying;                   00220000
+ dcl     smfdata                   input record;                        00230000
+ dcl     sysprint                  print;                               00240000
+ dcl     sysin                     input;                               00250000
+                                                                        00260000
+ /* ---- Common SMF record definition ------------------------------ */ 00270000
+ dcl     smfp                      pointer,                             00280000
+       1 smfrec          unaligned based(smfp),                         00290000
+         5 smfxflg                 bit(8),       /* system indicator */ 00300000
+         5 smfxrty                 bit(8),       /* record type      */ 00310000
+         5 smfxtme                 fixed bin(31),/* time written     */ 00320000
+         5 smfxdte                 fixed dec(7), /* date written     */ 00330000
+         5 smfxsid                 char(4),      /* system ident     */ 00340000
+ /* ---- End of SMF common data ------------------------------------ */ 00350000
+                                                                        00360000
+ /* ---- SMF type 255 common data ---------------------------------- */ 00370000
+         5 smf255stp               fixed bin(15),/* record subtype   */ 00380000
+         5 smf255jbn               char(8),      /* writer jobname   */ 00390000
+         5 smf255rst               fixed bin(31),/* writer rdr time  */ 00400000
+         5 smf255rsd               fixed dec(7), /* writer rdr date  */ 00410000
+         5 smf255be                char(0);      /* Start of var data*/ 00420000
+ /* ---- End of SMF type 255 common data --------------------------- */ 00430000
+                                                                        00440000
+ /* ---- SMF Type 255 subtype 1 (font statistics) ------------------ */ 00450000
+ dcl     smfp1                     pointer,                             00460000
+       1 smfst1          unaligned based(smfp1),                        00470000
+         5 smf1fc                  fixed bin(15),/* # of fonts       */ 00480000
+         5 smf1rg               (1),             /* Repeating group  */ 00490000
+           10 smf1fn               char(8),      /* Font name        */ 00500000
+           10 smf1fu               fixed bin(31);/* Font use count   */ 00510000
+                                                                        00520000
+ %page;                                                                 00530000
+ dcl     eof                       bit(1)        init('0'b);            00540000
+ dcl     records_read              fixed dec(7)  init(0);               00550000
+ dcl     records_sel               fixed dec(7)  init(0);               00560000
+ dcl     rec_length                fixed bin(31);                       00570000
+ dcl     i                         fixed bin(15);                       00580000
+ dcl     start_date                fixed dec(7)  init(99999);           00590000
+ dcl     stop_date                 fixed dec(7)  init(00000);           00600000
+ dcl     start_time                fixed bin(31) init(99999999);        00610000
+ dcl     stop_time                 fixed bin(31) init(00000);           00620000
+ dcl    (start_date_x,stop_date_x) char(8)       init(' ');             00630000
+ dcl    (start_time_x,stop_time_x) char(8)       init(' ');             00640000
+                                                                        00650000
+ %include builtins;                                                     00660000
+                                                                        00670000
+ %include(caldater);                                                    00680000
+ dcl     RECL                      entry(*) returns( fixed bin(31) );   00681001
+                                                                        00690000
+ %page;                                                                 00700000
+ on endfile(smfdata)  eof='1'b;                                         00710000
+                                                                        00720000
+ open file(smfdata) input;                                              00730000
+                                                                        00740000
+ read file(smfdata) set(smfp);                                          00750000
+ do while(ªeof);                                                        00760000
+     records_read=records_read+1;                                       00770000
+     if smfxdte<start_date then do;                                     00790004
+       start_date=smfxdte;                                              00790104
+       start_time=smfxtme;                                              00790204
+       end;                                                             00790304
+     if smfxdte=start_date then do;                                     00791004
+       if smfxtme<start_time then start_time=smfxtme;                   00800004
+       end;                                                             00810004
+     if smfxdte>stop_date then do;                                      00811004
+       stop_date=smfxdte;                                               00812004
+       stop_time=smfxtme;                                               00813004
+       end;                                                             00814004
+     if smfxdte=stop_date then do;                                      00815004
+       if smfxtme>stop_time then stop_time=smfxtme;                     00816004
+       end;                                                             00817004
+     if smfxrty = 'FF'bx then do;                                       00860000
+       records_sel = records_sel + 1;                                   00870000
+       call print_smf255;                                               00880000
+       end; /* 'FF' */                                                  00890000
+     read file(smfdata) set(smfp);                                      00900000
+     end; /* do while */                                                00910000
+                                                                        00920000
+ close file(smfdata);                                                   00930000
+ put page    edit(records_read,' SMF records read')(p'(7)z',a);         00940001
+ put skip    edit(records_sel, ' SMF records selected')(p'(7)z',a);     00950001
+ put skip    edit('SMF data from ',                                     00960004
+                   smfdate(start_date), ' ', smftime(start_time) )(a);  00972004
+ put skip    edit('           to ',                                     00972104
+                   smfdate(stop_date), ' ', smftime(stop_time) )(a);    00972204
+                                                                        00980000
+ %page;                                                                 00990000
+ print_smf255: proc;                                                    01000000
+   dcl   j                   fixed bin(15);                             01010000
+   smfp1 = addr(smf255be);                                              01020000
+   put page edit                                                        01030000
+          ( smf255jbn,' ',smftime(smf255rst),' ',smfdate(smf255rsd) )   01040000
+          (a);                                                          01050000
+   if smf255stp=1 then do;                                              01060000
+     put skip(2) edit('Font Usage statistics:')(a);                     01070000
+     put skip    edit('Font---- Count')(a);                             01080000
+     do j=1 to smf1fc;                                                  01090000
+       if smf1fu(j)ª=0                                                  01091002
+       then put skip edit(smf1fn(j),' ',smf1fu(j))(a,a,p'zzzz9');       01100002
+       end; /* do j */                                                  01110000
+     end; /* smf255stp=1 */                                             01120000
+   end print_smf255;                                                    01130000
+                                                                        01140000
+ %page;                                                                 01150000
+ /*  convert decimal date '0CYYDDDs' to 'Day Mon dd, yyyy'           */ 01160000
+ smfdate: proc(date) returns(character(16));                            01170000
+ dcl     date                      fixed dec(7);                        01180000
+ dcl     dp                        pic'(7)9',                           01190000
+         dpx                       char(7) def dp;                      01200000
+ dcl     cen                       pic'9';                              01210000
+ dcl     dc                        char(16);                            01220000
+ dcl   1 dcs                       defined dc,                          01230000
+         5 dc_dow                  char(3),                             01240000
+         5 fil1                    char(1),                             01250000
+         5 dc_mon                  char(3),                             01260000
+         5 fil2                    char(1),                             01270000
+         5 dc_day                  pic'z9',                             01280000
+         5 dc_comma                char(1),                             01290000
+         5 fil3                    char(1),                             01300000
+         5 dc_year                 pic'9999';                           01320004
+ dcl     mm                        pic'99';                             01330000
+ dcl     jjj                       fixed dec(9);                        01340003
+ dcl     ccc                       char(5) based;                       01350003
+ dcl     mon                   (12)char(3)       init                   01360000
+         ('Jan','Feb','Mar','Apr','May','Jun',                          01370000
+          'Jul','Aug','Sep','Oct','Nov','Dec');                         01380000
+                                                                        01410000
+ dp = date;                                                             01420000
+ cen = substr(dp,2,1);                                                  01430000
+ substr(dpx,2,1)='0';                                                   01440000
+ if cen='0' then substr(dpx,1,2)='19';                                  01441003
+ if cen='1' then substr(dpx,1,2)='20';                                  01442003
+ jjj = dp*10;                                                           01450000
+ julian_date =  substr( addr(jjj)->ccc, 1, 4 );                         01460003
+ call caldate0(julian_date,caldate_output);                             01470000
+ dc      = ' ';                                                         01480000
+ dc_dow  = substr(output_day_of_week,1,3);                              01490000
+ substr(dc_dow,2,2) =                                                   01500000
+   translate( substr(dc_dow,2,2), lower_case, upper_case );             01510000
+ mm      = substr(output_date,1,2);                                     01520000
+ dc_mon  = mon(mm);                                                     01530000
+ dc_day  = substr(output_date,4,2);                                     01540000
+ dc_year = substr(output_date,7,4);                                     01550004
+ dc_comma = ',';                                                        01570000
+ return(dc);                                                            01580000
+ end smfdate;                                                           01590000
+                                                                        01600000
+ /*  convert binary tod to character 'hh:mm:ss'                      */ 01610000
+ smftime: proc(time) returns(character(8));                             01620000
+ dcl     time                      fixed bin(31); /* time in sec/100 */ 01630000
+ dcl     wt                        fixed bin(31);                       01640000
+ dcl     (hh,mm,ss)                pic'99';                             01650000
+ dcl     tc                        char(8);                             01660000
+ dcl     (floor,mod,substr)        builtin;                             01670000
+ wt=time/100;                                                           01680000
+ ss=mod(wt,60);                                                         01690000
+ wt=floor((wt-ss)/60);                                                  01700000
+ mm=mod(wt,60);                                                         01710000
+ hh=floor((wt-mm)/60);                                                  01720000
+ tc=hh||':'||mm||':'||ss;                                               01730000
+ if hh=00 then substr(tc,1,3)='   ';                                    01740000
+ if hh=00 & mm=00 then substr(tc,1,6)='      ';                         01750000
+ return(tc);                                                            01760000
+ end smftime;                                                           01770000
+                                                                        01780000
+ /*  convert binary tod to character 'hh:mm:ss.tt'                   */ 01790000
+ smftimec: proc(time) returns(character(11));                           01800000
+ dcl     time                      fixed bin(31); /* time in sec/100 */ 01810000
+ dcl     wt                        fixed bin(31);                       01820000
+ dcl     (hh,mm,ss,tt)             pic'99';                             01830000
+ dcl     tc                        char(11);                            01840000
+ dcl     (floor,mod,substr)        builtin;                             01850000
+ tt=mod(time,100);                                                      01860000
+ wt=floor((time-tt)/100);                                               01870000
+ ss=mod(wt,60);                                                         01880000
+ wt=floor((wt-ss)/60);                                                  01890000
+ mm=mod(wt,60);                                                         01900000
+ hh=floor((wt-mm)/60);                                                  01910000
+ tc=hh||':'||mm||':'||ss||'.'||tt;                                      01920000
+ if hh=00 then substr(tc,1,3)='   ';                                    01930000
+ if hh=00 & mm=00 then substr(tc,1,6)='      ';                         01940000
+ if hh=00 & mm=00 & ss=00 then substr(tc,1,8)='        ';               01950000
+ return(tc);                                                            01960000
+ end smftimec;                                                          01970000
+                                                                        01980000
+ %include(truncate);                                                    01990000
+ %include(lowercas);                                                    02000000
+ %include(hex);                                                         02001001
+                                                                        02020000
+ end FONTRPT;                                                           02030000
+//LKED.SYSLIB DD                                                        02040000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        02050000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       02060000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  02070000
+//LKED.SYSIN DD *                                                       02080000
+ NAME FONTRPT(R)                                                        02090000

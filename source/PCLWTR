@@ -1,0 +1,707 @@
+//FLASSW   JOB (),PCLWTR,CLASS=J,MSGCLASS=Z,                            00010000
+//            REGION=2048K,NOTIFY=$                                     00020000
+//ASM      EXEC PGM=ASMA90,                                             00030000
+//        PARM='OBJECT,NODECK,ALIGN,RENT'                               00040000
+//********************************************************************  00050000
+//**       ASSEMBLE PROGRAM                                          *  00060000
+//********************************************************************  00070000
+//SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                             00080001
+//         DD DSN=SYSTEMS.MACLIB,DISP=SHR                               00081001
+//         DD DSN=FLASS.PF.ASM,DISP=SHR                                 00090000
+//         DD DSN=SYS1.MACLIB,DISP=SHR                                  00100000
+//         DD DSN=SYS1.MODGEN,DISP=SHR                                  00110000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     00120000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00130000
+//SYSUT2   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00140000
+//SYSUT3   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00150000
+//SYSLIN   DD DSN=&&ASM,UNIT=VIO,DISP=(,PASS),                          00160000
+//            SPACE=(TRK,(3,3)),DCB=BLKSIZE=400                         00170000
+//SYSIN    DD *                                                         00180000
+         TITLE 'PCLWTR - LBD External Writer'                           00190000
+PCLWTR   CSECT                                                          00200000
+*********************************************************************** 00210000
+*                                                                     * 00220000
+* Module name: PCLWTR                                                 * 00230000
+*                                                                     * 00240000
+* Function:    LBD External Writer for AFP to PCL conversion.         * 00250000
+*                                                                     * 00260000
+* Author:      Peter Flass - NYS Legislative Bill Drafting Commission * 00270000
+*              April, 1997.                                           * 00280000
+*                                                                     * 00290000
+* Operation:   Module mimics standard OS External Writer (IASXWR00).  * 00300000
+*              AFP data in queue with writer name 'PCLWTR' is read,   * 00310000
+*              converted to PCL by "AFP2PCL", and replaced in the     * 00320000
+*              spool queued to the designated printer.                * 00330000
+*                                                                     * 00340000
+* Attributes:  AMODE 31, RMODE ANY                                    * 00350000
+*              Must be authorized to execute subsystem request.       * 00360000
+*                                                                     * 00370000
+* Status:      MVS/ESA/JES2 5.1                                       * 00380000
+*                                                                     * 00390000
+* Modifications:                                                      * 00391000
+*              98-01-27 - Print stats when shutting down.          PRF* 00392011
+*               5-11-98 - Add 'STATS' command.                     PRF* 00392111
+*               4-06-98 - Fix WTO message format.                  PRF* 00392211
+*               2-10-98 - Mods to allow test writer                PRF* 00392311
+*              10-07-97 - miscellaneous.                           PRF* 00392411
+*                                                                     * 00392511
+*********************************************************************** 00392611
+         EJECT                                                          00392711
+MAXTASKS EQU   1                   MAX NUMBER OF SUBTASKS             * 00392811
+*                                                                       00392911
+         REGS  ,                   Equate registers                     00393011
+LINK     EQU   R11                 Internal link register               00393111
+BASE     EQU   R12                 First base register                  00393211
+                                                                        00393311
+PCLWTR   AMODE 31                                                       00394000
+PCLWTR   RMODE ANY                                                      00395000
+         SPACE 3                                                        00396000
+*                                                                       00397000
+         TITLE 'PCLWTR - LBD External Writer - Initialization'          00398000
+*********************************************************************** 00399000
+*        Initialization - set up information for writer task          * 00400000
+*********************************************************************** 00410000
+PCLWTR   CSECT                                                          00420000
+         B     START-*(,R15)       Skip over comment                    00430000
+         DC    AL1(VERSIONL)       L'comment                            00440000
+PCLWTR   VERSION 1.0               Memory comment                       00450000
+         PRINT NOGEN                                                    00460000
+         SPACE 2                                                        00470000
+                                                                        00480000
+* ------------------------------- *                                     00490000
+*        Chain saveareas          *                                     00500000
+* ------------------------------- *                                     00510000
+START    EQU   *                                                        00520000
+         SAVE  (14,12)             Save caller's registers              00530000
+         LR    BASE,R15            Load base registers                  00540000
+         LR    R2,R1               Save A(parmlist)                     00550000
+         USING PCLWTR,BASE              .                               00560000
+         STORAGE OBTAIN,LENGTH=WRKLEN,LOC=BELOW Acquire working stg.    00570000
+         ST    R1,8(,R13)          Chain saveareas                      00580000
+         ST    R13,4(,R1)               .                               00590000
+         LR    R13,R1                   .                               00600000
+         LR    R1,R2               Restore A(parmlist)                  00610000
+         USING WORK,R13                 .                               00620000
+         SPACE 3                                                        00630000
+         MVC   COMMENT(8),VERSION  Identify workarea for dumps          00640000
+         SPACE 2                                                        00650000
+                                                                        00660000
+* ------------------------------- *                                     00670000
+*        Issue ESTAE macro        *                                     00680000
+* ------------------------------- *                                     00690000
+         MVC   MACAREA(ESTALEN),ESTAE                                   00700000
+         ST    R13,STAEPARM        Save R13 for recovery                00710000
+         LA    R2,STAEPARM         point to parameter list              00720000
+         LA    R1,MACAREA               .                               00730000
+         ESTAEX PARAM=(R2),MF=(E,(1)) Establish exit                    00740000
+         SPACE 2                                                        00750000
+                                                                        00760000
+* ------------------------------- *                                     00770000
+*        Get dummy printer block  *                                     00780000
+* ------------------------------- *                                     00790000
+         STORAGE OBTAIN,LENGTH=PRLEN,LOC=ANY                            00800000
+         ST    R1,PRTA             Save address                         00810000
+         USING PRINTER,R1                                               00820000
+         XC    PRINTER(PRLEN),PRINTER Clear dummy printer block         00830000
+         MVC   PRID,=CL8'LOCAL   ' Mark dummy area                      00840000
+         DROP  R1                                                       00850000
+                                                                        00860000
+* ------------------------------- *                                     00870000
+*        Init. console            *                                     00880000
+* ------------------------------- *                                     00890000
+         MVC   MACAREA(EXTRLEN),EXTR Move parm list for EXTRACT         00900000
+         LA    R2,COMPTR           Output area for EXTRACT              00910000
+         LA    R1,MACAREA                                               00920000
+         EXTRACT (R2),MF=(E,(1))   Get CPL data                         00930000
+         L     R2,COMPTR           Load A(CPL)                          00940000
+         USING COMLIST,R2          Addressability to CPL                00950000
+         L     R3,COMECBPT         Load COMM ECB address                00960000
+         ST    R3,WAITLIST         Store into wait list                 00970000
+         LA    R3,COMCIBPT         Load A(ptr to CIB)                   00980000
+         SR    R4,R4               Load 0 for test                      00990000
+         C     R4,COMCIBPT         Q/ Start CIB present                 01000000
+         BE    SETUP01             .. No, bypass QEDIT                  01010000
+         L     R4,COMCIBPT         Load A(CIB)                          01020000
+         QEDIT ORIGIN=(R3),BLOCK=(R4) Free START CIB                    01030000
+SETUP01  EQU   *                                                        01040000
+         QEDIT ORIGIN=(R3),CIBCTR=1 Allow 1 CIB for STOP cmnd           01050000
+         DROP  R2                                                       01060000
+                                                                        01070000
+* ------------------------------- *                                     01080000
+*        Only one copy can run    *                                     01090000
+* ------------------------------- *                                     01100000
+         L     R1,16              Load A(CVT)                  PF021098 01110000
+         L     R1,0(,R1)               A(TCB words)            PF021098 01120000
+         L     R1,0(,R1)               A(TCB)                  PF021098 01130000
+         L     R1,12(,R1)              A(TIOT)                 PF021098 01140000
+         MVC   WTRNAME,0(R1)      Save jobname                 PF980406 01150003
+         MVC   QNAME,0(R1)         (ditto)                     PF980406 01151003
+         MVC   MACAREA(ENQDL),ENQD ENQ PCLWTR resource                  01160000
+         LA    R1,MACAREA          .                                    01170000
+         ENQ   ((R2),,,,),MF=(E,(1))                           PF021098 01180000
+         LTR   R15,R15             Q/ Do we have the control?           01190000
+         BNZ   ENQERR              .. Nope, exit before it's too late   01200000
+                                                                        01210000
+* ------------------------------- *                                     01220000
+*        Load FONTTAB             *                                     01230000
+* ------------------------------- *                                     01240000
+         LINK  EP=FONTTAB          Link to load FONTTAB program         01250000
+         LTR   R15,R15             Test return code                     01260000
+         BZ    ERROR03             .. Error                             01270000
+         ST    R15,FTAB            save A(Font table)                   01280000
+                                                                        01290000
+         TITLE 'PCLWTR - attach AFP2PCL2 subtask'                       01300002
+**********************************************************************  01310000
+*              Attach subtask                                        *  01320000
+**********************************************************************  01330000
+         MVC   MACAREA(ATTACHL),ATTACHD                                 01340000
+         LA    R3,WAITLIST         LOAD WAIT LIST ADDRESS               01350000
+         SR    R8,R8               Zero count of tasks attached         01360000
+         LA    R2,TASKLIST         POINT TO LIST OF ECB'S               01370000
+         USING TASKL,R2                                                 01380000
+ATTACH   EQU   *                   ATTACH THE SUBTASKS                  01390000
+         XC    0(TASKLSTL,R2),0(R2) Clear task parameter area           01400000
+         LA    R8,1(,R8)           Bump count of tasks attachedPF100797 01410000
+         ST    R8,TASKID-TASKSTAT+TASKSTAX Save task ID        PF100797 01420000
+         LA    R0,TASKCECB         Load A(comm. ECB)                    01430000
+         ST    R0,TASKPARM         Save in PLIST                        01440000
+         L     R0,FTAB             Load A(font table)                   01450000
+         ST    R0,TASKPARM+4       Save                                 01460000
+         LA    R0,TASKSTAX         Load A(statistics)                   01470000
+         ST    R0,TASKPARM+8       Save                                 01480000
+         L     R0,PRTA             Load A(printer list)                 01490000
+         ST    R0,TASKPARM+12      Save                                 01500000
+         OI    TASKPARM+12,X'80'   Flag EOL                             01510000
+*                                  SET UP ATTACH PARMS                  01520000
+         LA    1,TASKPARM          LOAD PARAM LIST ADDR FOR ATTACH      01530000
+         LA    R4,TASKNAME         + A(PROGRAM NAME)                    01540000
+         LA    R5,TASKECB          + A(ECB)                             01550000
+         LA    R6,TASKABND         + A(ESTAI ROUTINE)                   01560000
+         LA    R7,TASKSTAI         + A(ESTAI PARMS)                     01570000
+         LA    R15,MACAREA         +                                    01580000
+         STCK  TASKSTRT-TASKSTAT+TASKSTAX Save start time               01590000
+         ATTACHX EPLOC=(R4),       ATTACH THE PROGRAM                  X01600000
+               ECB=(R5),                                               X01610000
+               ESTAI=((R6),(R7)),                                      X01620000
+               SF=(E,(15))                                              01630000
+         LTR   R15,R15              TEST RETURN CODE                    01640000
+         BNZ   ERROR01              .. ERROR ON ATTACH                  01650000
+         LA    R3,4(,R3)            POINT TO NEXT WAITLIST ADDR         01660000
+         ST    R5,0(R3)             Store ECB address                   01670000
+         ST    R1,TASKTCBA          Store TCB address                   01680000
+         LA    R2,TASKLEN(,R2)      POINT TO NEXT TASK ENTRY            01690000
+         CH    R8,=AL2(MAXTASKS)    Q/ ALL TASKS ATTACHED?              01700000
+         BNL   ENDATTCH             .. YES, DONE ATTACHING              01710000
+         B     ATTACH                 AND LOOP                          01720000
+ENDATTCH DS    0H                   DONE ATTACHING                      01730000
+         MVI   0(R3),X'80'          FLAG LAST WAITLIST ENTRY            01740000
+         ST    R8,TASKCNT           Store task count                    01750000
+         DROP  R2                                                       01760000
+                                                                        01770000
+         TITLE 'PCLWTR - Mainline'                                      01780000
+* ------------------------------- *                                     01790000
+*        Wait for command or      *                                     01800000
+*          subtask completion     *                                     01810000
+* ------------------------------- *                                     01820000
+WAIT     EQU   *                                                        01830000
+         WAIT  1,ECBLIST=WAITLIST                                       01840000
+         L     R1,WAITLIST         Get A(communications ECB)            01850000
+         TM    ECBCC-ECB(R1),ECBPOST Q/ Comm ECB posted?                01860000
+         BNO   TASKEND             .. No, subtask ended                 01870000
+                                                                        01880000
+* ------------------------------- *                                     01890000
+*        Process command          *                                     01900000
+* ------------------------------- *                                     01910000
+COMMAND  EQU   *                   Test for operator STOP command       01920000
+         L     R2,COMPTR           Load A(CPL)                          01930000
+         USING COMLIST,R2          Addressability to CPL                01940000
+         LA    R3,COMCIBPT         Load A(PTR to CIB)                   01950000
+         L     R4,COMCIBPT         Load A(CIB)                          01960000
+         CLI   CIBVERB-CIB(R4),CIBMODFY Q/ MODIFY command?              01970000
+         BE    COMMANDM                 .. Yes, process modify          01980000
+         CLI   CIBVERB-CIB(R4),CIBSTOP  Q/ STOP command?                01990000
+         BNE   COMMAND0                 .. No, ignore START             02000000
+COMMANDS EQU   *                   STOP command                         02010000
+         OI    STATUS,ST_STOP      Indicate stopping                    02020000
+         B     COMMAND0                                                 02030000
+                                                                        02040000
+COMMANDM EQU   *                   MODIFY command                       02050000
+CABEND   CLC   CIBDATLN-CIB(2,R4),=AL2(L'CMDABND) Q/ 'ABEND'?           02060000
+         BNE   CABENDX             .. No                                02070000
+         CLC   CIBDATA-CIB(L'CMDABND,R4),CMDABND Q/ Is it 'ABEND'?      02080000
+         BNE   CABENDX             .. No                                02090000
+         OI    STATUS,ST_ABEND     .. Yes, set ABEND flag               02100000
+         B     ABEND                       go ABEND                     02110000
+CABENDX  EQU   *                                                        02120000
+                                                                        02130000
+CRESET   CLC   CIBDATLN-CIB(2,R4),=AL2(L'CMDRESET+6) Q/ Big enuf?       02140000
+         BL    CRESETX             .. No                                02150000
+         CLC   CIBDATA-CIB(L'CMDRESET,R4),CMDRESET Q/ Is it 'RESET'?    02160000
+         BNE   CRESETX             .. No                                02170000
+         CLI   CIBDATA-CIB+L'CMDRESET(R4),C'(' Edit command             02180000
+         BNE   CRESETE                           .                      02190000
+         CLI   CIBDATA-CIB+L'CMDRESET+5(R4),C')' .                      02200000
+         BNE   CRESETE                         .                        02210000
+         L     R1,PRTA             Load Print table address             02220000
+         USING PRINTER,R1                                               02230000
+CRESET1  EQU   *                   Find printer                         02240000
+*        Note -- always at least one dummy printer present     PF980406 02241004
+         CLC   PRID(4),CIBDATA-CIB+L'CMDRESET+1(R4) Is this the prtr?   02250000
+         BE    CRESET2             .. Yes                               02260000
+         CLC   =F'0',PRLINK        Q/ is this end of list?              02270000
+         BE    CRESET2             .. yes - printer not found           02280000
+         L     R1,PRLINK           .. no, point to next                 02290000
+         B     CRESET1             . and try again                      02300000
+CRESET2  EQU   *                   This is the printer                  02310000
+         OI    PRFLGF,PRFLGFR      Set 'download req'd' flag            02320000
+CRESET3  EQU   *                   Print 'OK'                           02330000
+         MVC   WTOAREA(EM5L),EM5   Set up message                       02340000
+         MVC   WTOAREA+4+8(L'WTRNAME),WTRNAME    Move Jobname  PF980406 02341004
+         B     CWTO                go write message                     02350000
+         DROP  R1                                                       02360000
+CRESETE  EQU   *                   Command error                        02370000
+         MVC   WTOAREA(EM4L),EM4   Set up message                       02380000
+         MVC   WTOAREA+4+8(L'WTRNAME),WTRNAME    Move Jobname  PF980406 02381004
+         B     CWTO                go write message                     02390000
+CRESETX  EQU   *                                                        02400000
+                                                                        02410000
+CDRAIN   CLC   CIBDATLN-CIB(2,R4),=AL2(L'CMDDRAIN) Q/ 'DRAIN'?          02420000
+         BNE   CDRAINX             .. No, try next                      02430000
+         CLC   CIBDATA-CIB(L'CMDDRAIN,R4),CMDDRAIN Q/ Is it 'DRAIN'?    02440000
+         BNE   CDRAINX             .. No                                02450000
+         OI    STATUS,ST_DRAIN     .. Yes, set DRAIN flag               02460000
+         MVC   WTOAREA(EM3L),EM3   Set up message                       02470000
+         MVC   WTOAREA+4+8(L'WTRNAME),WTRNAME    Move Jobname  PF980406 02471004
+         B     CWTO                Go write message                     02480000
+CDRAINX  EQU   *                                                        02490000
+                                                                        02491005
+CSTATS   CLC   CIBDATLN-CIB(2,R4),=AL2(L'CMDSTATS) Q/ 'STATS'? PF980511 02492005
+         BNE   CSTATSX             .. No, try next             PF980511 02493005
+         CLC   CIBDATA-CIB(L'CMDSTATS,R4),CMDSTATS Q/ Is it 'STATS'?511 02494005
+         BNE   CSTATSX             .. No                       PF980511 02495005
+         BAL   LINK,DSPSTATS       Display statistics          PF980511 02497005
+         B     COMMAND0            Done with display           PF980511 02499005
+CSTATSX  EQU   *                                               PF980511 02499105
+                                                                        02500000
+*        Fall-thru if command unrecognized                     PF980406 02500205
+         MVC   WTOAREA(EM4L),EM4   Set up message              PF980406 02501004
+         MVC   WTOAREA+4+8(L'WTRNAME),WTRNAME    Move Jobname  PF980406 02502004
+         B     CWTO                go write message            PF980406 02503004
+                                                                        02520000
+CWTO     EQU   *                   Write command response               02530000
+         SR    R0,R0               Clear register                       02540000
+         IC    R0,CIBCONID-CIB(R4) Get console identifier               02550000
+         LA    R1,WTOAREA          Point to message area                02560000
+         WTO   MF=(E,(1))          Display the message                  02570000
+         B     COMMAND0                                                 02580000
+                                                                        02590000
+COMMAND0 EQU   *                                                        02600000
+         QEDIT ORIGIN=(R3),BLOCK=(R4) Free CIB                          02610000
+         QEDIT ORIGIN=(R3),CIBCTR=1 Allow 1 CIB for STOP cmnd           02620000
+         DROP  R2                                                       02630000
+                                                                        02640000
+         TM    STATUS,ST_STOP+ST_DRAIN Q/ Shutting down?                02650000
+         BZ    COMMANDX            .. NO, done                          02660000
+         LA    R2,TASKLIST-TASKLEN Post subtasks                        02670000
+         USING TASKL,R2                                                 02680000
+         LH    R3,=AL2(MAXTASKS+1) Load max task count + 1     PF980511 02690006
+COMMAND1 EQU   *                                                        02700000
+         BCTR  R3,0                Exit if all tasks posted             02710000
+         LTR   R3,R3               .                                    02720000
+         BZ    WAIT                .                                    02730000
+         IC    R0,STATUS            Pick up STOP/DRAIN flag             02740000
+         LA    R15,ST_STOP+ST_DRAIN .                                   02750000
+         NR    R0,R15               .                                   02760000
+         LA    R2,TASKLEN(,R2)     Point to next task                   02770000
+         OC    TASKTCBA,TASKTCBA   Q/ active subtask?                   02780000
+         BZ    COMMAND1            .. NO                                02790000
+         LA    R1,TASKCECB         .. YES, post communications ECB      02800000
+         POST  (1),(0)             .                                    02810000
+         B     COMMAND1            And continue with next task          02820000
+         DROP  R2                                              PF980511 02821006
+                                                                        02830000
+COMMANDX EQU   *                   Exit command processor               02840000
+         TM    STATUS,ST_STOP+ST_DRAIN Q/ Are we stopping?              02850000
+         BNZ   WAIT                .. Yes, go do that                   02860000
+         B     TASKEND                                         PF980511 02861006
+                                                                        02870000
+DSPSTATS DS    0H                  Task statistics             PF980511 02870206
+         MVC   WTOAREA(EM6L),EM6   Set up message              PF980511 02870305
+         MVC   WTOAREA+4+8(L'WTRNAME),WTRNAME    Move Jobname  PF980511 02870405
+         LA    R9,TASKLIST-TASKLEN Display statistics          PF980511 02870506
+         USING TASKL,R9                                        PF980511 02870606
+         SR    R10,R10             Clear task number           PF980511 02870706
+DSPS001  EQU   *                                               PF980511 02870806
+         LA    R10,1(,R10)         Bump task number            PF980511 02870906
+         CH    R10,=AL2(MAXTASKS+1) Q/ All tasks processed?    PF980511 02871006
+         BNL   DSPS999             .                           PF980511 02871106
+         LA    R9,TASKLEN(,R9)     Point to next task          PF980511 02871406
+*        OC    TASKTCBA,TASKTCBA   Q/ active subtask?          PF990127 02871511
+*        BZ    DSPS001             .. NO                       PF990127 02871611
+         MVC   WTOAREA+4+21(3),=X'402120' Move edit masks      PF980511 02871706
+         MVC   WTOAREA+4+25(6),=X'402020202120'                PF980511 02871806
+         MVC   WTOAREA+4+37(9),=X'4020207A20207A2120'          PF980511 02871906
+         CVD   R10,DWD             .                           PF980511 02872206
+         SRP   DWD+6(2),1,0                                    PF980511 02872306
+         ED    WTOAREA+4+21(3),DWD+6 Edit task number          PF980511 02872406
+         L     R0,TASKJBSP-TASKSTAT+TASKSTAX Load jobs processedF980511 02872506
+         CVD   R0,DWD              .                           PF980511 02872606
+         ED    WTOAREA+4+25(6),DWD+5 Edit jobs processed       PF980511 02872706
+         STCK  DWD                 Compute elapsed time        PF980511 02872806
+         L     R0,DWD+4            .                           PF980511 02872906
+*        Positionally-dependent instructions     <--------------+  0511 02873006
+         SL    R0,TASKSTRT-TASKSTAT+TASKSTAX+4                  |  0511 02873106
+         ST    R0,DWD+4            .                            |  0511 02873206
+         L     R0,DWD              .                            |  0511 02873306
+         BC    12,*+6              . skip if no borrow          |  0511 02873406
+         BCTR  R0,0                . decrement borrow           |  0511 02873506
+         SL    R0,TASKSTRT-TASKSTAT+TASKSTAX                    |  0511 02873606
+         ST    R0,DWD              .                            |  0511 02873706
+*        End of Positionally-dependent instr.    <--------------+  0511 02873806
+         MVC   MACAREA(STCKL),STCK Convert elapsed time        PF980511 02873906
+         LA    R1,MACAREA          .                           PF980511 02874006
+         STCKCONV STCKVAL=DWD,CONVVAL=STCKAREA,MF=(E,(1))      PF980511 02874106
+         MVI   STCKAREA+3,X'0C'    .                           PF980511 02874206
+         ED    WTOAREA+4+37(9),STCKAREA                        PF980511 02874306
+         SR    R0,R0               Clear register              PF980511 02874406
+         IC    R0,CIBCONID-CIB(R4) Get console identifier      PF980511 02874506
+         LA    R1,WTOAREA          Point to message area       PF980511 02874606
+         WTO   MF=(E,(1))          Display the message         PF980511 02874706
+         B     DSPS001             And continue with next task PF980511 02874806
+DSPS999  EQU   *                                               PF980511 02874906
+         BR    LINK                Return to caller            PF980511 02875006
+         DROP  R9                                              PF980511 02875106
+                                                                        02875205
+         EJECT                                                          02876005
+* ------------------------------- *                                     02880000
+*        Task completion          *                                     02890000
+* ------------------------------- *                                     02900000
+TASKEND  DS    0H                   A task ended                        02910000
+         LA    R3,WAITLIST          LOAD WAITLIST ADDRESS               02920000
+TASKEND0 EQU   *                                                        02930000
+         LA    R3,4(,R3)            BUMP TO NEXT ENTRY         PF100797 02940000
+         L     R2,0(,R3)            LOAD ECB ADDRESS           PF100797 02950000
+         USING TASKL,R2                                                 02960000
+         TM    TASKECB,X'40'        Q/ TASK COMPLETE?                   02970000
+         BNO   NEXTTASK             .. NO, WE'LL WAIT ON THIS ONE       02980000
+         SR    R0,R0                CLEAR REGISTER FOR TASK RET CD      02990000
+         ICM   R0,B'0111',1(R2)     PICK UP SUBTASK RETURN CODE         03000000
+         B     DETACH               DETACH THIS TASK                    03010000
+NEXTTASK EQU   *                    CHECK NEXT SUBTASK                  03020000
+         TM    0(R3),X'80'          Q/ All tasks examined?     PF100797 03030000
+         BO    WAIT                 .. Yes, go back to wait             03040000
+         B     TASKEND0             .. No, check next task              03050000
+DETACH   EQU   *                    DETACH COMPLETED SUBTASK            03060000
+         LA    R1,TASKTCBA          LOAD A(SUBTASK TCB ADDRESS)         03070000
+         DETACH (1)                 DETACH IT                           03080000
+         LTR   R15,R15              TEST RETURN CODE                    03090000
+         BNZ   ERROR02              .. ERROR ON DETACH                  03100000
+         XC    TASKTCBA,TASKTCBA    INDICATE TASK COMPLETE              03110000
+         L     R1,TASKCNT           Load task count                     03120000
+         BCTR  R1,0                 Decrement count                     03130000
+         ST    R1,TASKCNT           Store updated count                 03140000
+         LTR   R1,R1                Q/ All tasks complete?              03150000
+         BZ    STOPPING             .. Yes, terminate                   03160000
+         TM    0(R3),X'80'          Q/ last list entry         PF100797 03170000
+         BO    EOL                      .. Yes, delete it               03180000
+         LA    R1,WAITLIST+L'WAITLIST-5 .. No, more list down           03190000
+         SR    R1,R3                Compute bytes to move               03200000
+         EX    R1,MOVELIST          ** MVC 0(*-*,R3),4(R3)              03210000
+         B     TASKEND0             Continue                            03220000
+EOL      EQU   *                                                        03230000
+         SH    R3,=H'4'             Back up one entry          PF100797 03240000
+         OI    0(R3),X'80'          Adjust end-of-list                  03250000
+         B     WAIT                 Continue                            03260000
+                                                                        03270000
+MOVELIST MVC   0(*-*,R3),4(R3)      Adjust Waitlist                     03280000
+         DROP  R2                                                       03290000
+                                                                        03300000
+* ------------------------------- *                                     03310000
+* Normal return                   *                                     03320000
+* ------------------------------- *                                     03330000
+STOPPING DS    0H                  Terminate writer                     03340000
+         MVC   WTOAREA(EM1L),EM1   Set up message                       03350000
+         MVC   WTOAREA+4+8(L'WTRNAME),WTRNAME    Move Jobname  PF980406 03351004
+         L     R3,COMPTR           Get address of communicationPF990127 03351111
+         L     R3,COMCIBPT-COMDSECT(,R3) Get address of CIB    PF990127 03351311
+         SR    R0,R0               Clear register              PF990127 03352011
+         IC    R0,CIBCONID-CIB(R3) Get console identifier      PF990127 03353011
+         LA    R1,WTOAREA          Point to message area       PF990127 03354011
+         WTO   MF=(E,(1))          Display the message         PF990127 03355011
+         BAL   LINK,DSPSTATS       Display task statistics     PF990127 03356011
+         B     EXIT                Ce'st fini                  PF990127 03360011
+                                                                        03370000
+* ------------------------------- *                                     03380000
+* I'm already running             *                                     03390000
+* ------------------------------- *                                     03400000
+ENQERR   DS    0H                  Terminate writer                     03410000
+         MVC   WTOAREA(EM2L),EM2   Set up message                       03420000
+         MVC   WTOAREA+4+8(L'WTRNAME),WTRNAME    Move Jobname  PF980406 03421004
+         B     WTO                 Go do WTO                            03430000
+                                                                        03440000
+         SPACE 2                                                        03450000
+* ------------------------------- *                                     03460000
+* Display the error message       *                                     03470000
+* ------------------------------- *                                     03480000
+WTO      EQU   *                   Issue message                        03490000
+         L     R3,COMPTR           Get address of communications area   03500000
+         USING COMDSECT,R3         CSCB communications area             03510000
+         L     R3,COMCIBPT         Get address of CIB                   03520000
+         USING CIB,R3                                                   03530000
+         SR    R0,R0               Clear register                       03540000
+         IC    R0,CIBCONID         Get console identifier               03550000
+         LA    R1,WTOAREA          Point to message area                03560000
+         WTO   MF=(E,(1))          Display the message                  03570000
+         SPACE 2                                                        03580000
+                                                                        03590000
+* ------------------------------- *                                     03600000
+* Free resources and              *                                     03610000
+* return to caller                *                                     03620000
+* ------------------------------- *                                     03630000
+EXIT     DS    0H                  Module exit                          03640000
+         LA    R1,FTAB             Load A(Font Table)          PF980511 03641007
+         L     R15,=V(PCLSMF)      Generate font usage stats   PF980511 03644007
+         BALR  R14,R15             .                           PF980511 03645007
+         LR    R1,R13              Load address to freemain             03650000
+         L     R13,4(,R13)         Load Caller's savearea address       03660000
+         STORAGE RELEASE,LENGTH=WRKLEN,ADDR=(1) Free workarea           03670000
+         RETURN (14,12),RC=0       Return to caller                     03680000
+         SPACE 2                                                        03690000
+                                                                        03700000
+* ------------------------------- *                                     03710000
+* Abend program                   *                                     03720000
+* ------------------------------- *                                     03730000
+ABEND    DS    0H                  ABEND this job                       03740000
+ERROR01  EQU   *                   (error on attach)                    03750000
+ERROR02  EQU   *                   (error on detach)                    03760000
+ERROR03  EQU   *                   Error loading font table             03770000
+         ABEND 1,DUMP                                                   03780000
+         TITLE 'PCLWTR - LBD External Writer - constants'               03790000
+         EJECT                                                          03800000
+* ------------------------------- *                                     03810000
+*        Main task constants      *                                     03820000
+* ------------------------------- *                                     03830000
+         LTORG *                                                        03840000
+         SPACE 1                                                        03850000
+TASKNAME DC    CL8'PCLWTR1'        ENTRY POINT NAME FOR ATTACH          03860000
+CMDABND  DC    C'ABEND'            F PCL,ABEND                          03870000
+CMDDRAIN DC    C'DRAIN'            F PCL,DRAIN                          03880000
+CMDRESET DC    C'RESET'            F PCL,RESET(xxxx)                    03890000
+CMDSTATS DC    C'STATS'            F PCL,STATS                 PF980511 03891005
+                                                                        03900000
+RNAME    DC    C'ACTIVE'           ENQ Rname                            03910000
+*                                                                       03920000
+EM1      WTO   'LBD301I xxxxxxxx closed',MF=L,DESC=(4),MCSFLAG=(REG0)   03930003
+EM1L     EQU   *-EM1                                                    03940000
+EM2      WTO   'LBD302E xxxxxxxx already active',MF=L,                 +03950003
+               DESC=(4),MCSFLAG=(REG0)                                  03960000
+EM2L     EQU   *-EM2                                                    03970000
+EM3      WTO   'LBD303I xxxxxxxx draining',MF=L,DESC=(4),MCSFLAG=(REG0) 03980003
+EM3L     EQU   *-EM3                                                    03990000
+EM4      WTO   'LBD304I xxxxxxxx Invalid command',MF=L,                +04000003
+               DESC=(4),MCSFLAG=(REG0)                                  04001003
+EM4L     EQU   *-EM4                                                    04010000
+EM5      WTO   'LBD305I xxxxxxxx OK',DESC=(4),MF=L,MCSFLAG=(REG0)       04020003
+EM5L     EQU   *-EM5                                                    04030000
+EM6      WTO   'LBD306I xxxxxxxx Task nn, zzzz9 jobs, hh:mm:sss',  0511+04031006
+               DESC=(4),MF=L,MCSFLAG=(REG0)                    PF980511 04031105
+EM6L     EQU   *-EM6                                                    04032005
+                                                                        04040000
+* ------------------------------- *                                     04050000
+*        Macro Skeletons          *                                     04060000
+* ------------------------------- *                                     04070000
+EXTR     EXTRACT *-*,'S',FIELDS=(COMM),MF=L                             04080000
+EXTRLEN  EQU   *-EXTR                                                   04090000
+*                                                                       04100000
+ESTAE    ESTAEX RECOVERY,MF=L                                           04110000
+ESTALEN  EQU   *-ESTAE                                                  04120000
+*                                                                       04130000
+ATTACHD ATTACHX EPLOC=*-*,ECB=*-*,SF=L                                  04140000
+ATTACHL EQU     *-ATTACHD                                               04150000
+*                                                                       04160000
+ENQD     ENQ    (*-*,RNAME,E,,SYSTEMS),RET=USE,MF=L                     04170000
+ENQDL    EQU    *-ENQD                                                  04180000
+*                                                              PF980511 04190006
+STCK     STCKCONV MF=L                                         PF980511 04190106
+STCKL    EQU    *-STCK                                         PF980511 04190206
+*                                                                       04191006
+         SPACE 2                                                        04200000
+                                                                        04210000
+         DROP  ,                                                        04220000
+                                                                        04230000
+         TITLE 'ABEND ESTAE RECOVERY ROUTINE'                           04240000
+*---------------------------------*                                     04250000
+*  ESTAE RECOVERY ROUTINE         *                                     04260000
+*---------------------------------*                                     04270000
+         PRINT GEN                                                      04280000
+RECOVERY DS    0H                  ESTAE RECOVERY ROUTINE               04290000
+         STM   R14,R12,12(R13)     SAVE REGISTERS                       04300000
+         LR    R12,R15                                                  04310000
+         USING RECOVERY,R12                                             04320000
+         CH    R0,=H'12'           Q/ DO WE HAVE SDWA?                  04330000
+         BE    RECOVER1            .. NO, CAN'T RETRY                   04340000
+         USING SDWA,R1                                                  04350000
+         SETRP REGS=(14,12),                                           X04360000
+               DUMP=YES, (NO)                                          X04370000
+               RC=0                                                     04380000
+RECOVER1 EQU   *                   NO SDWA FOR RETRY                    04390000
+         SR    R15,R15                                                  04400000
+         BR    R14                                                      04410000
+         LTORG ,                                                        04420000
+         DROP  ,                                                        04430000
+                                                                        04440000
+*---------------------------------*                                     04450000
+*  ESTAI RECOVERY ROUTINE         *                                     04460000
+*---------------------------------*                                     04470000
+         PRINT GEN                                                      04480000
+TASKABND DS    0H                  ESTAI RECOVERY ROUTINE               04490000
+         STM   R14,R12,12(R13)     SAVE REGISTERS                       04500000
+         LR    R12,R15                                                  04510000
+         USING TASKABND,R12                                             04520000
+         CH    R0,=H'12'           Q/ DO WE HAVE SDWA?                  04530000
+         BE    TASKABN1            .. NO, CAN'T RETRY                   04540000
+         USING SDWA,R1                                                  04550000
+         L     R2,SDWAPARM         LOAD A(ESTAI PARM)                   04560000
+         USING TASKSTAI,R2         ADDRESS OF PARAMETER AREA            04570000
+         MVC   TASKACOD,SDWAABCC   SAVE ABEND CODE                      04580000
+         MVI   TASKAFLG,X'80'      Indicate ABEND                       04590000
+         SETRP REGS=(14,12),       PERCOLATE ABEND                     X04600000
+               DUMP=YES, (NO)                                          X04610000
+               RC=0                                                     04620000
+TASKABN1 EQU   *                   NO SDWA FOR RETRY                    04630000
+         SR    R15,R15                                                  04640000
+         BR    R14                                                      04650000
+         LTORG ,                                                        04660000
+         DROP  ,                                                        04670000
+         PRINT NOGEN                                                    04680000
+                                                                        04690000
+         TITLE 'PCLWTR - LBD External Writer - Workarea'                04700000
+*********************************************************************** 04710000
+*        Main task workarea and dynamic storage                       * 04720000
+*********************************************************************** 04730000
+                                                                        04740000
+         PRINT GEN                                                      04750000
+         PCLINCL STATONL=YES       Include Task statistics DSECT        04760000
+         PRINT NOGEN                                                    04770000
+         SPACE 2                                                        04780000
+                                                                        04790000
+*---------------------------------*                                     04800000
+* Subtask communications area     *                                     04810000
+*---------------------------------*                                     04820000
+TASKL    DSECT                     Tasklist DSECT                       04830000
+TASKECB  DS    F                   Subtask ECB                          04840000
+*                                    (posted when subtask terminates)   04850000
+TASKTCBA DS    A                   A(subtask TCB)                       04860000
+*                                                                       04870000
+TASKPARM DS    0A                  Subtask parameter list               04880000
+PRMECBA  DS    A                   . A(ECB in CIB)                      04890000
+PRMFTABA DS    A                   . A(Font table)                      04900000
+PRMSTAXA DS    A                   . A(Task statistics)                 04910000
+PRMPRTA  DS    A                   . A(Printer list)                    04920000
+TASKCECB DS    F                   Subtask communications ECB           04930000
+*                                    (posted to wake up subtask)        04940000
+TASKSTAI DS    0F                  ESTAI recovery parameter area        04950000
+TASKAFLG DS    X                   .. x'80' = task abended              04960000
+TASKACOD DS    XL3                 ABEND code from SDWA                 04970000
+*                                                                       04980000
+         DS    0F                                                       04990000
+TASKSTAX DS    XL(TASKSTL)         Task statistics                      05000000
+                                                                        05010000
+TASKLEN  EQU   *-TASKL             Length of subtask comm. area         05020000
+                                                                        05030000
+         SPACE 2                                                        05040000
+*---------------------------------*                                     05050000
+* Main task dynamic storage       *                                     05060000
+*---------------------------------*                                     05070000
+WORK     DSECT ,                   Workarea                             05080000
+SAVEAREA DS    9D                  OS savearea                          05090000
+COMMENT  DS    CL8                 Memory comment                       05100000
+DWD      DS    D                   Doubleword work area                 05110000
+WTRNAME  DS    CL8                 This writer's name          PF980406 05111003
+STCKAREA DS    XL16                Workarea for STCKCONV       PF980511 05112006
+WAITLIST DS    XL((MAXTASKS+1)*4) WAIT LIST - ONE ENTRY PER SUBTASK     05120000
+                                                                        05130000
+*        SUBTASK CONTROL                                                05140000
+         DS    0F                                                       05150000
+TASKCNT  DS    F                    Subtask count                       05160000
+TASKLIST DS    XL(MAXTASKS*TASKLEN) Subtask communications area         05170000
+TASKLSTL EQU   *-TASKLIST             and length of same                05180000
+                                                                        05190000
+*                                                                       05200000
+COMPTR   DS    A                   A(CPL)                               05210000
+*                                                                       05220000
+STAEPARM DS    F                   ESTAE parameter list                 05230000
+FTAB     DS    A                   A(Font table)                        05240000
+PRTA     DS    A                   A(Printer list)                      05250000
+QNAME    DS    CL8                 QNAME for ENQ               PF021098 05260000
+*                                                                       05270000
+STATUS   DS    BL1                 Status Byte                          05280000
+ST_ABEND EQU   X'80'               1... .... ABEND requested            05290000
+ST_DRAIN EQU   X'02'               .... ..1. Drain requested            05300000
+ST_STOP  EQU   X'01'               .... ...1 Stop requested             05310000
+*                                                                       05320000
+MACAREA  DS    0F                  Macro work area overlay              05330000
+         DS    XL(ESTALEN)         Storage for ESTAE macro              05340000
+         ORG   MACAREA                                                  05350000
+         DS    XL(EXTRLEN)         Storage for EXTRACT macro            05360000
+         ORG   MACAREA                                                  05370000
+         DS    XL(ATTACHL)         Storage for ATTACH macro             05380000
+         ORG   MACAREA                                                  05390000
+         DS    XL(ENQDL)           Storage for ENQ    macro             05400000
+         ORG   MACAREA             .                           PF980511 05401006
+         DS    XL(STCKL)           Workarea for STCKCONV       PF980511 05402006
+         ORG   ,                   Reset origin                         05410000
+*                                                                       05420000
+WTOAREA  DS    0F                  WTO work area                        05430000
+         DS    XL(EM1L)            Reserve storage for                  05440000
+         ORG   WTOAREA             . largest WTO                        05450000
+         DS    XL(EM2L)            .                                    05460000
+         ORG   WTOAREA             .                                    05470000
+         DS    XL(EM3L)            .                                    05480000
+         ORG   WTOAREA             .                                    05490000
+         DS    XL(EM4L)            .                                    05500000
+         ORG   WTOAREA             .                                    05510000
+         DS    XL(EM5L)            .                                    05520000
+         ORG   WTOAREA             .                           PF980511 05521005
+         DS    XL(EM6L)            .                           PF980511 05522005
+         ORG   WTOAREA             .                                    05530000
+         ORG   ,                   Reset origin                         05540000
+*                                                                       05550000
+WRKLEN   EQU   *-WORK              L'Workarea                           05560000
+         SPACE 3                                                        05570000
+*                                                                       05580000
+         EJECT                                                          05590000
+         SPACE 3                                                        05600000
+*                                                                       05610000
+         TITLE 'PCLWTR - LBD External Writer - DSECTS'                  05620000
+         CVT   DSECT=YES           Copy CVT DSECT                       05630000
+         IHAECB ,                  ECB DSECT                            05640000
+         IHASDWA                   COPY SDWA DSECT                      05650000
+*                                                                       05660000
+COMDSECT DSECT                                                          05670000
+         IEZCOM ,                  Copy CPL                             05680000
+COMLEN   EQU    *-COMLIST          L'COMAREA                            05690000
+*                                                                       05700000
+CIB      DSECT                                                          05710000
+         IEZCIB ,                  Copy CIB                             05720000
+*                                                                       05730000
+         END                                                            05740000
+//* --------------------------------------------------------------- *** 05750000
+//LKED     EXEC PGM=IEWL,                                              X05760000
+//            PARM='XREF,LET,LIST,NCAL,RENT,REUS,REFR',                X05770000
+//            COND=(8,LT,ASM)                                           05780000
+//********************************************************************  05790000
+//**       LINKEDIT PROGRAM                                          *  05800000
+//********************************************************************  05810000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     05820000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                05830000
+//SYSLIB   DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                            05840001
+//         DD DSN=FLASS.PF.LOAD,DISP=SHR                                05841001
+//*SYSLMOD  DD DISP=SHR,DSN=SYSTEMS.LINKLIB                             05850000
+//SYSLMOD  DD DISP=SHR,DSN=SYSTEMS.CCP.LINKLIB                          05860009
+//SYSLIN   DD DSN=&&ASM,DISP=(OLD,DELETE)                               05870000
+//         DD *                                                         05880000
+ INCLUDE SYSLIB(PCLSMF)                                                 05881007
+ SETCODE AC(1)                                                          05890000
+ NAME PCLWTR(R)                                                         05900000
+//* --------------------------------------------------------------- *** 05910000

@@ -1,0 +1,26 @@
+ /********************************************************************/ 00010000
+ /*   Hexadecimal to character conversion                            */ 00020000
+ /********************************************************************/ 00030000
+                                                                        00040000
+ hex: proc(sp,n) returns( char(256) varying );                          00050000
+ dcl  sp                     ptr,                                       00060000
+      s                      char(4096) based(sp);                      00070000
+ dcl  n                      fixed bin(15);                             00080000
+ dcl  j                      fixed bin(15);                             00081000
+ dcl  ret                    char(256) varying   init('');              00082000
+ do j=1 to n;                                                           00083000
+   ret=ret||hexone( substr(s,j,1) );                                    00084000
+   end;                                                                 00085000
+ return(ret);                                                           00086000
+ end hex;                                                               00087000
+                                                                        00088000
+ hexone: proc(c) returns( char(2) );                                    00089000
+ dcl  c                      char;                                      00090000
+ dcl  hextabs                char(16) static     init                   00100000
+                       ('0123456789ABCDEF'),                            00110000
+      hextab           (0:15)char(1) defined hextabs;                   00120000
+ dcl  p                      ptr,                                       00130000
+      x                      bit(8) based(p);                           00140000
+ p = addr(c);                                                           00150000
+ return( hextab( substr(x,1,4) ) || hextab( substr(x,5,4) ) );          00160000
+ end hexone;                                                            00170000

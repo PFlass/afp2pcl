@@ -1,0 +1,2080 @@
+//FLASSD   JOB  (),'DEVDEP',CLASS=J,MSGCLASS=Z,                         00010000
+//         NOTIFY=$                                                     00020000
+//*                                                                     00030000
+//*                                                                     00040000
+//********************************************************************* 00050000
+//*                PL/I COMPILE AND LINK                              * 00060000
+//********************************************************************* 00070000
+// EXEC OPLIXCL,                                                        00080003
+//   PARM.PLI='M,NEST,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)', OF,LIST,MAP' 00090002
+//   PARM.LKED='LIST,MAP,XREF,RENT,LET,NCAL'                            00100000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120000
+//PLI.SYSIN    DD *                                                     00130000
+ /* DEVDEP - Device-dependent code for APF2PCL                       */ 00140000
+                                                                        00150000
+ /********************************************************************/ 00160000
+ /*                                                                  */ 00170000
+ /*    Module ID: DEVDEP                                             */ 00180000
+ /*                                                                  */ 00190000
+ /*    Author:    Peter Flass                                        */ 00200000
+ /*               NYS LBDC                                           */ 00210000
+ /*               Oct, 1997                                          */ 00220000
+ /*                                                                  */ 00230000
+ /*    Function:  Device-dependent code for AFP2PCL                  */ 00240000
+ /*               PCL or Metacode generation.                        */ 00250000
+ /*                                                                  */ 00260000
+ /*    Modifications:                                                */ 00270000
+ /*    2005-05-25  Don't send 'SIZE' every page.                     */ 00280018
+ /*    2005-01-18  STAPLE option, hdwre duplex for Savin.            */ 00280118
+ /*    2003-09-16  Fix problem with .VT in metacode          20030916*/ 00280218
+ /*      01-03-26  Tinker with 'SCAN' rules.                 PF010326*/ 00281001
+ /*      01-03-12  Fix Meta 'DOT' rules.                     PF010312*/ 00290000
+ /*      00-12-18  Blank page problem.                       PF001218*/ 00300000
+ /*      00-11-13  Fix translations for Titan.               PF001113*/ 00310000
+ /*      00-02-01  Correct width table lookup                PF000201*/ 00320000
+ /*      99-09-17  PJL commands.                             PF990917*/ 00330000
+ /*      99-06-15  Page setup.                               PF990615*/ 00340000
+ /*      99-06-xx  Finish Metacode generator.                PF9906xx*/ 00350000
+ /*      98-04-06  Raw PCL output                            PF980406*/ 00360000
+ /*                                                                  */ 00370000
+ /********************************************************************/ 00380000
+                                                                        00390000
+ %DCL    COMPILETIME         BUILTIN;                                   00400000
+ %DCL    COMPTIME            CHAR;                                      00410000
+ %COMPTIME = '''' || COMPILETIME || '''';                               00420000
+ %DCL    DEBUG               CHAR;     /* Generate debug code        */ 00430000
+ %DEBUG = 'N';                                                          00440000
+ %DCL   (TRUE,FALSE)         CHAR;                                      00450000
+ %TRUE  = '''1''b';                                                     00460000
+ %FALSE = '''0''b';                                                     00470000
+ %DCL    MCK                 CHAR;     /* Definition of MCK=YES      */ 00480000
+ %DCL    PCL                 CHAR;     /* Definition of PCL=YES      */ 00490000
+ %MCK   = 'SUBSTR(PRT_FLAGS,3,1)';                                      00500000
+ %PCL   = 'SUBSTR(PRT_FLAGS,5,1)';                                      00510000
+                                                                        00520000
+ DEVDEP: proc( aparm, fun, adata, len, atrtab )                         00530000
+         options( reentrant );                                          00540000
+                                                                        00550000
+ /*-----------------------------------*/                                00560000
+ /*  Parameters                       */                                00570000
+ /*-----------------------------------*/                                00580000
+ /*      aparm               ptr;         -> AFP2PCL parameter list  */ 00590000
+ dcl     fun                 char(8);  /* Printer function           */ 00600000
+ dcl     adata               ptr;      /* -> data (variable by fun)  */ 00610000
+ dcl     len                 fixed bin(15); /* data length if req    */ 00620000
+ dcl     atrtab              ptr;      /* -> translate table if req  */ 00630000
+                                                                        00640000
+ /*******************************************************************/  00650000
+ /*            *** Compile date and time ***                        */  00660000
+ /*******************************************************************/  00670000
+ dcl     devdepv             char(18) static external init(COMPTIME);   00680000
+                                                                        00690000
+                                                                        00700000
+ %include pclincl;                                                      00710000
+ %page;                                                                 00720000
+                                                                        00730000
+ /*------------------------------------------------------------------*/ 00740000
+ /*                'Static' data for this invocation                 */ 00750000
+ /*      (Currently 4K is reserved for this area by PCLWTR1/AFP2PCL) */ 00760000
+ /*------------------------------------------------------------------*/ 00770000
+ dcl 1   static_data         based(devd_storage),                       00780000
+      5  pcl_rec             char(80),                                  00790000
+      5  pclo                fixed bin(15)                 init(-1),    00800000
+                                                                        00810000
+      5  meta_rec            char(214),                                 00820000
+      5  metao               fixed bin(15)                 init(-1),    00830000
+      /*-------------------------------------------------------------*/ 00840000
+      /*                                                             */ 00850000
+      /* Fonts are organized thusly: AFP2PCL2 builds a table of      */ 00860000
+      /* fonts where the table index [subscript] is the AFP          */ 00870000
+      /* "local font id".  This program squeezes out the water       */ 00880000
+      /* and retains the table with 'mc_font_xref' containing the    */ 00890000
+      /* original "local font id".  The metacode font index is       */ 00900000
+      /* the position in this table.                                 */ 00910000
+      /*                                                             */ 00920000
+      /*-------------------------------------------------------------*/ 00930000
+      5  mc_font_cnt         fixed bin(15)                 init(0),     00940000
+      5  mc_font_num         fixed bin(15)                 init(0),     00950000
+      5  mc_font_name    (30)char(8)                  init( (30)' ' ),  00960000
+      5  mc_widtab       (30)ptr,                                       00970000
+      5  mc_font_xref    (30)fixed bin(15),                             00980000
+                                                                        00990000
+      5  text_orien          fixed bin(15)                 init(0),     01000000
+      5 (Lx,Ly)              fixed bin(31)                 init(0),     01010000
+      5 (pscan,pdot)         fixed bin(31)                 init(32767), 01020000
+      5 (cscan,cdot)         fixed bin(31)                 init(32767), 01030000
+      5  pfont               fixed bin(15)                 init(-1),    01040000
+      5  cfont               fixed bin(15)                 init(-1),    01050000
+      5  ptray               char(1)                       init('0'),   01060000
+      5  ctray               char(1)                       init('0'),   01070000
+      5  psize               char(1)                       init('0'),   01080000
+      5  csize               char(1)                       init('0'),   01090000
+      5  awidth              ptr,                                       01100000
+      5  cduplex             char(1)                       init(' '),   01110000
+      5  pduplex             char(1)                       init(' '),   01120000
+      5  ccopies             fixed bin(15)                 init(0),     01130000
+      5  pcopies             fixed bin(15)                 init(0),     01140000
+      5  rmi_count           fixed bin(15)                 init(0),     01150000
+      5  first_page          bit(1)                        init('1'b),  01160000
+      5  same_fonts          bit(1)                        init('1'b),  01170000
+      5  first_djde          bit(1)                        init('0'b),  01171001
+         /* first_djde added 16 Sep, 2003                            */ 01172001
+      5  end_static          char(0);  /* Storage ending address     */ 01180000
+                                                                        01190000
+ dcl     pcl_work            char(80)  varying;                         01200000
+ dcl     meta_work           char(214) varying;                         01210000
+ dcl     hwd                 fixed bin(15),                             01220000
+       1 bx                  unaligned based( addr(hwd) ),              01230000
+         5 xhob              char(1),                                   01240000
+         5 xlob              char(1);                                   01250000
+                                                                        01260000
+ dcl     prt_type            char(1);  /* 'P'=PCL, 'M'=Metacode      */ 01270000
+                                                                        01280000
+  /* Left and Top margin adjustments for Metacode                    */ 01290000
+  /* (Units: 1/720 inches)                                           */ 01300000
+ dcl     adjl                fixed bin(15)  static    init(87);         01310000
+ dcl     adjt                fixed bin(15)  static    init(137);        01320000
+                                                                        01330000
+                                                                        01340000
+ dcl     oneb                bit(8)              based,                 01350000
+         twob                bit(16)             based,                 01360000
+         threeb              bit(24)             based,                 01370000
+         fourb               bit(32)             based;                 01380000
+ dcl     hword               fixed bin(15)       based;                 01390000
+ dcl     word                fixed bin(31)       based;                 01400000
+ dcl     onec                char(1)             based,                 01410000
+         twoc                char(2)             based,                 01420000
+         threec              char(3)             based,                 01430000
+         fourc               char(4)             based;                 01440000
+ dcl     zovl                char(32767)         based;                 01450000
+ dcl     zovlv               char(32760) varying based;                 01460000
+                                                                        01470000
+ dcl     LF                  entry(                                     01480000
+                                    entry variable,                     01490000
+                                    entry variable,                     01500000
+                                    char(1),                            01510000
+                                    char(8),                            01520000
+                                    fixed bin(15)                       01530000
+                                  )                                     01540000
+                             returns( fixed bin(15) );                  01550000
+ dcl     ABEND               entry;                                     01560000
+ dcl     INCR                entry( ptr, fixed bin(31) );               01570000
+                                                                        01580000
+ %page;                                                                 01590000
+                                                                        01600000
+ /* --------------------------------- */                                01610000
+ /*   PCL Printer control characters  */                                01620000
+ /* --------------------------------- */                                01630000
+ dcl     FF                  char(1) static      init( '0C'x );         01640000
+ dcl     ESC                 char(1) static      init( '27'x );         01650000
+ dcl     CRLF                char(2) static      init( '0D0A'x );       01660000
+                                                                        01670017
+ /* --------------------------------- */                                01680000
+ /*   Constants for Metacode prtrs    */                                01690000
+ /* --------------------------------- */                                01700000
+ dcl     BLANK               char(1)   static              init         01710000
+                        ( ' ' );                                        01720000
+ dcl     CEND                char(4)   static              init         01730000
+                        ( 'END;' );                                     01740000
+ dcl     COMMA               char(1)   static              init         01750000
+                        ( ',' );                                        01760000
+ dcl     CSC                 char(2)   static              init         01770000
+                        ( ',;' );                                       01780000
+ dcl     DJDE                char(9)   static              init         01790000
+                        ( ' **DJDE**' );                                01800000
+ dcl     FONTS               char(7)   static              init         01810000
+                        ( 'FONTS=(' );                                  01820000
+ dcl     FORMSX              char(6)   static              init         01830000
+                        ( 'FORMSX' );                                   01840000
+ dcl     JDL                 char(17)  static              init         01850000
+                        ( 'JDL=LBDC,JDE=LIST' );                        01860000
+ dcl     PAREN               char(1)   static              init         01870000
+                        ( ')' );                                        01880000
+ dcl     FEED                char(5)   static              init         01890000
+                        ( 'FEED=' );                                    01900000
+ dcl     TRAYM               char(4)   static              init         01910000
+                        ( 'MAIN' );                                     01920000
+ dcl     TRAYA               char(3)   static              init         01930000
+                        ( 'AUX' );                                      01940000
+ dcl     DUPLEX              char(7)   static              init/*0615*/ 01950000
+                        ( 'DUPLEX=' );                         /*0615*/ 01960000
+ dcl     YES                 char(3)   static              init/*0615*/ 01970000
+                        ( 'YES' );                             /*0615*/ 01980000
+ dcl     NO                  char(2)   static              init/*0615*/ 01990000
+                        ( 'NO' );                              /*0615*/ 02000000
+ dcl     COPIES              char(7)   static              init/*0615*/ 02010000
+                        ( 'COPIES=' );                         /*0615*/ 02020000
+ dcl     RSTACK              char(8)   static              init         02030000
+                        ( '1313131313131313'x );                        02040000
+ dcl     ASCII_BLANK         char(1)   static              init         02050000
+                        ( '20'x );                                      02060000
+                                                                        02070000
+ %include builtins;                                                     02080000
+ %page;                                                                 02090000
+ /********************************************************************/ 02100000
+ /*             Mainline                                             */ 02110000
+ /********************************************************************/ 02120000
+                                                                        02130000
+ /*----------------------------------------------------------PF990615*/ 02140000
+ /* 4K is allocated for this area in PCLWTR1                 PF990615*/ 02150000
+ /*----------------------------------------------------------PF990615*/ 02160000
+ if cstg(static_data)>4096 then stop;                      /*PF990615*/ 02170000
+                                                                        02180000
+ if      prt_id = 'LOCAL   ' then prt_type='M';                         02190000
+ else if prt_id = 'METACODE' then prt_type='M';                         02200000
+ else if prt_id = 'R6      ' then prt_type='M';                         02210000
+ else                             prt_type='P';                         02220000
+                                                                        02230000
+ select(fun);                                                           02240000
+                                                                        02250000
+   when( 'INIT    ' ) call initialize;                                  02260000
+   when( 'RESET   ' ) call reset_printer;                               02270000
+   when( 'BEGPAGE ' ) call begin_page;                                  02280000
+   when( 'ENDPAGE ' ) call eject_page;                                  02290000
+   when( 'BEGTEXT ' ) call begin_text;                                  02300000
+   when( 'TRAY    ' ) call pick_tray;                                   02310000
+   when( 'END     ' ) call end_doc;                                     02320000
+   when( 'WRITE/LN' ) call write_linemode;                              02330000
+   when( 'WRITE/TX' ) call write_text;                                  02340000
+   when( 'EOF     ' ) call write_eof;                                   02350000
+   when( 'AMB     ' ) call amb;                                         02360000
+   when( 'AMI     ' ) call ami;                                         02370000
+   when( 'RMB     ' ) call rmb;                                         02380000
+   when( 'RMI     ' ) call rmi;                                         02390000
+   when( 'US ON   ' ) call underscore_on;                               02400000
+   when( 'US OFF  ' ) call underscore_off;                              02410000
+   when( 'STO     ' ) call set_orientation;                             02420000
+   when( 'FONT/ADD' ) call font_download;                               02430000
+   when( 'FONT/DEL' ) call font_delete;                                 02440000
+   when( 'FONT    ' ) call font_select;                                 02450000
+   when( 'SIZE    ' ) call paper_size;                                  02460000
+   when( 'HRULE   ' ) call horiz_rule;                                  02470000
+   when( 'VRULE   ' ) call vert_rule;                                   02480000
+   when( 'ENVGRP  ' ) begin;                                            02490000
+     call environ_grp;                                                  02500000
+     end; /* begin */                                                   02510000
+   end; /* select */                                                    02520000
+                                                                        02530000
+ return;                                                                02540000
+                                                                        02550000
+ %page;                                                                 02560000
+ /********************************************************************/ 02570000
+ /*             Functional processing routines                       */ 02580000
+ /********************************************************************/ 02590000
+                                                                        02600000
+ /*-------------------------*/                                          02610000
+ /* Initialize new document */                                          02620000
+ /*-------------------------*/                                          02630000
+                                                                        02640000
+ initialize: proc options( reentrant );                                 02650000
+   /* Initialize 'static data' */                                       02660000
+   static_data.pclo       = -1;                                         02670000
+   static_data.metao      = -1;                                         02680000
+   static_data.mc_font_cnt = 0;                                         02690000
+   static_data.mc_font_num = 0;                                         02700000
+   static_data.text_orien = 0;                                          02710000
+   static_data.Lx         = 0;                                          02720000
+   static_data.Ly         = 0;                                          02730000
+   static_data.pscan      = 32767;                                      02740000
+   static_data.pdot       = 32767;                                      02750000
+   static_data.cscan      = 32767;                                      02760000
+   static_data.cdot       = 32767;                                      02770000
+   static_data.pfont      = -1;                                         02780000
+   static_data.cfont      = -1;                                         02790000
+   static_data.ptray      = '0';                                        02800000
+   static_data.ctray      = '0';                                        02810000
+   static_data.psize      = '0';                                        02820000
+   static_data.csize      = '0';                                        02830000
+   static_data.cduplex    = ' ';                                        02840000
+   static_data.pduplex    = ' ';                                        02850000
+   static_data.ccopies    = 0;                                          02860000
+   static_data.pcopies    = 0;                                          02870000
+   static_data.rmi_count  = 0;                             /*PF000202*/ 02880000
+   static_data.first_page = '1'b;                                       02890000
+   static_data.same_fonts = '1'b;                                       02900000
+   static_data.first_djde = '0'b;                          /*20030916*/ 02901001
+ end initialize;                                                        02910000
+                                                                        02920000
+ /*--------------------------------------------------------*/           02930000
+ /* Reset the printer                                      */           02940000
+ /* (May be called before, after, and within a report      */           02950000
+ /*--------------------------------------------------------*/           02960000
+                                                                        02970000
+ reset_printer: proc options( reentrant );                              02980000
+   select(prt_type);                                                    02990000
+     when('P') do;                                                      03000008
+       /*-------------------------------------------------*/            03000108
+       /* Savin printers are reset when 1st page printed  */            03000208
+       /*-------------------------------------------------*/            03000308
+       if substr(prt_device,3,1)ª='1'b /* Not Savin?         20050228*/ 03001017
+       then call pcl_setup;            /* Yes, reset printer 20050228*/ 03010017
+       end; /* 'P' */                                                   03020008
+     when('M') do;                                                      03320000
+       /*******************************/                                03330000
+       /* 'NOP' for Metacode          */                                03340000
+       /*******************************/                                03350000
+       end; /* 'M' */                                                   03360000
+     end; /* select */                                                  03370000
+ end reset_printer;                                                     03380000
+                                                                        03390000
+ /*-------------------------*/                                          03400000
+ /* Begin a new page        */                                          03410000
+ /*-------------------------*/                                          03420000
+                                                                        03430000
+ begin_page: proc options( reentrant );                                 03440000
+   select(prt_type);                                                    03450000
+     when('P') do;                                                      03460000
+       /*-------------------------------------------------*/            03460108
+       /* Savin printers are reset when the first page is */            03460208
+       /* printed in order to pick up the 'STAPLE' opt.   */            03460308
+       /*-------------------------------------------------*/            03460408
+       if substr(prt_device,3,1)='1'b &/* First page for     20050228*/ 03461008
+          adata->S_page = 1            /*   SAVIN printer?   20050228*/ 03462008
+       then do;                                            /*20050228*/ 03463008
+         call pcl_setup;               /* Printer reset here 20050228*/ 03463108
+         pduplex,cduplex = adata->S_duplex;                /*20050516*/ 03463217
+         end; /* Savin */                                  /*20050228*/ 03464008
+       static_data.cduplex = adata->S_duplex;              /*PF990615*/ 03470000
+       static_data.ctray   = adata->S_tray;                /*PF990923*/ 03480000
+       if cduplexª=pduplex then do;                        /*PF990615*/ 03490000
+         if cduplex='Y'                                    /*PF990615*/ 03500000
+         then pcl_work =  ESC||'&l1S';                     /*PF990917*/ 03510000
+         else pcl_work =  ESC||'&l0S';                     /*PF990917*/ 03520000
+         call write_pcl( addr(pcl_work)+2,                 /*PF990917*/ 03530000
+                         length(pcl_work),                 /*PF990917*/ 03540000
+                         addr(ascii) );                    /*PF990917*/ 03550000
+         pduplex=cduplex;                                  /*PF990615*/ 03560000
+         end; /* cduplexª=pduplex */                       /*PF990615*/ 03570000
+       end; /* 'P' */                                                   03580000
+     when('M') do;                                                      03590000
+       /*******************************/                   /*PF990615*/ 03600000
+       /* Set page options for Meta   */                   /*PF990615*/ 03610000
+       /*******************************/                   /*PF990615*/ 03620000
+       static_data.cduplex = adata->S_duplex;              /*PF990615*/ 03630000
+       static_data.ccopies = adata->S_copies;              /*PF990615*/ 03640000
+       /* Tray option set by 'pick_tray' */;               /*PF990615*/ 03650000
+       end; /* 'M' */                                                   03660000
+     end; /* select */                                                  03670000
+ end begin_page;                                                        03680000
+                                                                        03690000
+ /*-------------------------*/                                          03700000
+ /* Eject current page      */                                          03710000
+ /*-------------------------*/                                          03720000
+                                                                        03730000
+ eject_page: proc options( reentrant );                                 03740000
+   select(prt_type);                                                    03750000
+     when('P') do;                                                      03760000
+     /* NOTE: Method(1) generates blank page when switching trays    */ 03770000
+     /*       but method(1) required for duplexing or all pages      */ 03780000
+     /*       print front-side only.                                 */ 03790000
+     if substr(prt_device,3,1)='1'b    /* Savin?             20050228*/ 03790218
+     then do;                                                           03790318
+         put string(pcl_work) edit( ESC||'&a0G' )(a);                   03790418
+         call write_pcl( addr(pcl_work)+2,                              03790518
+                         length(pcl_work),                              03790618
+                         addr(ascii) );                                 03790718
+         ctray = adata->onec;                                           03790818
+         return;                                                        03790918
+         end; /* Savin */                                  /*PF990923*/ 03791018
+     /*if ctrayª=ptray then do;*/                          /*PF990923*/ 03800000
+       if ctrayª='ERROR' then do;                          /* *TEMP* */ 03810000
+         put string(pcl_work) edit( ESC||'&l' || ctray || 'H' )(a);     03820000
+         call write_pcl( addr(pcl_work)+2,                 /*PF990923*/ 03830000
+                         length(pcl_work),                 /*PF990923*/ 03840000
+                         addr(ascii) );                    /*PF990923*/ 03850000
+         ptray=ctray;                                      /*PF990923*/ 03860000
+         end; /* ctrayª=ptray */                           /*PF990923*/ 03870000
+       else do;                                                         03880000
+         pcl_work = FF;                                                 03890000
+         call write_pcl( addr(pcl_work)+2,                              03900000
+                         length(pcl_work),                              03910000
+                         addr(ascii) );                                 03920000
+         end; /* else */                                                03930000
+       ctray = adata->onec;                                             03940000
+       end; /* 'P' */                                                   03950000
+     when('M') do;                                                      03960000
+       /*******************************/                                03970000
+       /* 'NOP' for Metacode          */                                03980000
+       /*******************************/                                03990000
+       end; /* 'M' */                                                   04000000
+     end; /* select */                                                  04010000
+ end eject_page;                                                        04020000
+                                                                        04030000
+ /*-------------------------*/                                          04040000
+ /* Begin text for page     */                                          04050000
+ /*-------------------------*/                                          04060000
+                                                                        04070000
+ begin_text: proc options( reentrant );                                 04080000
+   dcl   howmany             fixed bin(15);                             04090000
+   dcl   at                  ptr;                                       04100000
+   dcl  wf                   fixed bin(15);                             04110000
+   select(prt_type);                                                    04120000
+     when('P') do;                                                      04130000
+     /* NOP for PCL */                                                  04140000
+       end; /* 'P' */                                                   04150000
+     when('M') do;                                                      04160000
+       /*******************************/                                04170000
+       /* Generate DJDE for Meta      */                                04180000
+       /*******************************/                                04190000
+       call write_meta( null(), -1 );                                   04200000
+       meta_work = '';                                                  04210000
+       substr(meta_rec,1,1)='+';                                        04220000
+       /*-----------------------------*/                                04230000
+       /*      First Page             */                                04240000
+       /*-----------------------------*/                                04250000
+       if stat_pages=0 then do;        /* First page                 */ 04260000
+         call write_meta( null(), -1 );/* Flush record               */ 04270000
+         /* NOTE: Remove the following line if Larry gets rid of     */ 04280000
+         /*       his initial 'DJDE END;' in JES to eliminate        */ 04290000
+         /*       generating an initial blank page.                  */ 04300000
+         substr(meta_rec,1,1)='1';                                      04310000
+         meta_work = JDL;                                               04320000
+         end; /* stat_pages=0 */                                        04330000
+       if ptrayª=ctray then do;                                         04340000
+         if meta_workª='' then meta_work = meta_work || COMMA;          04350000
+         meta_work = meta_work || FEED;                                 04360000
+         if ctray='2' | ctray='3' | ctray='4'                           04370000
+         then meta_work = meta_work || TRAYA;                           04380000
+         else meta_work = meta_work || TRAYM;                           04390000
+         ptray=ctray;                                                   04400000
+         end; /* ptrayª=ctray */                                        04410000
+       if pduplexª=cduplex then do;                        /*PF990615*/ 04420000
+         if meta_workª=''                                  /*PF990615*/ 04430000
+         then meta_work = meta_work || COMMA;              /*PF990615*/ 04440000
+         meta_work = meta_work || DUPLEX;                  /*PF990615*/ 04450000
+         if cduplex='Y'                                    /*PF990615*/ 04460000
+         then meta_work = meta_work || YES;                /*PF990615*/ 04470000
+         else meta_work = meta_work || NO;                 /*PF990615*/ 04480000
+         pduplex=cduplex;                                  /*PF990615*/ 04490000
+         end; /* pduplexª=cduplex */                       /*PF990615*/ 04500000
+       if ccopiesª=pcopies then begin;                     /*PF990615*/ 04510000
+         dcl ccount pic '99';                              /*PF990615*/ 04520000
+         if ccopiesª=0  then do;                           /*PF990615*/ 04530000
+           if meta_workª=''                                /*PF990615*/ 04540000
+           then meta_work = meta_work || COMMA;            /*PF990615*/ 04550000
+           meta_work = meta_work || COPIES;                /*PF990615*/ 04560000
+           ccount=ccopies;                                 /*PF990615*/ 04570000
+           meta_work = meta_work || ccount;                /*PF990615*/ 04580000
+           end; /* duplex=Y */                             /*PF990615*/ 04590000
+         pcopies=ccopies;                                  /*PF990615*/ 04600000
+         end; /* ccopiesª=pcopies */                       /*PF990615*/ 04610000
+       if meta_workª='' then do;                           /*PF990615*/ 04620000
+         meta_work = meta_work || CSC;                     /*PF990615*/ 04630000
+         call write_ddjde;                                 /*PF990615*/ 04640000
+         end;                                              /*PF990615*/ 04650000
+       if same_fonts = FALSE then do;                                   04660000
+         if meta_workª='' then meta_work = meta_work || COMMA;          04670000
+         meta_work = meta_work || FONTS || FORMSX;                      04680000
+         howmany = length(meta_work);                                   04690000
+         do wf = 1 to mc_font_num;                                      04700000
+           if howmany > length(meta_rec)-12 then do;                    04710000
+             meta_work = meta_work || PAREN || CSC;                     04720000
+             call write_ddjde;                                          04730000
+             meta_work = FONTS || substr(mc_font_name(wf),1,6);         04740000
+             end; /* howmany */                                         04750000
+           else meta_work = meta_work || COMMA ||                       04760000
+                            substr(mc_font_name(wf),1,6);               04770000
+           end; /* do wf */                                             04780000
+         meta_work = meta_work || PAREN || CSC;                         04790000
+         end; /* same_fonts */                                          04800000
+       if meta_workª='' then call write_ddjde;             /*PF020111*/ 04810000
+       meta_work = CEND;                                   /*PF020111*/ 04820000
+       call write_ddjde;                                   /*PF020111*/ 04830000
+       if stat_pages=0 then do;        /* First page                 */ 04840000
+         /* NOTE: Remove the following code if Larry gets rid of     */ 04850000
+         /*       his initial 'DJDE END;' in JES to eliminate        */ 04860000
+         /*       generating an initial blank page.                  */ 04870000
+         if cduplex='Y' then do;                           /*PF990615*/ 04880000
+           substr(meta_rec,1,1)='1';                       /*PF990615*/ 04890000
+           call write_meta( addr(ASCII_BLANK),             /*PF001218*/ 04900000
+                            length(ASCII_BLANK) );         /*PF001218*/ 04910000
+           call write_meta( null(), -1 );                  /*PF990615*/ 04920000
+           end; /* cduplex */                              /*PF990615*/ 04930000
+         end; /* stat_pages=0 */                                        04940000
+       substr(meta_rec,1,1)='1';       /* Force out page eject       */ 04950002
+       call write_meta( null(), -1 );                                   04960000
+       pscan,pdot = 32767;                                              04970000
+       first_djde = '1'b;    /* First DJDE written           20030916*/ 04971002
+       end; /* 'M' */                                                   04980000
+     end; /* select */                                                  04990000
+                                                                        05000000
+ write_ddjde: proc;                                                     05010000
+   dcl   p                   ptr;                                       05020000
+   dcl   n                   fixed bin(15);                             05030000
+   call write_meta( null(), -1 );                                       05040000
+   call write_meta( addr(DJDE), length(DJDE) );                         05050000
+   if first_djde                            /* EBCDIC DJDE on20030916*/ 05060002
+   then meta_work = translate(meta_work,ascii);                         05070000
+   call write_meta( addr(meta_work)+2,                                  05080000
+                    length(meta_work) );                                05090000
+   call write_meta( null(), -1 );                                       05100000
+   substr(meta_rec,1,1)='+';                                            05110000
+   meta_work='';                                                        05120000
+   end write_ddjde;                                                     05130000
+                                                                        05140000
+ end begin_text;                                                        05150000
+                                                                        05160000
+ /*-------------------------*/                                          05170000
+ /* Select paper source     */                                          05180000
+ /*-------------------------*/                                          05190000
+                                                                        05200000
+ pick_tray: proc options( reentrant );                                  05210000
+   select(prt_type);                                                    05220000
+     when('P') do;                                                      05230000
+       static_data.ctray=adata->onec;                                   05240000
+                                                                        05250000
+       put string(pcl_work) edit( ESC||'&l' || adata->onec || 'H' )(a); 05260000
+       call write_pcl( addr(pcl_work)+2,                                05270000
+                       length(pcl_work),                                05280000
+                       addr(ascii) );                                   05290000
+                                                                        05300000
+       /* .VT acts on current page, $PRINT acts on next page */         05310000
+       end; /* 'P' */                                                   05320000
+     when('M') do;                                                      05330000
+       static_data.ctray=adata->onec;                                   05340000
+       end; /* 'M' */                                                   05350000
+     end; /* select */                                                  05360000
+ end pick_tray;                                                         05370000
+                                                                        05380000
+ /*-------------------------*/                                          05390000
+ /* End current document    */                                          05400000
+ /*-------------------------*/                                          05410000
+                                                                        05420000
+ end_doc: proc options( reentrant );                                    05430000
+   select(prt_type);                                                    05440000
+     when('P') do;                                                      05450000
+       /*-------------------------*/                                    05460000
+       /* Write ending 'reset'    */                                    05470000
+       /*-------------------------*/                                    05480000
+       pcl_work = ESC||'E';                                             05490000
+       call write_pcl( addr(pcl_work)+2,                                05500000
+                       length(pcl_work),                                05510000
+                       addr(ascii)                                      05520000
+                     );                                                 05530000
+                                                           /*PF990917*/ 05540000
+       pcl_work = ESC || '%-12345X@PJL ';                  /*PF990917*/ 05550000
+       pcl_work = translate(pcl_work,ascii);               /*PF990917*/ 05560000
+       pcl_work = pcl_work || CRLF;                        /*PF990917*/ 05570000
+       call write_pcl( addr(pcl_work)+2, length(pcl_work), /*PF990917*/ 05580000
+                       null() );                           /*PF990917*/ 05590000
+       pcl_work = '@PJL RDYMSG DISPLAY=""';                /*PF990917*/ 05600000
+       pcl_work = translate(pcl_work,ascii);               /*PF990917*/ 05610000
+       pcl_work = pcl_work || CRLF;                        /*PF990917*/ 05620000
+       call write_pcl( addr(pcl_work)+2, length(pcl_work), /*PF990917*/ 05630000
+                       null() );                           /*PF990917*/ 05640000
+       pcl_work = '@PJL EOJ';                              /*PF990917*/ 05650000
+       pcl_work = translate(pcl_work,ascii);               /*PF990917*/ 05660000
+       pcl_work = pcl_work || CRLF;                        /*PF990917*/ 05670000
+       call write_pcl( addr(pcl_work)+2, length(pcl_work), /*PF990917*/ 05680000
+                       null() );                           /*PF990917*/ 05690000
+       pcl_work = ESC || '%-12345X';                       /*PF990917*/ 05700000
+       pcl_work = translate(pcl_work,ascii);               /*PF990917*/ 05710000
+       call write_pcl( addr(pcl_work)+2, length(pcl_work), /*PF990917*/ 05720000
+                       null() );                           /*PF990917*/ 05730000
+       end; /* 'P' */                                                   05740000
+     when('M') do;                                                      05750000
+       /*-------------------------*/                                    05760000
+       /* Write ending 'rstack'   */                                    05770000
+       /*-------------------------*/                                    05780000
+       call write_meta( null(), -1 );         /* Flush out meta rec  */ 05790000
+       substr(meta_rec,1,1)='1';                                        05800000
+       call write_meta( addr(BLANK), length(BLANK) );                   05810000
+       call write_meta( addr(RSTACK), length(RSTACK) );                 05820000
+       call write_meta( null(), -1 );         /* Flush out meta rec  */ 05830000
+       end; /* 'M' */                                                   05840000
+     end; /* select */                                                  05850000
+ end end_doc;                                                           05860000
+                                                                        05870000
+ /*-------------------------*/                                          05880000
+ /* Write data in linemode  */                                          05890000
+ /*-------------------------*/                                          05900000
+                                                                        05910000
+ write_linemode: proc options( reentrant );                             05920000
+   select(prt_type);                                                    05930000
+     when('P') do;                                                      05940000
+       call write_pcl( adata+2,                                         05950000
+                       length( adata->zovlv ),                          05960000
+                       atrtab                                           05970000
+                     );                                                 05980000
+       call write_pcl( addr(CRLF),                                      05990000
+                       length(CRLF),                                    06000000
+                       null()                                           06010000
+                     );                                                 06020000
+       end; /* 'P' */                                                   06030000
+     when('M') do;                                                      06040000
+       call write_meta( null(), -1 );         /* Flush out meta rec  */ 06050000
+       substr(meta_rec,1,1)=' ';                                        06060000
+       meta_work = substr( adata->zovlv, 1, length(adata->zovlv) );     06070000
+       call write_meta( addr(meta_work)+2,                              06080000
+                        length( meta_work )                             06090000
+                      );                                                06100000
+       call write_meta( null(), -1 );         /* Flush out meta rec  */ 06110000
+       end; /* 'M' */                                                   06120000
+     end; /* select */                                                  06130000
+ end write_linemode;                                                    06140000
+                                                                        06150000
+ /*-------------------------*/                                          06160000
+ /* Write text data         */                                          06170000
+ /*-------------------------*/                                          06180000
+                                                                        06190000
+ write_text: proc options( reentrant );                                 06200000
+                                                                        06210000
+   dcl   meta_len            fixed bin(15);                             06220000
+   dcl   ttab                char(256) based(atrtab);                   06230000
+   dcl   count               fixed bin(15);                             06240000
+   dcl   at                  ptr;                                       06250000
+   dcl   i                   fixed bin(15);                             06260000
+   dcl   p                   ptr;                                       06270000
+   dcl   rx                  fixed bin(15)       init(0);               06280000
+   dcl  (txlen,spavail)      fixed bin(31);                             06290000
+   dcl   where               ptr;                                       06300000
+   dcl   howmany             fixed bin(15);                             06310000
+   dcl   blo                 fixed bin(15);                /*PF980505*/ 06320000
+   dcl   mbe                 fixed bin(15);                /*PF980715*/ 06330000
+   dcl   rc                  bit(1);                                    06340000
+   dcl   fontbyte            char(1)             init( '00'x );         06350000
+   dcl   fontname            char(8);                                   06360000
+   dcl   ofname              char(8);                                   06370000
+   dcl   ofbyte              char(1);                                   06380000
+                                                                        06390000
+   select(prt_type);                                                    06400000
+     when('P') do;                                                      06410000
+       call write_pcl( adata,                                           06420000
+                       len,                                             06430000
+                       atrtab                                           06440000
+                     );                                                 06450000
+       end; /* 'P' */                                                   06460000
+     when('M') do;                                                      06470000
+       txlen = len;                    /* Length of text(characters) */ 06480000
+       where = adata;                  /* Address of text            */ 06490000
+       blo = awidth->w_baseline_offset(1);                 /*PF980505*/ 06500000
+       mbe = awidth->w_baseline_extent(1);                 /*PF980715*/ 06510000
+                                                                        06520000
+       do while(txlen>0);                                               06530000
+ dummy:  do;                                                            06540000
+         meta_work = '';                                                06550000
+         rx = 0;                                                        06560000
+         /*----------------------------------------------------------*/ 06570000
+         /*  Remaining space minus length of longest meta            */ 06580000
+         /*----------------------------------------------------------*/ 06590000
+         spavail = length(meta_rec)-metao-1-9;                          06600000
+         /*----------------------------------------------------------*/ 06610000
+         /*  Writing length of text or minimum of five characters    */ 06620000
+         /*----------------------------------------------------------*/ 06630000
+         if min(txlen,5)>spavail then do;   /* Room for some text?   */ 06640000
+           call write_meta( null(), -1 );   /* Flush current record  */ 06650000
+           leave dummy;                                                 06660000
+           end;                                                         06670000
+                                                                        06680000
+         /*----------------------------------------------------------*/ 06690000
+         /* Comment: Large-size fonts contain only a partial         */ 06700000
+         /*          character set.  We need to keep track of        */ 06710000
+         /*          which partial font was last used.               */ 06720000
+         /*----------------------------------------------------------*/ 06730000
+                                                                        06740000
+         /*-----------------------------*/                              06750000
+         /*  Get dot width of text      */                              06760000
+         /*-----------------------------*/                              06770000
+         howmany = min(spavail,txlen);                                  06780000
+         ofbyte = fontbyte;                 /* Save font byte code   */ 06790000
+         ofname = fontname;                                             06800000
+         fontname = mc_font_name(cfont);                                06810000
+         awidth   = mc_widtab(cfont);                                   06820000
+         i = howmany+1;                                                 06830000
+         if substr(awidth->w_flags(1),1,1)='1'b then do; /* Non-prop */ 06840000
+           rx = rx + howmany * awidth->w_char_incr(1);                  06850000
+           /* NOTE: no non-proportional 18- or 24-point fonts */        06860000
+           end;                                                         06870000
+         else do i=1 to howmany;                                        06880000
+           p = where+i-1;                                               06890000
+           rc =  check_meta_font( p->onec, fontbyte, fontname );        06900000
+           if ofbyte='00'x then do;                                     06910000
+             ofbyte = fontbyte;                                         06920000
+             ofname = fontname;                                         06930000
+             end;                                                       06940000
+           if rc='0'b then leave;      /* Font change!               */ 06950000
+           rx = rx + awidth->width( 1,  p->oneb );                      06960000
+           end; /* do i */                                              06970000
+         howmany = i-1;                                                 06980000
+         /*----------------------------------------------------------*/ 06990000
+         /* Convert logical page position to Xerox Dot/Scan          */ 07000000
+         /* Convert character reference points between AFP and Meta. */ 07010000
+         /*----------------------------------------------------------*/ 07020000
+         select(text_orien);                                            07030000
+           when(0)                                                      07040000
+             call get_meta_pos(Lx+adjl,Ly+(mbe-blo)+adjt);              07050000
+           when(90)                                                     07060000
+             call get_meta_pos(Lx+rx+adjl,Ly+(mbe-blo)+adjt);           07070000
+           when(180)                                                    07080000
+             call get_meta_pos(Lx+rx+adjl,Ly-blo+adjt);                 07090000
+           when(270)                                                    07100000
+             call get_meta_pos(Lx+adjl,Ly-blo+adjt);                    07110000
+           end; /* select */                                            07120000
+         if cscan <= pscan then do;    /* Need to start new record   */ 07130000
+           call write_meta( null(), -1 );                               07140000
+           pscan,pdot=-1;                                               07150000
+           end;                                                         07160000
+         /*-----------------------------*/                              07170000
+         /* Generate ASCAN ADOT         */                              07180000
+         /*-----------------------------*/                              07190000
+         if cscan ª= pscan then do;                                     07200000
+           hwd,pscan = cscan;                                           07210000
+           meta_work = meta_work || '06'x || xlob || xhob;              07220000
+           pdot = cdot-1; /* Force '04' meta to be generated */         07230000
+           end;                                                         07240000
+         if cdot ª= pdot then do;                                       07250000
+           hwd,pdot = cdot;                                             07260000
+           meta_work = meta_work || '04'x || xlob || xhob;              07270000
+           end;                                                         07280000
+         /*-----------------------------*/                              07290000
+         /*  [LANDSCAPE]                */                              07300000
+         /*-----------------------------*/                              07310000
+         if text_orien = 90 | text_orien=270 then do;                   07320000
+           meta_work =  meta_work || '02'x;                             07330000
+           end; /* text_orien */                                        07340000
+         /*-----------------------------*/                              07350000
+         /*  FONT                       */                              07360000
+         /*-----------------------------*/                              07370000
+         do i=1 to mc_font_num;                                         07380000
+           if ofname = mc_font_name(i) then do;                         07390000
+             cfont  = i;                                                07400000
+             end; /* if */                                              07410000
+           end; /* do i */                                              07420000
+         if pfont ª= cfont then do;    /* Have to specify a font     */ 07430000
+           meta_work =  meta_work || '00'x ||                           07440000
+                        substr( addr(cfont)->twoc,2,1 );                07450000
+           pfont = cfont;                                               07460000
+           end; /* pfont */                                             07470000
+         meta_len = length(meta_work);                                  07480000
+         /*-----------------------------*/                              07490000
+         /*  <text> to fit curr record  */                              07500000
+         /*-----------------------------*/                              07510000
+         if text_orien=90 | text_orien=180                              07520000
+         then meta_work = meta_work ||                                  07530000
+                          reverse(substr(where->zovl,1,howmany));       07540000
+         else meta_work = meta_work || substr(where->zovl,1,howmany);   07550000
+         at = addr(meta_work)+meta_len+2;                               07560000
+         if atrtabª=null() then do;                                     07570000
+           at = addr(meta_work)+meta_len+2;                             07580000
+           substr(at->zovl,1,howmany) =                                 07590000
+                 translate( substr(at->zovl,1,howmany), ttab );         07600000
+           /*-----------------------------*/                            07610000
+           /*  Different codes for Titan  */                            07620000
+           /*-----------------------------*/                            07630000
+           if substr( mc_font_name(cfont), 1, 2 ) = '94'                07640000
+           then substr(at->zovl,1,howmany) =                            07650000
+                     translate( substr(at->zovl,1,howmany), metat );    07660000
+           else substr(at->zovl,1,howmany) =                            07670000
+                     translate( substr(at->zovl,1,howmany), meta );     07680000
+           end;                                                         07690000
+         call write_meta( addr(meta_work)+2,                            07700000
+                          length(meta_work) );                          07710000
+         /* Update current text pointers */                             07720000
+         where = where + howmany;                                       07730000
+         txlen = txlen - howmany;                                       07740000
+         /*----------------------------------------------------------*/ 07750000
+         /* Update position to reflect characters printed            */ 07760000
+         /*----------------------------------------------------------*/ 07770000
+         Lx = Lx + rx;                                                  07780000
+         call get_meta_pos(Lx+adjl,Ly+adjt);                            07790000
+         pscan = cscan;                                                 07800000
+         pdot  = cdot;                                                  07810000
+         end dummy;                                                     07820000
+         end; /* do txtlen>0 */                                         07830000
+       end; /* 'M' */                                                   07840000
+     end; /* select */                                                  07850000
+ end write_text;                                                        07860000
+                                                                        07870000
+ /*-------------------------*/                                          07880000
+ /* End of job              */                                          07890000
+ /*-------------------------*/                                          07900000
+                                                                        07910000
+ write_eof: proc options( reentrant );                                  07920000
+   select(prt_type);                                                    07930000
+     when('P') do;                                                      07940000
+       if MCK=TRUE then do;                      /* MCK=YES          */ 07950000
+         pcl_work = '=MCK= RESET/END';           /* Reset PCL mode   */ 07960000
+         pcl_work = translate(pcl_work,ascii);                          07970000
+         pcl_work = pcl_work || CRLF || FF;                             07980000
+         call write_pcl( addr(pcl_work)+2, length(pcl_work), null() );  07990000
+         end; /* MCK=YES */                                             08000000
+       call write_pcl( addr(CRLF),                                      08010000
+                       length(CRLF),                                    08020000
+                       null()                                           08030000
+                     );                                                 08040000
+       call write_pcl( null(), -1, null() );     /* Flush last card  */ 08050000
+       end; /* 'P' */                                                   08060000
+     when('M') do;                                                      08070000
+       /*******************************/                                08080000
+       /* 'NOP' for Metacode          */                                08090000
+       /*******************************/                                08100000
+       end; /* 'M' */                                                   08110000
+     end; /* select */                                                  08120000
+ end write_eof;                                                         08130000
+                                                                        08140000
+ /*-------------------------*/                                          08150000
+ /* Absolute baseline move  */                                          08160000
+ /*-------------------------*/                                          08170000
+                                                                        08180000
+ amb: proc options( reentrant );                                        08190000
+   dcl   new_pos             fixed bin(31);                             08200000
+   new_pos = adata->word;    /* Get new baseline position            */ 08210000
+   select(prt_type);                                                    08220000
+     when('P') do;                                                      08230000
+       /* ESC&a#V                               */                      08240000
+       put string(pcl_work) edit( ESC||'&a', toc((new_pos)), 'V' )(a);  08250000
+       call write_pcl( addr(pcl_work)+2,                                08260000
+                       length(pcl_work),                                08270000
+                       addr(ascii) );                                   08280000
+       end; /* 'P' */                                                   08290000
+     when('M') do;                                                      08300000
+       /* Compute new 'Y' pos in pels */                                08310000
+       Ly = ceil( float(new_pos*300)/720 );                             08320000
+       end; /* 'M' */                                                   08330000
+     end; /* select */                                                  08340000
+ end amb;                                                               08350000
+                                                                        08360000
+ /*-------------------------*/                                          08370000
+ /* Absolute inline move    */                                          08380000
+ /*-------------------------*/                                          08390000
+                                                                        08400000
+ ami: proc options( reentrant );                                        08410000
+   dcl   new_pos             fixed bin(31);                             08420000
+   new_pos = adata->word;    /* Get new baseline position            */ 08430000
+   static_data.rmi_count  = 0;                             /*PF000202*/ 08440000
+   select(prt_type);                                                    08450000
+     when('P') do;                                                      08460000
+       /* ESC&a#H                               */                      08470000
+       put string(pcl_work) edit( ESC||'&a', toc((new_pos)), 'H' )(a);  08480000
+       call write_pcl( addr(pcl_work)+2,                                08490000
+                       length(pcl_work),                                08500000
+                       addr(ascii) );                                   08510000
+       end; /* 'P' */                                                   08520000
+     when('M') do;                                                      08530000
+       /* Compute new 'X' pos in pels */                                08540000
+       Lx = ceil( float(new_pos*300)/720 );                             08550000
+       end; /* 'M' */                                                   08560000
+     end; /* select */                                                  08570000
+ end ami;                                                               08580000
+                                                                        08590000
+ /*-------------------------*/                                          08600000
+ /* Relative baseline move  */                                          08610000
+ /*-------------------------*/                                          08620000
+                                                                        08630000
+ rmb: proc options( reentrant );                                        08640000
+   dcl   adj_pos             fixed bin(31);                             08650000
+   dcl   sgn                 char(1)             init('+');             08660000
+   adj_pos = adata->word;    /* Get adjustment in decipoints         */ 08670000
+   select(prt_type);                                                    08680000
+     when('P') do;                                                      08690000
+       if adj_pos<0 then do;                                            08700000
+         sgn = '-';                                                     08710000
+         adj_pos = -1 * adj_pos;                                        08720000
+         end; /* <0 */                                                  08730000
+       /* ESC&a+#V                              */                      08740000
+       pcl_work =  ESC||'&a'||sgn||toc((adj_pos))||'V';                 08750000
+       call write_pcl( addr(pcl_work)+2,                                08760000
+                       length(pcl_work),                                08770000
+                       addr(ascii) );                                   08780000
+       end; /* 'P' */                                                   08790000
+     when('M') do;                                                      08800000
+       /* Compute new 'Y' pos in pels */                                08810000
+       Ly = Ly + ceil( float(adj_pos*300)/720 );           /*PF000201*/ 08820000
+       end; /* 'M' */                                                   08830000
+   end; /* select */                                                    08840000
+ end rmb;                                                               08850000
+                                                                        08860000
+ /*-------------------------*/                                          08870000
+ /* Relative inline move    */                                          08880000
+ /*-------------------------*/                                          08890000
+                                                                        08900000
+ rmi: proc options( reentrant );                                        08910000
+   dcl   adj_pos             fixed bin(31);                             08920000
+   dcl   sgn                 char(1)             init('+');             08930000
+   dcl   pel_adj             fixed bin(31);                             08940000
+   dcl   rem                 fixed bin(31);                             08950000
+   adj_pos = adata->word;    /* Get adjustment in in/1440            */ 08960000
+   /* NOTE: This is the only field passed as AFP inits rather than   */ 08970000
+   /*       decipoints ***                                           */ 08980000
+   static_data.rmi_count  = static_data.rmi_count+1;       /*PF000202*/ 08990000
+   if rmi_count>4 then rmi_count=0;                        /*PF000202*/ 09000000
+   select(prt_type);                                                    09010000
+     when('P') do;                                                      09020000
+       adj_pos = adj_pos/2;            /* Convert to decipoints      */ 09030000
+       if adj_pos<0 then do;                                            09040000
+         sgn = '-';                                                     09050000
+         adj_pos = -1 * adj_pos;                                        09060000
+         end; /* <0 */                                                  09070000
+       /* ESC&a+#H                              */                      09080000
+       pcl_work =  ESC||'&a'||sgn||toc((adj_pos))||'H';                 09090000
+       call write_pcl( addr(pcl_work)+2,                                09100000
+                       length(pcl_work),                                09110000
+                       addr(ascii) );                                   09120000
+       end; /* 'P' */                                                   09130000
+     when('M') do;                                                      09140000
+       /* Compute 'X' adjustment in pels                             */ 09150000
+       pel_adj,rem = adj_pos*300;      /* Convert to pels    PF000202*/ 09160000
+       pel_adj = pel_adj/1440;                                          09170000
+       rem = rem-(pel_adj*1440);                                        09180000
+       rem = rem/288;                  /* Leftover .1 pel            */ 09190000
+       select(rmi_count);                                               09200000
+         when(1) if rem=3                 then pel_adj=pel_adj+1;       09210000
+         when(2) if rem=2 | rem=4         then pel_adj=pel_adj+1;       09220000
+         when(3) if rem=1 | rem=3 | rem=4 then pel_adj=pel_adj+1;       09230000
+         when(4) if rem=2 | rem=4         then pel_adj=pel_adj+1;       09240000
+         when(0) if rem=3 | rem=4         then pel_adj=pel_adj+1;       09250000
+         end; /* select */                                              09260000
+       Lx = Lx + pel_adj;                                  /*PF000202*/ 09270000
+       end; /* 'M' */                                                   09280000
+     end; /* select */                                                  09290000
+ end rmi;                                                               09300000
+                                                                        09310000
+ /*-------------------------*/                                          09320000
+ /* Turn Underscore on      */                                          09330000
+ /*-------------------------*/                                          09340000
+                                                                        09350000
+ underscore_on: proc options( reentrant );                              09360000
+   select(prt_type);                                                    09370000
+     when('P') do;                                                      09380000
+       put string(pcl_work) edit( ESC||'&d3D')(a);                      09390000
+       call write_pcl( addr(pcl_work)+2,                                09400000
+                       length(pcl_work),                                09410000
+                       addr(ascii) );                                   09420000
+       end; /* 'P' */                                                   09430000
+     when('M') do;                                                      09440000
+       end; /* 'M' */                                                   09450000
+     end; /* select */                                                  09460000
+ end underscore_on;                                                     09470000
+                                                                        09480000
+ /*-------------------------*/                                          09490000
+ /* Turn Underscore off     */                                          09500000
+ /*-------------------------*/                                          09510000
+                                                                        09520000
+ underscore_off: proc options( reentrant );                             09530000
+   select(prt_type);                                                    09540000
+     when('P') do;                                                      09550000
+       put string(pcl_work) edit( ESC||'&d@')(a);                       09560000
+       call write_pcl( addr(pcl_work)+2,                                09570000
+                       length(pcl_work),                                09580000
+                       addr(ascii) );                                   09590000
+       end; /* 'P' */                                                   09600000
+     when('M') do;                                                      09610000
+       end; /* 'M' */                                                   09620000
+     end; /* select */                                                  09630000
+ end underscore_off;                                                    09640000
+                                                                        09650000
+ /*-------------------------*/                                          09660000
+ /* Download a font         */                                          09670000
+ /*-------------------------*/                                          09680000
+                                                                        09690000
+ font_download: proc options( reentrant );                              09700000
+   dcl   font_name           char(8);                                   09710000
+   dcl   font_id             fixed bin(15);                             09720000
+   dcl   download_type       char(1);                                   09730000
+   dcl   rc                  fixed bin(31);                             09740000
+                                                                        09750000
+   font_name     = substr(adata->zovl,1,8);                             09760000
+   font_id       = len;                                                 09770000
+   download_type = substr(atrtab->zovl,1,1);                            09780000
+                                                                        09790000
+   select(prt_type);                                                    09800000
+     when('P') do;                                                      09810000
+       rc = lf(                                                         09820000
+                fontlib_routine,                                        09830000
+                write_pcl,                                              09840000
+                download_type,                                          09850000
+                font_name,                                              09860000
+                font_id                                                 09870000
+              );                                                        09880000
+       len = rc; /* <=== note - return font status */                   09890000
+       end; /* 'P' */                                                   09900000
+     when('M') do;                                                      09910000
+       /*******************************/                                09920000
+       /* 'NOP' for Metacode          */                                09930000
+       /*******************************/                                09940000
+       len = 0;  /* <=== note - return font status=0 */                 09950000
+       end; /* 'M' */                                                   09960000
+     end; /* select */                                                  09970000
+ end font_download;                                                     09980000
+                                                                        09990000
+ /*-------------------------*/                                          10000000
+ /* Delete a font           */                                          10010000
+ /*-------------------------*/                                          10020000
+                                                                        10030000
+ font_delete: proc options( reentrant );                                10040000
+   select(prt_type);                                                    10050000
+     when('P') do;                                                      10060000
+       put string(pcl_work) edit( ESC || '*c',  adata->hword, 'd2F' )   10070000
+                                (a,p'999',a);                           10080000
+       call write_pcl( addr(pcl_work)+2,                                10090000
+                       length(pcl_work),                                10100000
+                       addr(ascii) );                                   10110000
+       end; /* 'P' */                                                   10120000
+     when('M') do;                                                      10130000
+       /*******************************/                                10140000
+       /* 'NOP' for Metacode          */                                10150000
+       /*******************************/                                10160000
+       end; /* 'M' */                                                   10170000
+     end; /* select */                                                  10180000
+ end font_delete;                                                       10190000
+                                                                        10200000
+ /*-------------------------*/                                          10210000
+ /* Select a font           */                                          10220000
+ /*-------------------------*/                                          10230000
+                                                                        10240000
+ font_select: proc options( reentrant );                                10250000
+   dcl   f                   fixed bin(15);                             10260000
+   dcl   i                   fixed bin(15);                             10270000
+   dcl   m                   char(120);                                 10280000
+   select(prt_type);                                                    10290000
+     when('P') do;                                                      10300000
+       /* ESC(<font id>X                        */                      10310000
+      put string(pcl_work)                                              10320000
+          edit( ESC||'(',toc( (adata->hword) ), 'X')(a);                10330000
+       call write_pcl( addr(pcl_work)+2,                                10340000
+                       length(pcl_work),                                10350000
+                       addr(ascii) );                                   10360000
+       end; /* 'P' */                                                   10370000
+     when('M') do;                                                      10380000
+       f = len;                        /* Local font id              */ 10390000
+       do i=1 to mc_font_cnt;                                           10400000
+         if mc_font_xref(i)=f then do;                                  10410000
+           cfont  = i;                                                  10420000
+           awidth = mc_widtab(i);                                       10430000
+           return;                                                      10440000
+           end;                                                         10450000
+         end; /* do i */                                                10460000
+ /*    put skip edit( 'Couldn''t find font ', f )(a,p'zz9'); */         10470000
+       cfont  = 1;                                                      10480000
+       awidth = mc_widtab(1);                                           10490000
+       end; /* 'M' */                                                   10500000
+     end; /* select */                                                  10510000
+ end font_select;                                                       10520000
+                                                                        10530000
+ /*-------------------------*/                                          10540000
+ /* Set text orientation    */                                          10550000
+ /*-------------------------*/                                          10560000
+                                                                        10570000
+ set_orientation: proc options( reentrant );                            10580000
+ dcl     xrot                fixed bin(15);                             10590000
+ dcl     m                   char(120);                                 10600000
+   xrot =  adata->hword;                                                10610000
+   select(prt_type);                                                    10620000
+     when('P') do;                                                      10630000
+       /* Adjust angle and change to Counter-clockwise */               10640000
+       xrot = mod(360-xrot,360);                                        10650000
+       put string(pcl_work) edit( ESC || '&a',  toc(xrot), 'P' )(a);    10660000
+       call write_pcl( addr(pcl_work)+2,                                10670000
+                       length(pcl_work),                                10680000
+                       addr(ascii) );                                   10690000
+       end; /* 'P' */                                                   10700000
+     when('M') do;                                                      10710000
+       text_orien = xrot;                                               10720000
+       end; /* 'M' */                                                   10730000
+     end; /* select */                                                  10740000
+ end set_orientation;                                                   10750000
+                                                                        10760000
+ /*-------------------------*/                                          10770000
+ /* Set paper size          */                                          10780000
+ /*-------------------------*/                                          10790000
+                                                                        10800000
+ paper_size: proc options( reentrant );                                 10810000
+   select(prt_type);                                                    10820000
+     when('P') do;                                                      10830000
+       csize = adata->onec;                                             10840000
+       if prt_device = '20'bx then do; /* Ricoh?             20050607*/ 10840122
+         if psizeª=csize then do;                          /*20050607*/ 10840322
+           put string(pcl_work)                            /*20050607*/ 10840422
+               edit( ESC||'&l'||adata->onec||'A' )(a);     /*20050607*/ 10840522
+           call write_pcl( addr(pcl_work)+2,               /*20050607*/ 10840622
+                           length(pcl_work),               /*20050607*/ 10840722
+                           addr(ascii) );                  /*20050607*/ 10840822
+           end;                                            /*20050607*/ 10840922
+         end; /* Ricoh */                                  /*20050607*/ 10841022
+       else do;                                            /*20050607*/ 10841122
+         put string(pcl_work)          /* Send size every page       */ 10850022
+             edit( ESC||'&l'||csize||'A' )(a);             /*20050607*/ 10860022
+         call write_pcl( addr(pcl_work)+2,                              10870018
+                         length(pcl_work),                              10880018
+                         addr(ascii) );                                 10890018
+         end; /* else */                                   /*20050607*/ 10891022
+       psize=csize;                                                     10900000
+       end; /* 'P' */                                                   10910000
+     when('M') do;                                                      10920000
+       /* NOP */                                                        10921022
+       end; /* 'M' */                                                   10930000
+     end; /* select */                                                  10940000
+ end paper_size;                                                        10950000
+                                                                        10960000
+ /*-------------------------*/                                          10970000
+ /* Draw horizontal rule    */                                          10980000
+ /*-------------------------*/                                          10990000
+                                                                        11000000
+ horiz_rule: proc options( reentrant );                                 11010000
+ dcl   1 rp                  unaligned based,                           11020000
+         5 rw                fixed bin(31),                             11030000
+         5 rl                fixed bin(31);                             11040000
+   select(prt_type);                                                    11050000
+     when('P') do;                                                      11060000
+       put string(pcl_work) edit(                                       11070000
+           ESC || '*c',                                                 11080000
+           toc( (adata->rl) ),  'h',                                    11090000
+           toc( (adata->rw) ), 'v0P')(a);                               11100000
+       call write_pcl( addr(pcl_work)+2,                                11110000
+                       length(pcl_work),                                11120000
+                       addr(ascii) );                                   11130000
+       end; /* 'P' */                                                   11140000
+     when('M') do;                                                      11150000
+       call draw_meta_rule('H',adata->rl,adata->rw);                    11160000
+       end; /* 'M' */                                                   11170000
+     end; /* select */                                                  11180000
+ end horiz_rule;                                                        11190000
+                                                                        11200000
+ /*-------------------------*/                                          11210000
+ /* Draw vertical rule      */                                          11220000
+ /*-------------------------*/                                          11230000
+                                                                        11240000
+ vert_rule: proc options( reentrant );                                  11250000
+ dcl   1 rp                  unaligned based,                           11260000
+         5 rw                fixed bin(31),                             11270000
+         5 rl                fixed bin(31);                             11280000
+   select(prt_type);                                                    11290000
+     when('P') do;                                                      11300000
+       put string(pcl_work) edit(                                       11310000
+           ESC || '*c',                                                 11320000
+           toc( (adata->rl) ),  'v',                                    11330000
+           toc( (adata->rw) ), 'h0P')(a);                               11340000
+       call write_pcl( addr(pcl_work)+2,                                11350000
+                       length(pcl_work),                                11360000
+                       addr(ascii) );                                   11370000
+       end; /* 'P' */                                                   11380000
+     when('M') do;                                                      11390000
+       call draw_meta_rule('V',adata->rl,adata->rw);                    11400000
+       end; /* 'M' */                                                   11410000
+     end; /* select */                                                  11420000
+ end vert_rule;                                                         11430000
+                                                                        11440000
+ %page;                                                                 11450000
+ /*---------------------------------------------*/                      11460000
+ /* Process list of Xerox centralized fonts     */                      11470000
+ /*---------------------------------------------*/                      11480000
+                                                                        11490000
+ environ_grp: proc options( reentrant );                                11500000
+ dcl     fn              (30)char(8)   based(adata);                    11510000
+ dcl     fwx             (30)ptr       based(atrtab);                   11520000
+ dcl     sz                  fixed bin(15);                             11530000
+ dcl    (i,j)                fixed bin(15);                             11540000
+ dcl     same                bit(1)                        init('1'b);  11550000
+   select(prt_type);                                                    11560000
+     when('P') do;                                                      11570000
+       /*******************************/                                11580000
+       /* 'NOP' for PCL               */                                11590000
+       /*******************************/                                11600000
+       end; /* 'P' */                                                   11610000
+                                                                        11620000
+     when('M') do;                                                      11630000
+       if len<1 | len>25                                                11640000
+       then return;          /* Invalid font count                   */ 11650000
+       mc_font_xref = 0;     /* Zero font crossref                   */ 11660000
+       same_fonts=TRUE;      /* Assume list hasn't changed           */ 11670000
+       /*-------------------------*/                                    11680000
+       /* See if same font list   */                                    11690000
+       /*-------------------------*/                                    11700000
+       do i=1 to len;                                                   11710000
+         if fn(i)ª='        ' then do;                                  11720000
+           j = findfont( fn(i) );                                       11730000
+           if j=0 then same_fonts=FALSE;                                11740000
+           else mc_font_xref(j)=i;                                      11750000
+           end; /* fn(i) */                                             11760000
+         end; /* do i */                                                11770000
+       if same_fonts=TRUE then return;      /* Font list hasn't chg'd*/ 11780000
+       mc_font_cnt=0;                       /* Clear whole font list */ 11790000
+       /*-------------------------*/                                    11800000
+       /* Build list of fonts     */                                    11810000
+       /*-------------------------*/                                    11820000
+       do i=1 to len;                                                   11830000
+         if fn(i)ª='        ' then do;                                  11840000
+         if mc_font_cnt<hbound(mc_font_name,1) then do;                 11850000
+             mc_font_cnt = mc_font_cnt+1;                               11860000
+             mc_font_name(mc_font_cnt) = fn(i);                         11870000
+             mc_widtab(mc_font_cnt)    = fwx(i);                        11880000
+             mc_font_xref(mc_font_cnt)=i;   /* Local->Metacode xref */  11890000
+             end; /* fn(i) */                                           11900000
+           end; /* mc_font_cnt<hbnd */                                  11910000
+         end; /* do i */                                                11920000
+       mc_font_num = mc_font_cnt;           /* Actual cnt=Base cnt  */  11930000
+       /*------------------------------------------------------------*/ 11940000
+       /* Add extra 18- & 24-pt partial fonts to end of table        */ 11950000
+       /*------------------------------------------------------------*/ 11960000
+       do i=1 to mc_font_cnt;                                           11970000
+         if substr(mc_font_name(i),5,1)='K' then do;                    11980000
+           if mc_font_num<hbound(mc_font_name,1) then do;               11990000
+             mc_font_num = mc_font_num+1;                               12000000
+             mc_font_name(mc_font_num) = mc_font_name(i);               12010000
+             substr(mc_font_name(mc_font_num),5,1)='L';                 12020000
+             mc_widtab(mc_font_num) = mc_widtab(i);                     12030000
+             mc_font_xref(mc_font_num) = mc_font_num-1;                 12040000
+             end; /* mc_font_num<hbnd */                                12050000
+           end; /* 'K' */                                               12060000
+         if substr(mc_font_name(i),5,1)='M' then do;                    12070000
+           if mc_font_num<hbound(mc_font_name,1) then do;               12080000
+             mc_font_num = mc_font_num+1;                               12090000
+             mc_font_name(mc_font_num) = mc_font_name(i);               12100000
+             substr(mc_font_name(mc_font_num),5,1)='N';                 12110000
+             mc_widtab(mc_font_num) = mc_widtab(i);                     12120000
+             mc_font_xref(mc_font_num) = mc_font_num-1;                 12130000
+             end; /* mc_font_num<hbnd */                                12140000
+           if mc_font_num<hbound(mc_font_name,1) then do;               12150000
+             mc_font_num = mc_font_num+1;                               12160000
+             mc_font_name(mc_font_num) = mc_font_name(i);               12170000
+             substr(mc_font_name(mc_font_num),5,1)='O';                 12180000
+             mc_widtab(mc_font_num) = mc_widtab(i);                     12190000
+             mc_font_xref(mc_font_num) = mc_font_num-1;                 12200000
+             end; /* mc_font_num<hbnd */                                12210000
+           end; /* 'M' */                                               12220000
+         end; /* do i */                                                12230000
+       end; /* 'M' */                                                   12240000
+     end; /* select */                                                  12250000
+                                                                        12260000
+   /* Find a font in font table */                                      12270000
+   findfont: proc(f) returns( fixed bin(15) );                          12280000
+   dcl   f                   char(8);                                   12290000
+   dcl   i                   fixed bin(15);                             12300000
+   do i=1 to mc_font_cnt;                                               12310000
+     if mc_font_name(i)=f then return(i);                               12320000
+     end; /* do i */                                                    12330000
+   return(0);                                                           12340000
+   end findfont;                                                        12350000
+                                                                        12360000
+ end environ_grp;                                                       12370000
+                                                                        12370108
+ /***********************************************************20050228*/ 12370208
+ /*           PCL Printer Setup                              20050228*/ 12370308
+ /***********************************************************20050228*/ 12370408
+ pcl_setup: proc;                                                       12371008
+   if MCK=TRUE then do;                     /* MCK=YES               */ 12372008
+     pcl_work = '=MCK= EMULATE/PCL5/END';   /* To PCL mode           */ 12373008
+     pcl_work = translate(pcl_work,ascii);                              12374008
+     pcl_work = pcl_work || CRLF;                                       12375008
+     call write_pcl( addr(pcl_work)+2, length(pcl_work), null() );      12376008
+     end; /* MCK=YES */                                                 12377008
+                                                                        12378008
+   pcl_work = ESC || '%-12345X@PJL JOB';                   /*PF990917*/ 12379008
+   pcl_work = translate(pcl_work,ascii);                   /*PF990917*/ 12379108
+   pcl_work = pcl_work || CRLF;                            /*PF990917*/ 12379208
+   call write_pcl( addr(pcl_work)+2, length(pcl_work),     /*PF990917*/ 12379308
+                   null() );                               /*PF990917*/ 12379408
+                                                                        12379517
+   pcl_work = '@PJL RDYMSG DISPLAY="' ||                   /*PF990917*/ 12379617
+              stat_jobname || '"';                         /*PF990917*/ 12379717
+   pcl_work = translate(pcl_work,ascii);                   /*PF990917*/ 12379817
+   pcl_work = pcl_work || CRLF;                            /*PF990917*/ 12379917
+   call write_pcl( addr(pcl_work)+2, length(pcl_work),     /*PF990917*/ 12380017
+                   null() );                               /*PF990917*/ 12380117
+                                                                        12381014
+   if P_duplex then do;                                    /*PF050302*/ 12381215
+     pcl_work = '@PJL SET DUPLEX=ON';                      /*PF050302*/ 12381817
+     pcl_work = translate(pcl_work,ascii);                 /*PF050302*/ 12381917
+     pcl_work = pcl_work || CRLF;                          /*PF050302*/ 12382017
+     call write_pcl( addr(pcl_work)+2, length(pcl_work),   /*PF050302*/ 12382117
+                     null() );                             /*PF050302*/ 12382217
+     pcl_work = '@PJL SET BINDING=LONGEDGE';               /*PF050302*/ 12382317
+     pcl_work = translate(pcl_work,ascii);                 /*PF050302*/ 12382417
+     pcl_work = pcl_work || CRLF;                          /*PF050302*/ 12382517
+     call write_pcl( addr(pcl_work)+2, length(pcl_work),   /*PF050302*/ 12382617
+                     null() );                             /*PF050302*/ 12382717
+     end; /* duplex */                                     /*PF050302*/ 12382817
+                                                                        12382917
+   if P_staple then do;                                    /*PF050118*/ 12383017
+     pcl_work = '@PJL SET STAPLE=LEFT2PORT';               /*PF050118*/ 12383117
+     pcl_work = translate(pcl_work,ascii);                 /*PF050118*/ 12383219
+     pcl_work = pcl_work || CRLF;                          /*PF050118*/ 12383319
+     call write_pcl( addr(pcl_work)+2, length(pcl_work),   /*PF050118*/ 12383419
+                     null() );                             /*PF050118*/ 12383519
+     end; /* staple */                                     /*PF050118*/ 12383617
+                                                                        12383719
+   if P_punch then do;                                     /*PF050525*/ 12383819
+     pcl_work = '@PJL SET PUNCH=LEFTPORT';                 /*PF050525*/ 12383920
+     pcl_work = translate(pcl_work,ascii);                 /*PF050525*/ 12384019
+     pcl_work = pcl_work || CRLF;                          /*PF050525*/ 12384119
+     call write_pcl( addr(pcl_work)+2, length(pcl_work),   /*PF050525*/ 12384219
+                     null() );                             /*PF050525*/ 12384319
+     pcl_work = '@PJL SET PUNCHHOLE=US3';                  /*PF050525*/ 12384419
+     pcl_work = translate(pcl_work,ascii);                 /*PF050525*/ 12384519
+     pcl_work = pcl_work || CRLF;                          /*PF050525*/ 12384619
+     call write_pcl( addr(pcl_work)+2, length(pcl_work),   /*PF050525*/ 12384719
+                     null() );                             /*PF050525*/ 12384819
+     end; /* punch */                                      /*PF050525*/ 12384919
+                                                                        12385019
+   pcl_work = ESC||'E';  /* Reset Printer                            */ 12385119
+   call write_pcl( addr(pcl_work)+2,                                    12385219
+                   length(pcl_work),                                    12385319
+                   addr(ascii)                                          12385419
+                 );                                                     12385519
+                                                                        12385619
+   pcl_work = ESC||'*t300R'; /* Graphics Resolution: 300dpi          */ 12385719
+   call write_pcl( addr(pcl_work)+2,                                    12385819
+                   length(pcl_work),                                    12385919
+                   addr(ascii)                                          12386019
+                 );                                                     12386119
+   end pcl_setup;                                          /*20050228*/ 12386219
+                                                                        12387019
+ %page;                                                                 12390000
+ /********************************************************************/ 12400000
+ /*           Reverse a text string                                  */ 12410000
+ /********************************************************************/ 12420000
+ reverse: procedure(str) returns( char(1024) varying );                 12430000
+   dcl   str                 char(1024) varying;                        12440000
+   dcl   i                   fixed bin(15);                             12450000
+   dcl   res                 char(1024) varying  init('');              12460000
+   if length(str)>1024 then str=substr(str,1,1024);                     12470000
+   do i=length(str) to 1 by -1;                                         12480000
+     res = res || substr(str,i,1);                                      12490000
+     end; /* do i */                                                    12500000
+   return(res);                                                         12510000
+   end reverse;                                                         12520000
+                                                                        12530000
+ /********************************************************************/ 12540000
+ /*           Draw a metacode rule (logical functions)               */ 12550000
+ /*      [len,wid in decipoints (points/10 or 1/720 in.)]            */ 12560000
+ /*      This routine does logical page positioning in pels          */ 12570000
+ /*      to the beginning or end of the line depending on            */ 12580000
+ /*      line direction and page orientation.                        */ 12590000
+ /********************************************************************/ 12600000
+ draw_meta_rule: procedure(dir,len,wid);                                12610000
+  dcl    dir                 char(1);                                   12620000
+  dcl   (len,wid)            fixed bin(31);                             12630000
+                                                                        12640000
+  dcl    xdir                char(1);                                   12650000
+  dcl   (xwid,xlen)          fixed bin(31);                             12660000
+  dcl   (SaveLx,SaveLy)      fixed bin(31);                             12670000
+                                                                        12680000
+  SaveLx = Lx;               /* Save X and Y coordinates             */ 12690000
+  SaveLy = Ly;                                                          12700000
+ /* put skip edit(dir||' rule at (',Lx,',',Ly,') W=',wid)          /**/ 12710000
+ /*              (a,p'zzz9',a,p'zzz9',a,p'zzz9');                  /**/ 12720000
+                                                                        12730000
+  /*----------------------------------*/                                12740000
+  /* Convert length and width to pels */                                12750000
+  /*----------------------------------*/                                12760000
+  xwid = ( wid*300 + 719 )/720;                                         12770000
+  xlen = ( len*300 + 719 )/720;                                         12780000
+  if xwid<2 then xwid=2;                  /* Minimum width: 2 pels   */ 12790000
+  if xlen=0 then return;                  /* Minimum length: 1 pel   */ 12800000
+                                                                        12810000
+  /*----------------------------------*/                                12820000
+  /* Determine if rule runs in dot or */                                12830000
+  /*   scan direction.                */                                12840000
+  /*----------------------------------*/                                12850000
+  if text_orien = 90 | text_orien=270     /* Landscape              */  12860000
+  then                                                                  12870000
+    if dir='V' then xdir='S'; else xdir='D';                            12880000
+  else                                                                  12890000
+    if dir='V' then xdir='D'; else xdir='S';                            12900000
+  call get_meta_pos(Lx+adjl,Ly+adjt);                                   12910000
+                                                                        12920000
+  /*------------------------------------------------------*/            12930000
+  /* Adjust start positioning by orientation              */            12940000
+  /* (position to end-of-line for lines drawn backwards)  */            12950000
+  /* Logical_page => Physical_page transform.             */            12960000
+  /* AFP rule origin is logical upper-left (+L,+W),       */            12970000
+  /* Meta origin is always relative to physical page.     */            12980000
+  /*------------------------------------------------------*/            12990000
+  select(text_orien);                                                   13000000
+    when(0)   do;                                                       13010000
+      if dir='H' then Ly=Ly+xwid;                                       13020000
+      if dir='V' then Ly=Ly+xlen;                                       13030000
+      end; /* 0 */                                                      13040000
+    when(90)  do;                                                       13050000
+      if dir='H' then Lx=Lx+xlen;                                       13060000
+      if dir='H' then Ly=Ly+xwid;                                       13070000
+      if dir='V' then Lx=Lx+xwid;                                       13080000
+      if dir='V' then Ly=Ly+xlen;                                       13090000
+      end; /* 90 */                                                     13100000
+    when(180) do;                                                       13110000
+      if dir='H' then Lx=Lx+xlen;                                       13120000
+      if dir='V' then Lx=Lx+xwid;                                       13130000
+      end; /* 180 */                                                    13140000
+    when(270) do;                                                       13150000
+      /* 270 is the common orientation */                               13160000
+      end; /* 270 */                                                    13170000
+    end; /* select */                                                   13180000
+                                                                        13190000
+  /*----------------------------------*/                                13200000
+  /* Draw the rule                    */                                13210000
+  /*----------------------------------*/                                13220000
+  call adjpos('D',0);        /* Update logical page position         */ 13230000
+  if xdir='D' then call draw_meta_dot;                                  13240000
+  else             call draw_meta_scan;                                 13250000
+                                                                        13260000
+  Lx = SaveLx;               /* Restore X and Y coordinates          */ 13270000
+  Ly = SaveLy;                                                          13280000
+  pscan,pdot=32767;      /* force new meta record after rule PF001108*/ 13290000
+  return;                                                               13300000
+                                                                        13310000
+ /*-------------------------------------------------------*/            13320000
+ /* Draw a line in the physical page 'dot' direction.     */            13330000
+ /* Input: xlen - length of line in pels (dot positions), */            13340000
+ /*        xwid - width  of line in pels (scan lines),    */            13350000
+ /*        cdot, cscan - starting position of line,       */            13360000
+ /*        (updates cdot, cscan).                         */            13370000
+ /* This procedure can draw lines 2-512 scan lines thick. */            13380000
+ /*-------------------------------------------------------*/            13390000
+  draw_meta_dot: procedure;                                             13400000
+  dcl    xc               (5)char(1);                                   13410000
+  dcl    c                   char(1);                                   13420000
+  dcl    xd                  fixed bin(15);                             13430000
+  dcl    xs               (5)fixed bin(15);                             13440000
+  dcl    xn               (5)fixed bin(15)       init(0);               13450000
+  dcl   (xw,xl)              fixed bin(15);                             13460000
+  dcl   (SaveLx,SaveLy)      fixed bin(31);                             13470000
+  dcl    i                   fixed bin(15);                             13480000
+  dcl    n                   fixed bin(15);                             13490000
+  dcl    lines               fixed bin(15)       init(0);               13500000
+  dcl   (bytlen,rem)         fixed bin(31);                             13510000
+  dcl    meta_work           char(200) varying   init('');              13520000
+  /*..........................................*/                        13530000
+  /* Line-drawing characters - dot  direction */                        13540000
+  /*..........................................*/                        13550000
+  dcl  1 ddraw_chars      (3)unaligned static,                          13560000
+         5 dw                fixed bin(15)                              13570000
+                   init(   2,   4,   8),         /* Line widths      */ 13580000
+         5 dc                char(1)                                    13590000
+                   init('28'x,'29'x,'2A'x),      /* Linedraw chars   */ 13600000
+         5 fil               char(1),                                   13610000
+         5 dd                fixed bin(15)                              13620000
+                   init(1024,1024,1024),         /* Scaled lengths   */ 13630000
+         5 ds                fixed bin(15)                              13640000
+                   init(   2,   4,   8)          /* Scaled widths    */ 13650000
+                             ;                                          13660000
+   /* Corresponding characters with 1..7 leading whitespace pels     */ 13670000
+   dcl   lschars_s           char(21)  static    init                   13680000
+         ('2B2C2D2E2F303132333435363738393A3B3C3D3E3F'x),               13690000
+         lschars        (7,3)char(1)   defined lschars_s;               13700000
+                                                                        13710000
+ /*                                                                     13720000
+  .put skip edit('Dot  L=',xlen,' ,W=',xwid)(a,p'zzz9');                13730000
+  .put skip edit('     P=',Lx,',',Ly)(a,p'zzz9',a,p'zzz9',a);           13740000
+  */                                                                    13750000
+   /*-------------------------------------------*/                      13760000
+   /* Select the line-draw character            */                      13770000
+   /*-------------------------------------------*/                      13780000
+   if xlen=0 then return;    /* Escape if zero-length line       */     13790000
+   if xwid=0 then return;    /* Escape if zero-width  line       */     13800000
+   if xwid=1 then xwid=2;    /* Minumum width  = 2 pels          */     13810000
+   xw = xwid;                                                           13820000
+   do while( xw>0 );                                                    13830000
+     do i=1 to hbound(ddraw_chars.dw,1);                                13840000
+       if dw(i)>=xwid  then leave;                                      13850000
+       end; /* do i */                                                  13860000
+     if i>hbound(ddraw_chars.dw,1) |                                    13870000
+       (i<=hbound(ddraw_chars.dw,1) & ds(i)>xw)                         13880000
+     then i=i-1;                                                        13890000
+     lines = lines+1;                                                   13900000
+     xc(lines) = dc(i);      /* The line-draw character          */     13910000
+     xd        = dd(i);      /* The dot-width of the character   */     13920000
+     xs(lines) = ds(i);      /* The scan-length of the character */     13930000
+     xn(lines) = i;                                                     13940000
+     xw = xw - xd;                                                      13950000
+     end; /* do while */                                                13960000
+                                                                        13970000
+   do while(xwid>0);                                                    13980000
+     SaveLx=Lx; SaveLy=Ly;   /* Save current position              */   13990000
+     xl = xlen;                                                         14000000
+                                                                        14010000
+     do i=1 to lines;                                                   14020000
+       /*----------------------------------------------------------*/   14030000
+       /* Process first character (lowest dot addr) if length is no*/   14040000
+       /*   a multiple of 8 bits -- leading whitespace pels.       */   14050000
+       /*----------------------------------------------------------*/   14060000
+       bytlen = xl/8;                                                   14070000
+       rem    = xl-bytlen*8;                                            14080000
+       if remª=0 then do;                                               14090000
+         call adjpos('D',8-rem);     /* Back up one characterPF010326*/ 14100000
+         c = lschars(rem,xn(1));                                        14110000
+         xw = xwid;                                                     14120000
+         call build_08(c,1,xw);     /* 1 char with leading zero bits */ 14130000
+         call adjpos('D',-8);       /* Update logical page poPF010326*/ 14140000
+         xl=xl-rem;                 /* Subtract length printed       */ 14150000
+         end; /* remª=0 */                                              14160000
+                                                                        14170000
+       /*------------------------------------------------------------*/ 14180000
+       /* Process subsequent characters (length is multiple of 8)    */ 14190000
+       /*------------------------------------------------------------*/ 14200000
+       do while(xl>0);              /* Length is now always mult of 8*/ 14210000
+         if xl>xd                   /* Smaller of:                   */ 14220000
+         then n=xd;                 /*  length of character (pels)   */ 14230000
+         else n=xl;                 /*  -or- length remaining (pels) */ 14240000
+         xw = xwid;                 /* Width of line (pels)          */ 14250000
+         call build_08(xc(i),n/8,xw);                                   14260000
+         call adjpos('D',-n);       /* Update logical page pos. 010312*/14270000
+         /* NOTE: zero degrees vs. 90 degrees? */                       14280000
+         xl=xl-n;                   /* Subtract length printed       */ 14290000
+         end; /* do while */                                            14300000
+       end; /* do i */                                                  14310000
+                                                                        14320000
+     Lx=SaveLx; Ly=SaveLy;        /* Restore starting position     */   14330000
+     call adjpos('S',xw);                                               14340000
+     xwid = xwid-xw;                                                    14350000
+     end; /* do while xwid>0 */                                         14360000
+                                                                        14370000
+    end draw_meta_dot;                                                  14380000
+                                                                        14390000
+ /*-------------------------------------------------------*/            14400000
+ /* Draw a line in the physical page 'scan' direction.    */            14410000
+ /* Input: xlen - length of line in pels (scan lines),    */            14420000
+ /*        xwid - width  of line in pels (dot positions), */            14430000
+ /*        cdot, cscan - starting position of line,       */            14440000
+ /*        (updates cdot, cscan).                         */            14450000
+ /* Lines cannot be scaled by pels in the dot direction,  */            14460000
+ /* so lines which are not 2,4, or a multiple of 8 pels   */            14470000
+ /* thick must be drawn as composites.                    */            14480000
+ /* This routine can draw lines 2-1024 pels thick.        */            14490000
+ /*-------------------------------------------------------*/            14500000
+ draw_meta_scan: procedure;                                             14510000
+  dcl    xc               (5)char(1);                                   14520000
+  dcl    xd               (5)fixed bin(15);                             14530000
+  dcl    xs                  fixed bin(15);                             14540000
+  dcl   (xw,xl)              fixed bin(15);                             14550000
+  dcl   (SaveLx,SaveLy)      fixed bin(31);                             14560000
+  dcl    i                   fixed bin(15);                             14570000
+  dcl    da                  fixed bin(15)       init(0);               14580000
+  dcl    lines               fixed bin(15)       init(0);               14590000
+  dcl   (bytlen,rem)         fixed bin(31);                             14600000
+  dcl    meta_work           char(200) varying   init('');              14610000
+  /*..........................................*/                        14620000
+  /* Line-drawing characters - scan direction */                        14630000
+  /*..........................................*/                        14640000
+  dcl  1 sdraw_chars      (3)unaligned static,                          14650000
+         5 sw                fixed bin(15)                              14660000
+                   init(   2,   4,   0),         /* Line widths      */ 14670000
+         5 sc                char(1)                                    14680000
+                   init('16'x,'17'x,'27'x),      /* Linedraw chars   */ 14690000
+         5 fil               char(1),                                   14700000
+         5 sd                fixed bin(15)                              14710000
+                   init(1024,1024,1024),         /* Scaled widths    */ 14720000
+         5 ss                fixed bin(15)                              14730000
+                   init(   2,   4, 512)          /* Scaled lengths   */ 14740000
+                             ;                                          14750000
+                                                                        14760000
+ /*                                                                     14770000
+  .put skip edit('Scan L=',xlen,' ,W=',xwid)(a,p'zzz9');                14780000
+  .put skip edit('     P=',Lx,',',Ly)(a,p'zzz9',a,p'zzz9',a);           14790000
+  */                                                                    14800000
+   /*-------------------------------------------*/                      14810000
+   /* Select the line-draw character set        */                      14820000
+   /*-------------------------------------------*/                      14830000
+   if xlen=0 then return;         /* Escape if zero-length line      */ 14840000
+   bytlen = xwid/8;                                                     14850000
+   rem    = xwid-bytlen*8;        /* mod(width,8)                    */ 14860000
+   if bytlen>=1 then do;          /* line>=8 pels thick              */ 14870000
+     lines=1;                                                           14880000
+     xc(1) = '27'x;               /* 8-1024 pel wide character       */ 14890000
+     xd(1) = bytlen*8;                                                  14900000
+     end; /* bytlen>=1 */                                               14910000
+   if rem>=4 then do;             /* line>=4 pels thick              */ 14920000
+     lines=lines+1;                                                     14930000
+     xc(lines) = '17'x;           /* 4-pel character                 */ 14940000
+     xd(lines) = 4;                                                     14950000
+     end; /* rem>=4 */                                                  14960000
+   bytlen = floor(rem/4);                                               14970000
+   rem    = rem-bytlen*4;         /* mod(width,4)                    */ 14980000
+   if rem>=2 then do;             /* line>=2 pels thick              */ 14990000
+     lines=lines+1;                                                     15000000
+     xc(lines) = '16'x;           /* 2-pel character                 */ 15010000
+     xd(lines) = 2;                                                     15020000
+     end; /* rem>=2 */                                                  15030000
+   bytlen = floor(rem/2);                                               15040000
+   rem    = rem-bytlen*2;         /* mod(width,2)                    */ 15050000
+   if remª=0 then do;                                                   15060000
+     lines=lines+1;                                                     15070000
+     xc(lines) = 'FF'x;           /* Special: Line one-pel wide      */ 15080000
+     xd(lines) = 1;                                                     15090000
+     end; /* remª=0 */                                                  15100000
+                                                                        15110000
+   /* Adjust starting position by width of line (xwid) */               15120000
+ /*call adjpos('D',xwid);*/    /* Position for Meta          PF010326*/ 15130000
+                                                                        15140000
+   do while(xlen>0);           /* Print the line segments            */ 15150000
+     SaveLx=Lx; SaveLy=Ly;                                              15160000
+ /*                                                                     15170000
+  .  if lines>1 then do;       (* Is this multiple line-segment?     *) 15180000
+  .    call adjpos( 'D', xd(1) );                          (*PF990603*) 15190000
+  .    end;  (* lines>1 *)                                              15200000
+  */                                                                    15210000
+     do i=1 to lines;          /* Build composite line               */ 15220000
+       xs  = 512;              /* Maximum character length (pels)    */ 15230000
+       if xlen>xs                   /* Larger of:                    */ 15240000
+       then xl=xs;                  /*  length of character (pels)   */ 15250000
+       else xl=xlen;                /*  -or- length remaining (pels) */ 15260000
+       if xc(i)='FF'x          /* Special - one-pel width line       */ 15270000
+       then do;                                                         15280000
+         xw=xd(i);                  /*  width  of character (pels)   */ 15290000
+         call adjpos('D',-1);  /* Back up one dot-position           */ 15300000
+         /*-------------------------------------*/                      15310000
+         /*                                     */                      15320000
+         /*-------------------------------------*/                      15330000
+         call build_08('16'x,1,xl);                                     15340000
+         end; /* 'FF'x */                                               15350000
+       else do;                                                         15360000
+         xw=xd(i);                  /*  width  of character (pels)   */ 15370000
+         if iª=1 then call adjpos('D',-xw);                             15380000
+         call build_08(xc(i),ceil(xw/8),xl);                            15390000
+         end; /* else */                                                15400000
+       end; /* do i */                                                  15410000
+                                                                        15420000
+     Lx=SaveLx; Ly=SaveLy;          /* Restore starting positions    */ 15430000
+     call adjpos('S',xl);           /* Update scan-position          */ 15440000
+     xlen=xlen-xl;                                                      15450000
+     end; /* do while */                                                15460000
+                                                                        15470000
+ /*call adjpos('D',-xwid);*/      /* Reset position          PF010326*/ 15480000
+                                                                        15490000
+   end draw_meta_scan;                                                  15500000
+                                                                        15510000
+ /*-------------------------------------------------------*/            15520000
+ /* Adjust Logical Page Position after line-draw character*/            15530000
+ /* Convert movement in physical dot or scan direction    */            15540000
+ /* into new logical x/y position.                        */            15550000
+ /*-------------------------------------------------------*/            15560000
+ adjpos: proc(dir,pels);                                                15570000
+     dcl dir                 char(1);                                   15580000
+     dcl pels                fixed bin(15);                             15590000
+     select(text_orien);                                                15600000
+       when(0)   if dir='D' then Ly=Ly+pels; else Lx=Lx+pels;           15610000
+       when(90)  if dir='D' then Lx=Lx-pels; else Ly=Ly-pels;           15620000
+       when(180) if dir='D' then Ly=Ly+pels; else Lx=Lx-pels;           15630000
+       when(270) if dir='D' then Lx=Lx+pels; else Ly=Ly+pels;           15640000
+       end; /* select */                                                15650000
+     call get_meta_pos(Lx+adjl,Ly+adjt);                                15660000
+     end adjpos;                                                        15670000
+                                                                        15680000
+ /********************************************************************/ 15690000
+ /*            Build '08' (scale) meta.                              */ 15700000
+ /*   'char' is the line-draw character to use.                      */ 15710000
+ /*   'dot' is dot-direction scale/repeat factor   (bytes)           */ 15720000
+ /*   'scan' is scan-direction scale/repeat factor (pels)            */ 15730000
+ /********************************************************************/ 15740000
+ build_08: proc(char,dot,scan);                                         15750000
+   dcl   char                char(1);                                   15760000
+   dcl  (dot,scan)           fixed bin(15);                             15770000
+   dcl  (w1,w2,w3)           char(2);                                   15780000
+   dcl   spavail             fixed bin(15);                             15790000
+   dcl   meta_work           char(200) varying   init('');              15800000
+                                                                        15810000
+   call get_meta_pos(Lx+adjl,Ly+adjt);                                  15820000
+                                                                        15830000
+ /*-------------------------------*/                                    15840000
+ /*      DEBUG CODE               */                                    15850000
+ /*-------------------------------*/                                    15860000
+ /*                                                                     15870000
+  .put skip edit('Line at (', cscan, 's,', cdot, 'd) ',                 15880000
+  .              hex(addr(char),1), ' d=', dot*8, ', s=', scan )        15890000
+  .             (a,p'----9',a,p'----9',a,                               15900000
+  .              a,a,p'----9',a,p'----9');                              15910000
+  */                                                                    15920000
+                                                                        15930000
+   /*-----------------------------*/                                    15940000
+   /* Generate ASCAN ADOT         */                                    15950000
+   /*-----------------------------*/                                    15960000
+   if cscan <= pscan then do;    /* Need to start new record   */       15970000
+     call write_meta( null(), -1 );                                     15980000
+     end;                                                               15990000
+   hwd = cscan;                                                         16000000
+   meta_work = meta_work || '06'x || xlob || xhob;                      16010000
+   hwd = cdot;                                                          16020000
+   meta_work = meta_work || '04'x || xlob || xhob;                      16030000
+   pscan = cscan+scan;                                                  16040000
+   pdot  = cdot+dot;                                                    16050000
+   /*-----------------------------*/                                    16060000
+   /*  [LANDSCAPE]                */                                    16070000
+   /*-----------------------------*/                                    16080000
+   if text_orien = 90 | text_orien=270                                  16090000
+   then meta_work =  meta_work || '02'x;                                16100000
+   /*-----------------------------*/                                    16110000
+   /*  FONT = FORMSX or FORMS$                                          16120000
+   /*-----------------------------*/                                    16130000
+   meta_work =  meta_work || '0000'x;                                   16140000
+   pfont = 0;                                                           16150000
+   /*-----------------------------*/                                    16160000
+   /*  Char scale/repeat          */                                    16170000
+   /*-----------------------------*/                                    16180000
+   addr(w1)->hword = -dot;             /* Dot scale in bytes         */ 16190000
+   addr(w2)->hword = -scan;            /* Scan scale in bits         */ 16200000
+   addr(w3)->twob  = substr(addr(w1)->twob,10,7) || /* Build scale   */ 16210000
+                     substr(addr(w2)->twob,8,9);                        16220000
+   w3 = substr(w3,2,1) || substr(w3,1,1); /* Swap bytes              */ 16230000
+   meta_work = meta_work || '08'x || w3 || char;                        16240000
+   /*----------------------------------------------------------*/       16250000
+   /*  Check space in current record                           */       16260000
+   /*----------------------------------------------------------*/       16270000
+   spavail = length(meta_rec)-metao-1;                                  16280000
+   if length(meta_work)>spavail then do;                                16290000
+     call write_meta( null(), -1 );   /* Flush current record  */       16300000
+     end;                                                               16310000
+   call write_meta( addr(meta_work)+2, length(meta_work) );             16320000
+                                                                        16330000
+   end build_08;                                                        16340000
+                                                                        16350000
+  end draw_meta_rule;                                                   16360000
+                                                                        16370000
+ /********************************************************************/ 16380000
+ /*           Check character in metacode partial font               */ 16390000
+ /********************************************************************/ 16400000
+ check_meta_font: procedure(char,c,font_name) returns( bit(1) );        16410000
+  dcl   (char,c)             char(1);                                   16420000
+  dcl    bc                  bit(8)    based( addr(c) );                16430000
+  dcl    font_name           char(8);                                   16440000
+  dcl    fb                  char(1),                                   16450000
+         fbx                 bit(8)    based( addr(fb) );               16460000
+  dcl    font_type           char(1);                                   16470000
+  dcl    ft                  char(1);                                   16480000
+  dcl    z                   bit(8);                                    16490000
+                                                                        16500000
+    ft = c;                                                             16510000
+    font_type = substr( font_name, 5, 1 );                              16520000
+    fb = translate(char,metaset);      /* What fonts is char in?     */ 16530000
+    if font_type = 'J' then do         /* Only one font choice       */ 16540000
+      c='01'bx;                        /* Select font 'J'            */ 16550000
+      return('1'b);                    /* No font change             */ 16560000
+      end;                                                              16570000
+    z = fbx&bc;                                                         16580000
+    if zª='00'bx                       /* Is this char in curr font? */ 16590000
+    then return('1'b);                 /* Yes, no font change        */ 16600000
+                                                                        16610000
+    /* Choose new font for current character                         */ 16620000
+    if font_type='K' | font_type='L'                                    16630000
+    then do;                                                            16640000
+      z = fbx&'02'bx;                                                   16650000
+      if zª='00'bx then do;         /* 'K' font (num/special)        */ 16660000
+         c='02'x;                                                       16670000
+         font_type='K';                                                 16680000
+         end;                                                           16690000
+      z = fbx&'04'bx;                                                   16700000
+      if zª='00'bx then do;         /* 'L' font (alpha)              */ 16710000
+         c='04'x;                                                       16720000
+         font_type='L';                                                 16730000
+         end;                                                           16740000
+       end; /* 'K' | 'L' */                                             16750000
+    else do;                                                            16760000
+      z = fbx&'08'bx;                                                   16770000
+      if zª='00'bx then do;         /* 'M' font (num/special)        */ 16780000
+         c='08'x;                                                       16790000
+         font_type='M';                                                 16800000
+         end;                                                           16810000
+      z = fbx&'10'bx;                                                   16820000
+      if zª='00'bx then do;         /* 'N' font (U/C alpha)          */ 16830000
+         c='10'x;                                                       16840000
+         font_type='N';                                                 16850000
+         end;                                                           16860000
+      z = fbx&'20'bx;                                                   16870000
+      if zª='00'bx then do;         /* 'O' font (L/C alpha)          */ 16880000
+         c='20'x;                                                       16890000
+         font_type='O';                                                 16900000
+         end;                                                           16910000
+       end; /* else */                                                  16920000
+    substr( font_name, 5, 1 ) = font_type;                              16930000
+    if ft='00'x then return('1'b);     /* First time - no font chg.  */ 16940000
+    else             return('0'b);     /* Font change required       */ 16950000
+                                                                        16960000
+    end check_meta_font;                                                16970000
+                                                                        16980000
+ /********************************************************************/ 16990000
+ /*           Metacode positioning in pels                           */ 17000000
+ /********************************************************************/ 17010000
+ get_meta_pos: procedure(xval,yval);                                    17020000
+  dcl   (xval,yval)          fixed bin(31);                             17030000
+                                                                        17040000
+    /*---------------------------------------------------------------*/ 17050000
+    /* Compute Physical Page Position:                               */ 17060000
+    /* Positioning determined by text orientation                    */ 17070000
+    /* (8.5x11 paper only, currently.  3400->4300 for 8.5x14)        */ 17080000
+    /*---------------------------------------------------------------*/ 17090000
+    select( text_orien );                                               17100000
+      when(  0) do;                    /* Portrait                   */ 17110000
+        cscan = 22+xval;                                   /*PF980715*/ 17120000
+        cdot  = 3400-yval;                                 /*PF980716*/ 17130000
+        end; /*   0 */                                                  17140000
+      when( 90) do;                    /* Landscape                  */ 17150000
+        cdot  = 3400-xval;                                 /*PF980715*/ 17160000
+        cscan = 2571-yval;                                 /*PF980716*/ 17170000
+        end; /*  90 */                                                  17180000
+      when(180) do;                    /* Reverse Portrait           */ 17190000
+        cscan = 2571-xval;                                 /*PF980715*/ 17200000
+        cdot  = 101+yval;                                  /*PF980716*/ 17210000
+        end; /* 180 */                                                  17220000
+      when(270) do;                    /* Reverse Landscape          */ 17230000
+        cdot  = 101+xval;                                               17240000
+        cscan = 22+yval;                                   /*PF980716*/ 17250000
+        end; /* 270 */                                                  17260000
+      end; /* select */                                                 17270000
+                                                                        17280000
+    return;                                                             17290000
+                                                                        17300000
+    end get_meta_pos;                                                   17310000
+                                                                        17320000
+ %page;                                                                 17330000
+ /********************************************************************/ 17340000
+ /*             I/O Routines                                         */ 17350000
+ /********************************************************************/ 17360000
+                                                                        17370000
+ /*-----------------------------------*/                                17380000
+ /*    Write data to pclout           */                                17390000
+ /*-----------------------------------*/                                17400000
+ write_pcl: procedure(p,len,t) options( reentrant );                    17410000
+ dcl     p                   ptr;                                       17420000
+ dcl     len                 fixed bin(15);                             17430000
+ dcl     t                   ptr;                                       17440000
+                                                                        17450000
+ dcl     pcl_hdr             char(80)  static                           17460000
+              init( ('5A'x || 'JES328X' || '01DA'x || (70)'FF'x) );     17470000
+ dcl     buffer_init         char(3)   static                           17480000
+              init( '5A354D'x );                                        17490000
+ dcl     buffer_init_trnsp   char(3)   static                           17500000
+              init( '5A4A5B'x );                                        17510000
+                                                                        17520000
+ /*-------------------------*/                                          17530000
+ /* First time thru         */                                          17540000
+ /*-------------------------*/                                          17550000
+ if pclo<=0 then do;                                                    17560000
+   if P_rawª='1'b then do;             /* Not Raw_PCL        PF980406*/ 17570000
+     if MCK = TRUE then do;                                             17580000
+       pcl_rec = buffer_init_trnsp || (80)'00'x;                        17590000
+       pclo=length(buffer_init_trnsp)+1;                                17600000
+       end;                                                             17610000
+     else do;                                                           17620000
+       pcl_rec = buffer_init || (80)'00'x;                              17630000
+       pclo=length(buffer_init)+1;                                      17640000
+       end;                                                             17650000
+     end; /* Not Raw_PCL */                                /*PF980406*/ 17660000
+   else pclo = 1;                                          /*PF980406*/ 17670000
+   end; /* pclo=0 */                                                    17680000
+                                                                        17690000
+ /*-------------------------*/                                          17700000
+ /* Flush out last card(s)  */                                          17710000
+ /*-------------------------*/                                          17720000
+ if len<0 then do;                                                      17730000
+   if pclo>4 then call punch_one_card;                                  17740000
+   do while( mod(stat_cards,6)ª=0 );                                    17750000
+     call punch_one_card; /* punch empty cards */                       17760000
+     end; /* do while */                                                17770000
+   return;                                                              17780000
+   end; /* len<0 */                                                     17790000
+                                                                        17800000
+ if MCK = TRUE then begin;                                              17810000
+   dcl     a                   ptr;                                     17820000
+   dcl     s                   char(32767) based(a);                    17830000
+   dcl     temp                char(80)    varying;                     17840000
+   dcl     ttab                char(256)   based(t);                    17850000
+   dcl    (l,m)                fixed bin(15);                           17860000
+   l=len;                                                               17870000
+   a=p;                                                                 17880000
+   do while(l>0);                                                       17890000
+     m = min( 40, l );                                                  17900000
+     temp = substr(s,1,m);                                              17910000
+     l = l-m;                                                           17920000
+     a = a+m;                                                           17930000
+     if tª=null() then temp = translate( temp, ttab );                  17940000
+     temp = hex( addr(temp)+2, m );                                     17950000
+     call move_data( addr(temp)+2, m*2, null() );                       17960000
+     end; /* do while */                                                17970000
+   end; /* MCK */                                                       17980000
+ else do;                                                               17990000
+   /* All parameters called by value */                                 18000000
+   call move_data( (p), (len), (t) );                                   18010000
+   end; /* else */                                                      18020000
+                                                                        18030000
+ return;                                                                18040000
+                                                                        18050000
+ /*-------------------------*/                                          18060000
+ /* Data mover              */                                          18070000
+ /*-------------------------*/                                          18080000
+ move_data: procedure(atext,count,atab) options( reentrant );           18090000
+   dcl   atext               ptr,                                       18100000
+         text                char(32767)         based(atext);          18110000
+   dcl   count               fixed bin(15);                             18120000
+   dcl   atab                ptr,                                       18130000
+         ttab                char(256)           based(atab);           18140000
+   dcl  (char_in,char_out)   fixed bin(15);                             18150000
+   dcl   n                   fixed bin(15);                             18160000
+                                                                        18170000
+   char_in  = count;                                                    18180000
+   do while(char_in>0);                                                 18190000
+     char_out = 80-pclo+1;                                              18200000
+     n = min(char_in,char_out);                                         18210000
+     substr(pcl_rec,pclo,n) = substr(text,1,n);                         18220000
+     if atabª=null() then substr(pcl_rec,pclo,n) =                      18230000
+           translate( substr(pcl_rec,pclo,n), ttab );                   18240000
+     atext   = atext+n;                                                 18250000
+     char_in = char_in-n;                                               18260000
+     if n = char_out then call punch_one_card;                          18270000
+     else pclo=pclo+n;                                                  18280000
+     end; /* do while */                                                18290000
+                                                                        18300000
+   end move_data;                                                       18310000
+                                                                        18320000
+ punch_one_card: procedure options( reentrant );                        18330000
+   if P_raw='1'b then do;              /* Raw_PCL            PF980406*/ 18340000
+     call punch_routine( addr(pcl_rec) );                  /*PF980406*/ 18350000
+     pcl_rec = (80)'00'x;                                  /*PF980406*/ 18360000
+     pclo = 1;                                             /*PF980406*/ 18370000
+     return;                                               /*PF980406*/ 18380000
+     end; /* Raw_PCL */                                    /*PF980406*/ 18390000
+   if mod(stat_cards,6) = 0                                             18400000
+   then call punch_routine( addr(pcl_hdr) );                            18410000
+   stat_cards = stat_cards + 1;                                         18420000
+   call punch_routine( addr(pcl_rec) );                                 18430000
+   if MCK = TRUE then do;                                               18440000
+     pcl_rec = '5A'x || (79)'00'x;                                      18450000
+     pclo=2;                                                            18460000
+     end;                                                               18470000
+   else do;                                                             18480000
+     pcl_rec = buffer_init || (80)'00'x;                                18490000
+     pclo=length(buffer_init)+1;                                        18500000
+     end;                                                               18510000
+   end punch_one_card;                                                  18520000
+                                                                        18530000
+ end write_pcl;                                                         18540000
+                                                                        18550000
+ %page;                                                                 18560000
+ /*-------------------------------------------------------------------*/18570000
+ /*    Write data to metaout                                          */18580000
+ /*    (calling code insures that the current meta will fit on record */18590000
+ /*-------------------------------------------------------------------*/18600000
+ write_meta: procedure(p,len) options( reentrant );                     18610000
+ dcl     p                   ptr;                                       18620000
+ dcl     len                 fixed bin(15);                             18630000
+                                                                        18640000
+ dcl     text                char(32767)         based(p);              18650000
+                                                                        18660000
+ /*-------------------------*/                                          18670000
+ /* First time thru         */                                          18680000
+ /*-------------------------*/                                          18690000
+ if metao<=0 then do;                                                   18700000
+   meta_rec =  '+' || (213)' ';                                         18710000
+   metao=2;                                                             18720000
+   end; /* metao=0 */                                                   18730000
+                                                                        18740000
+ /*-------------------------*/                                          18750000
+ /* Flush out a line        */                                          18760000
+ /*-------------------------*/                                          18770000
+ if len<0 then do;                                                      18780000
+   if metao>2 then call print_one_line;                                 18790000
+   return;                                                              18800000
+   end; /* len<0 */                                                     18810000
+                                                                        18820000
+ substr(meta_rec,metao,len) = substr(text,1,len);                       18830000
+ metao=metao+len;                                                       18840000
+                                                                        18850000
+ return;                                                                18860000
+                                                                        18870000
+ print_one_line: procedure options( reentrant );                        18880000
+   substr(meta_rec,metao,1) = '01'x;   /* 'End-of-Meta' indicator    */ 18890000
+   call metacode_routine( addr(meta_rec) );                             18900000
+   meta_rec =  '+' || (213)' ';                                         18910000
+   metao=2;                                                             18920000
+   pscan,pdot,pfont = -1;              /* Next meta needs all info.  */ 18930000
+   end print_one_line;                                                  18940000
+                                                                        18950000
+ end write_meta;                                                        18960000
+                                                                        18970000
+ %page;                                                                 18980000
+ /********************************************************************/ 18990000
+ /*             Conversion Routines                                  */ 19000000
+ /********************************************************************/ 19010000
+                                                                        19020000
+ /********************************************************************/ 19030000
+ /*    Convert Number to Varying Character String                    */ 19040000
+ /********************************************************************/ 19050000
+ toc: procedure(n) options( reentrant )                                 19060000
+                   returns( char(5) varying );                          19070000
+ dcl     n                   fixed bin(15);                             19080000
+ dcl     c                   char(5) varying;                           19090000
+                                                                        19100000
+ select;                                                                19110000
+   when( n>9999 ) put string(c) edit(n)(p'(5)9');                       19120000
+   when( n>999  ) put string(c) edit(n)(p'(4)9');                       19130000
+   when( n>99   ) put string(c) edit(n)(p'(3)9');                       19140000
+   when( n>9    ) put string(c) edit(n)(p'(2)9');                       19150000
+   otherwise      put string(c) edit(n)(p'(1)9');                       19160000
+   end; /* select */                                                    19170000
+                                                                        19180000
+ return(c);                                                             19190000
+                                                                        19200000
+ end toc;                                                               19210000
+                                                                        19220000
+ %page;                                                                 19230000
+                                                                        19240000
+ /********************************************************************/ 19250000
+ /*   Convert relative font metrics to pels at 300DPI                */ 19260000
+ /*   Pels = (relative_metric * pels_per_inch * point_size)/72000    */ 19270000
+ /********************************************************************/ 19280000
+                                                                        19290000
+ text_width: proc(awidth,adata,len) returns( fixed bin(31) );           19300000
+ dcl    (awidth,adata)       ptr;                                       19310000
+ dcl     len                 fixed bin(31);                             19320000
+ dcl     wid                 fixed bin(31)       init(0);               19330000
+ dcl     i                   fixed bin(31);                             19340000
+ dcl     p                   ptr;                                       19350000
+ if substr(awidth->w_flags(1),1,1)='1'b then do; /* Non-prop */         19360000
+   return( len * awidth->w_char_incr(1) );                              19370000
+   /* NOTE: no non-proportional 18- or 24-point fonts */                19380000
+   end;                                                                 19390000
+ else do i=1 to len;                                                    19400000
+   p = adata+i-1;                                                       19410000
+   wid = wid + awidth->width( 1,  p->oneb );                            19420000
+   end; /* do i */                                                      19430000
+ return( wid );                                                         19440000
+ end text_width;                                                        19450000
+                                                                        19460000
+ /********************************************************************/ 19470000
+ /*   Hexadecimal to character conversion                            */ 19480000
+ /********************************************************************/ 19490000
+                                                                        19500000
+ hex: proc(sp,n) options( reentrant )                                   19510000
+                 returns( char(256) varying );                          19520000
+ dcl  sp                     ptr,                                       19530000
+      s                      char(4096) based(sp);                      19540000
+ dcl  n                      fixed bin(15);                             19550000
+ dcl  j                      fixed bin(15);                             19560000
+ dcl  ret                    char(256) varying   init('');              19570000
+ do j=1 to n;                                                           19580000
+   ret=ret||hexone( substr(s,j,1) );                                    19590000
+   end;                                                                 19600000
+ return(ret);                                                           19610000
+ end hex;                                                               19620000
+                                                                        19630000
+ hexone: proc(c) options( reentrant )                                   19640000
+                 returns( char(2) );                                    19650000
+ dcl  c                      char;                                      19660000
+ dcl  hextabs                char(16) static     init                   19670000
+                       ('0123456789ABCDEF'),                            19680000
+      hextab           (0:15)char(1) defined hextabs;                   19690000
+ dcl  p                      ptr,                                       19700000
+      x                      bit(8) based(p);                           19710000
+ p = addr(c);                                                           19720000
+ return(                                                                19730000
+        hextab( substr(x,1,4) ) || hextab( substr(x,5,4) )              19740000
+       );                                                               19750000
+ end hexone;                                                            19760000
+                                                                        19770000
+ %include ebcasc;                                                       19780000
+ %include metacsbk;                                                     19790000
+ %include metatitn;                                                     19800000
+ %include metachrs;                                                     19810000
+                                                                        19820000
+ end DEVDEP;                                                            19830000
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 19840000
+//LKED.SYSLIB DD                                                        19850000
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    19860000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        19870000
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      19880000
+//LKED.SYSLMOD  DD DISP=SHR,DSN=FLASS.PCL.LINKLIB                       19890000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  19900000
+//LKED.SYSIN DD *                                                       19910000
+ MODE AMODE(31)                                                         19920000
+ MODE RMODE(ANY)                                                        19930000
+ ALIAS DEVDEPV                                                          19940000
+ NAME DEVDEP(R)                                                         19950000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 19960000

@@ -1,0 +1,45 @@
+ /*------------------------------------------------------------------*/ 00010000
+ /* REXX-like 'wordpos()' function.                                  */ 00020000
+ /*------------------------------------------------------------------*/ 00030000
+                                                                        00040000
+ wordpos: procedure(str,no) options( reentrant )                        00050000
+                            returns( fixed bin(15) );                   00051000
+                                                                        00052000
+ dcl  str                    char(*) varying;                           00053000
+ dcl  no                     fixed bin(15);                             00054000
+ dcl (s,e,i,n)               fixed bin(15)       init(0);               00055000
+                                                                        00056000
+ i=1;                                                                   00057000
+ do while('1'b);                                                        00058000
+   s=find_start(str,i);                                                 00059000
+   if s=0 then return(0);                                               00060000
+   n=n+1;                                                               00070000
+   i=s;                                                                 00080000
+   e=find_end(str,i);                                                   00090000
+   i=e;                                                                 00100000
+   if n=no then return(s);                                              00110000
+   end; /* do while */                                                  00120000
+                                                                        00130000
+ find_start: proc(s,p) options( reentrant )                             00140000
+                       returns( fixed bin(15) );                        00150000
+   dcl s                     char(*) varying;                           00160000
+   dcl p                     fixed bin(15);                             00170000
+   dcl j                     fixed bin(15);                             00180000
+   do j=p to length(s);                                                 00190000
+     if substr(str,j,1)ª=' ' then return(j);                            00200000
+     end;                                                               00210000
+   return(0);                                                           00220000
+   end find_start;                                                      00230000
+                                                                        00240000
+ find_end: proc(s,p) options( reentrant )                               00250000
+                     returns( fixed bin(15) );                          00260000
+   dcl s                     char(*) varying;                           00270000
+   dcl p                     fixed bin(15);                             00280000
+   dcl j                     fixed bin(15);                             00290000
+   do j=p to length(s);                                                 00300000
+     if substr(str,j,1)=' ' then return(j);                             00310000
+     end;                                                               00320000
+   return( length(s)+1 );                                               00330000
+   end find_end;                                                        00340000
+                                                                        00350000
+ end wordpos;                                                           00360000

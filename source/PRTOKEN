@@ -1,0 +1,39 @@
+ /********************************************************************/ 00010000
+ /*       LBDC Printer Token Definition                              */ 00020000
+ /********************************************************************/ 00030000
+ dcl     token_addr          pointer,                                   00031000
+       1 prtoken             based(token_addr) unaligned,               00032000
+         5 pr_tokname        char(16),                                  00033000
+         5 pr_devt           bit(8),                                    00034000
+                             /* 'F0'x - IBM                          */ 00035001
+                             /* '80'x - Xerox                    (1) */ 00035101
+                             /* '40'x - HP                       (2) */ 00036000
+                             /* '20'x - Ricoh                    (3) */ 00036101
+                             /* '08'x - Xlate=PCOM               (5) */ 00037001
+                             /* '04'x - Xlate=Ally               (6) */ 00037101
+                             /* '02'x - Xlate=Null               (7) */ 00038000
+                             /* '01'x - Xlate=UCS                (8) */ 00039001
+         5 pr_model          char(4),                                   00040000
+         5 pr_tray           char(1),                                   00050000
+         5 pr_jobno          char(8),                                   00060000
+         5 pr_jobname        char(8),                                   00070000
+         5 pr_tranid         char(4),                                   00080000
+         5 pr_flags          bit(8),                                    00090000
+                             /* '80'x - Link=No                  (1) */ 00100001
+                             /* '40'x - Duplex=Yes               (2) */ 00101001
+                             /* '20'x - MCK=Yes                  (3) */ 00110000
+                             /* '10'x - Warmup=Yes               (4) */ 00120000
+                             /* '08'x - PCL=Yes                  (5) */ 00130000
+                             /* '02'x - Landscape                (7) */ 00140000
+                             /* '01'x - ASCII                    (8) */ 00141001
+         5 pr_fontset        char(2),                      /*20060811*/ 00150001
+         5 pr_pcl            bit(8),                       /*20060811*/ 00150101
+                             /* '80'x - CRC Fonts loaded         (1) */ 00150201
+                             /* '40'x - Fontset loaded           (2) */ 00150301
+                             /* '20'x - CRC=Base                 (3) */ 00150401
+                             /* '10'x - CRC=Full                 (4) */ 00150501
+                             /* '02'x - VPS=Yes                  (7) */ 00150601
+                             /* '01'x - PJL=Yes                  (8) */ 00150701
+         5 pr_cp             bit(16);                      /*20060811*/ 00150801
+         /* Other fields not retrieved by token              20060811*/ 00150901
+                                                                        00160000

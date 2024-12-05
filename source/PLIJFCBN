@@ -1,0 +1,61 @@
+ /********************************************************************/ 00000100
+ /*            MVS JOB FILE CONTROL BLOCK (JFCB)                    */  00000200
+ /********************************************************************/ 00000300
+ DCL     JFCBP                     PTR,                                 00000400
+       1 JFCB                      UNALIGNED BASED(JFCBP),              00000500
+         5 JFCBDSNM                CHAR(44),                            00000600
+         5 JFCBELNM                CHAR(8),                             00000700
+         5 JFCBTSDM                BIT(8),                              00000800
+         5 JFCBDSCB                CHAR(3),                             00000900
+         5 JFCFCBID                CHAR(4),                             00001000
+         5 JFCBADBF                FIXED BIN(15),                       00001100
+         5 JFCNLREC                FIXED BIN(15),                       00001200
+         5 JFCVINDX                FIXED BIN(15),                       00001300
+         5 JFCBLTYP                BIT(8),                              00001400
+         5 JFCRUFOF                BIT(8),                              00001500
+         5 JFCFUNC                 BIT(8),                              00001600
+         5 JFCBVLSQ                FIXED BIN(15),                       00001700
+         5 JFCBMASK                BIT(8),                              00001800
+         5 JFCBOPS1                BIT(40),                             00001900
+         5 JFCBFLG1                BIT(8),                              00002000
+         5 JFCBFLG2                BIT(8),                              00002100
+         5 JFCBOPS2                BIT(8),                              00002200
+         5 JFCBCRDT                CHAR(3),                /*PF041296*/ 00002300
+         5 JFCBEXDT                CHAR(3),                /*PF041296*/ 00002400
+         5 JFCBIND1                BIT(8),                              00002500
+         5 JFCBIND2                BIT(8),                              00002600
+         5 JFCAMPTR                CHAR(4),                             00002700
+         5 JFCEROPT                BIT(8),                              00002800
+         5 JFCTRTCH                BIT(8), /* ALIAS JFCKEYLE */         00002900
+         5 JFCDEN                  BIT(8),                              00003000
+         5 JFCLIMCT                BIT(8),                              00003100
+         5 JFCTRKBL                FIXED BIN(15),                       00003200
+         5 JFCDSORG                BIT(16),                             00003300
+         5 JFCRECFM                BIT(8),                              00003400
+         5 JFCOPTCD                BIT(8),                              00003500
+         5 JFCBLKSI                FIXED BIN(15),                       00003600
+         5 JFCLRECL                FIXED BIN(15),                       00003700
+         5 JFCNCP                  BIT(8),                              00003800
+         5 JFCBFSEQ                BIT(8),                              00003900
+         5 JFCRKP                  FIXED BIN(15),                       00004000
+         5 JFCCYLOF                BIT(8),                              00004100
+         5 JFCDBUFN                BIT(8),                              00004200
+         5 JFCINTVL                BIT(8),                              00004300
+         5 JFCOUTLI                BIT(24),                             00004400
+         5 JFCBNTCS                BIT(8),                              00004500
+         5 JFCBNVOL                BIT(8),                              00004600
+         5 JFCBVOLS                CHAR(30),                            00004700
+         5 JFCBEXTL                BIT(8),                              00004800
+         5 JFCBEXAD                CHAR(3),                             00004900
+         5 JFCBPQTY                BIT(24),                             00005000
+         5 JFCBCTRI                BIT(8),                              00006000
+         5 JFCBSQTY                BIT(24),                             00006100
+         5 JFCFLGS1                BIT(8),                              00006200
+         5 JFCBDQTY                BIT(24),                             00006300
+         5 JFCBSPNM                BIT(24),                             00006400
+         5 JFCBABST                FIXED BIN(15),                       00006500
+         5 JFCBSBNM                BIT(24),                             00006600
+         5 JFCBDRLH                BIT(24),                             00006700
+         5 JFCBVLCT                BIT(8),                              00006800
+         5 JFCBSPTN                BIT(8);                              00006900
+ /************ END OF JFCB DEFINITION ********************************/ 00007000

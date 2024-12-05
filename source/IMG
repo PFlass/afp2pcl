@@ -1,0 +1,41 @@
+ /********************************************************************/ 00010000
+ /*      Xerox Centralized Printer Black+White Image Header          */ 00020000
+ /********************************************************************/ 00030000
+ dcl   1 IMGHDR              unaligned based,                           00040004
+        2  Img_Header_data,                                             00050010
+         5 Img_Header        char(36),           /* Const. Text (A  0*/ 00051010
+         /*  'Interpress/Xerox/2.0/ImgFormat/2.00 '                  */ 00060000
+         5 Img_BeginToken    char(2),            /* 'A066'x        36*/ 00070003
+         5 Img_CommentToken  char(2),            /* 'E600'x        38*/ 00080003
+         5 Img_CommentLength char(2),            /* '01AE'x = 430  40*/ 00090003
+         5 Img_Comment       char(430),          /* ASCII Text     42*/ 00100003
+         5 Img_ShortSeq1     char(2),            /* 'C202'x       472*/ 00110003
+         5 Img_XPixels       fixed bin(15),      /*               474*/ 00120003
+         5 Img_ShortSeq2     char(2),            /* 'C202'x       476*/ 00130003
+         5 Img_YPixels       fixed bin(15),      /*               478*/ 00140003
+         5 Img_Reserved1     char(12),           /* (3)'C2020001'x480*/ 00150003
+         5 Img_ShortSeqRat1  char(2),            /* 'C404'x       492*/ 00160003
+         5 Img_ResNumerator  fixed bin(15),      /* Res - Num.    494*/ 00170005
+         5 Img_ResDenom      fixed bin(15),      /* Res - Denom.  496*/ 00180005
+         5 Img_Reserved2     char(4),            /* 'C202 0001'x  498*/ 00190003
+         /* The following is part of 'CompressedPixelVector'         */ 00200009
+        2  Img_PixelVector_data,                                        00201010
+         5 Img_LengthId      char(1),            /* 'EA'x         502*/ 00210005
+         5 Img_LenByte1      char(1),            /* Length byte 1 503*/ 00211007
+         5 Img_LenByte23     char(2),            /* Length bytes 2504*/ 00220013
+         5 Img_MBZ           char(2),            /* '0000'x       506*/ 00230003
+         5 Img_Predictor     fixed bin(15),      /* Predictor     508*/ 00240006
+         5 Img_ScanLength    fixed bin(15);      /* Sameas YPixels510*/ 00250003
+                                                                        00251002
+ /********************************************************************/ 00260002
+ /*      Xerox Centralized Printer Black+White Image Trailer         */ 00270002
+ /********************************************************************/ 00280002
+ dcl   1 IMGTRL              unaligned based,                           00290004
+         /* The following length is the same as Img_LenBytex         */ 00301109
+         5 Trl_ShortSeq1     char(2),            /* 'C203'x          */ 00302009
+         5 Trl_LenByte1      char(1),            /* Length byte 1    */ 00303105
+         5 Trl_LenByte23     char(2),            /* Length bytes 2-3 */ 00304011
+         5 Trl_ShortSeq2     char(2),            /* 'C202'x          */ 00305009
+         5 Trl_Signature     char(2),            /* '4CCD'x          */ 00306002
+         5 Trl_EndToken      char(2);            /* 'A067'x          */ 00307002
+                                                                        00310002

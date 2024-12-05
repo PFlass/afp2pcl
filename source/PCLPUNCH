@@ -1,0 +1,117 @@
+//FLASSP   JOB  (),'PCLPUNCH',CLASS=J,MSGCLASS=X,                       00001003
+//         NOTIFY=$                                                     00002000
+//********************************************************************* 00003000
+//*                PL/I COMPILE AND LINK                              * 00004000
+//********************************************************************* 00005000
+// EXEC PLIXCL,                                                         00006000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG',                                  00007000
+//   PARM.LKED='LIST,MAP,XREF'                                          00008000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00009000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00009107
+//PLI.SYSIN    DD *                                                     00009200
+ /* PCLPUNCH: Convert GENTEXT PCL output to card image          */      00009303
+                                                                        00009400
+ /*------------------------------------------------------------------*/ 00009500
+ /*                                                                  */ 00009600
+ /*      Module name: PCLPUNCH.                                      */ 00009703
+ /*                                                                  */ 00009800
+ /*      Author:      Peter Flass                                    */ 00009900
+ /*                   New York State Legislative Bill Drafting       */ 00010000
+ /*                   August, 1996                                   */ 00020000
+ /*                                                                  */ 00030000
+ /*      Function:    GENTEXT writes PCL output as VB LRECL(10000).  */ 00040000
+ /*                   This program converts this to FB LRECL(80),    */ 00041000
+ /*                   with '5A'x and an SCS transparency per input   */ 00041102
+ /*                   record.  The last record may be filled with    */ 00042006
+ /*                   '00'x.                                         */ 00043006
+ /*                                                                  */ 00043106
+ /*      Modifications:                                              */ 00044000
+ /*                   29 Aug 1996 -- Modified from PCLPUNCH.      PRF*/ 00045000
+ /*                                                                  */ 00045100
+ /*------------------------------------------------------------------*/ 00046000
+                                                                        00047000
+ pclpnch: procedure options(main);                                      00048004
+                                                                        00049000
+ dcl     input               record input;                              00050000
+ dcl     punch               record output env( f recsize(80) );        00060000
+ dcl     sysprint            print;                                     00070000
+                                                                        00080000
+ dcl     irl                 fixed bin(31);                             00090000
+ dcl     ip                  ptr,                                       00100000
+         inrec               char(32760)         based(ip);             00110000
+ dcl     card                char(80);                                  00120000
+ dcl    (il,ol)              fixed bin(15);                             00130000
+ dcl    (records_read,bytes_read,bytes_written,cards_written)           00140000
+                             fixed dec(15)       init(0);               00140100
+ dcl     eof                 bit(1)              init('0'b);            00140200
+                                                                        00140300
+ dcl    (repeat,substr)      builtin;                                   00140400
+                                                                        00140500
+ dcl     recl                entry(*)                                   00140600
+                             returns( fixed bin(31) );                  00140700
+                                                                        00140800
+ dcl     BYTES_PER_OUTPUT_RECORD fixed bin(15) init(80);                00140900
+                                                                        00141000
+ on endfile(input) eof='1'b;                                            00141100
+                                                                        00141200
+ open file(input),                                                      00142000
+      file(punch);                                                      00143000
+ card = '5A354D'x || repeat( '00'x, 76 );                               00144000
+ ol=4;                                                                  00145000
+ read file(input) set(ip);                                              00146000
+ records_read = records_read+1;                                         00147000
+                                                                        00148000
+ do while(ªeof);                                                        00149000
+                                                                        00150000
+   irl = recl(input);                                                   00160005
+   bytes_read = bytes_read + irl;                                       00170000
+   il=1;                                                                00180000
+                                                                        00190000
+   do while( il<=irl );                                                 00200000
+     /* record length>BYTES_PER_OUTPUT_RECORD */                        00210000
+     if (irl+1)-il >= (BYTES_PER_OUTPUT_RECORD-ol+1) then do;           00220000
+       substr(card,ol,BYTES_PER_OUTPUT_RECORD-ol+1) =                   00230000
+           substr(inrec,il,BYTES_PER_OUTPUT_RECORD-ol+1);               00230100
+       il=il+(BYTES_PER_OUTPUT_RECORD-ol+1);                            00231000
+       ol=4;                                                            00232000
+       write file(punch) from(card);                                    00233000
+       bytes_written = bytes_written + BYTES_PER_OUTPUT_RECORD;         00234001
+       cards_written = cards_written + 1;                               00235000
+       card = '5A354D'x || repeat( '00'x, 76 );                         00235100
+       end;                                                             00237000
+     /* record length<=BYTES_PER_OUTPUT_RECORD */                       00238000
+     else do;                                                           00239000
+       substr(card,ol,(irl+1)-il) = substr(inrec,il,(irl+1)-il);        00239100
+       ol=ol+(irl+1)-il;                                                00239200
+       il=irl+1;                                                        00239300
+       end;                                                             00239400
+     end; /* do while */                                                00239500
+                                                                        00239600
+   read file(input) set(ip);                                            00239700
+   records_read = records_read+1;                                       00239800
+                                                                        00239900
+  end; /* do while */                                                   00240000
+                                                                        00240100
+ if ol>3 then do;                                                       00240200
+   write file(punch) from(card);                                        00240300
+   bytes_written = bytes_written + ol - 1;                              00240400
+   cards_written = cards_written + 1;                                   00240500
+   end;                                                                 00240600
+                                                                        00240700
+ close file(input), file(punch);                                        00240800
+ put skip edit('Bytes read    ',bytes_read)(a,f(16));                   00240900
+ put skip edit('Bytes written ',bytes_written)(a,f(16));                00241000
+ put skip edit('Records read  ',records_read)(a,f(16));                 00242000
+ put skip edit('Cards written ',cards_written)(a,f(16));                00243000
+                                                                        00244000
+ end pclpnch;                                                           00245004
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00246000
+//LKED.SYSLIB DD                                                        00247000
+// DD                                                                   00248000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        00249000
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      00250000
+//LKED.SYSLMOD  DD DSN=FLASS.PF.LOAD,DISP=SHR                           00260000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00270000
+//LKED.SYSIN DD *                                                       00280000
+ NAME PCLPUNCH(R)                                                       00290003
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00300000

@@ -1,0 +1,141 @@
+//FLASSP   JOB  (),'BMPLI',CLASS=J,MSGCLASS=X,                          00001001
+//         NOTIFY=$                                                     00002001
+//********************************************************************* 00003001
+//*                PL/I COMPILE AND LINK                              * 00004001
+//********************************************************************* 00005001
+// EXEC PLIXCL,                                                         00006001
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00007001
+//   PARM.LKED='LIST,MAP,XREF,NCAL'                                     00008004
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00009001
+//PLI.SYSLIB   DD DSN=FLASS.PF.PLIMAC,DISP=SHR                          00009101
+//PLI.SYSIN    DD *                                                     00009201
+ /*      BMPLI: PL/I Bitmap rotation routine                         */ 00011000
+ /*                                                                  */ 00020000
+ /********************************************************************/ 00030000
+ /*                                                                  */ 00031000
+ /* Module:   BMPLI                                                  */ 00040000
+ /*                                                                  */ 00040100
+ /* Function: Rotate a bitmap 90 degrees                             */ 00041000
+ /*                                                                  */ 00041100
+ /* Author    Peter Flass                                            */ 00042000
+ /*           NYS LBDC                                               */ 00043000
+ /*           Oct, 1999                                              */ 00044000
+ /*                                                                  */ 00046000
+ /********************************************************************/ 00050000
+                                                                        00060000
+ BMROT:  proc( pSrc, SrcRow, SrcCol, Angle ) returns( ptr );            00070002
+ dcl     pSrc                ptr;                                       00080000
+ dcl    (SrcRow,SrcCol)      fixed bin(31);                             00090000
+ dcl     Angle               fixed bin(15);                             00091000
+                                                                        00091100
+ dcl     SrcColBytes         fixed bin(31);                             00091200
+ dcl     SrcRowBytes         fixed bin(31);                             00091300
+ dcl     DstColBytes         fixed bin(31);                             00091401
+ dcl    (DstRow,DstCol)      fixed bin(31);                             00091501
+ dcl     DstSize             fixed bin(31);                             00091601
+ dcl     pDst                ptr;                                       00092000
+ dcl     SrcBits             fixed bin(31);                             00102000
+ dcl     xAlloc              entry( fixed bin(31) )   returns( ptr );   00110100
+ dcl    (pS,pD)              ptr;                                       00110200
+ dcl     b                   bit(1);                                    00110300
+ dcl    (Row,Col)            fixed bin(31);                             00110400
+                                                                        00111000
+ %include builtins;                                                     00111101
+                                                                        00111201
+ SrcColBytes = (SrcCol+7)/8;                                            00112000
+ SrcRowBytes = (SrcRow+7)/8;                                            00112200
+ DstRow      = SrcColBytes*8;                                           00112309
+ DstCol      = SrcRowBytes*8;                                           00115009
+ DstColBytes = SrcRowBytes;                                             00115109
+ DstSize = DstRow*DstColBytes;                                          00116001
+ pDst = xAlloc( DstSize );                                              00116300
+ call ZeroOut( pDst, DstSize );                                         00116600
+ SrcBits = SrcRow * SrcCol;                                             00117000
+ pS = pSrc;                                                             00118000
+ pD = pDst;                                                             00119000
+ Row,Col=0;                                                             00119100
+ do while('1'b);                                                        00119200
+   b = GetBit( pSrc, Row, SrcColBytes, Col );                           00119301
+   if b='1'b                                                            00119401
+   then call PutBit( pDst, Col, DstColBytes, Row, SrcRow );             00119501
+   Col = Col+1;                                                         00119600
+   if Col>=SrcCol then do;                                              00119701
+     Col=0;                                                             00119800
+     Row = Row+1;                                                       00119900
+     if Row>=SrcRow then do;                                            00120005
+       return( pDst );                                                  00120205
+       end;                                                             00120305
+     end;                                                               00120400
+   end; /* do while */                                                  00120500
+                                                                        00120601
+ /*-----------------------------------*/                                00120701
+ /* Put a destination bit             */                                00120801
+ /*-----------------------------------*/                                00120901
+ PutBit: Proc( pBM, Row, RowWidth, Col, ColWidth );                     00121001
+ dcl     pBM                 ptr;                                       00121101
+ dcl    (Row,Col)            fixed bin(31);                             00121201
+ dcl    (RowWidth,ColWidth)  fixed bin(31);                             00121301
+ dcl    (ColByte,ColBit)     fixed bin(31);                             00121401
+ dcl     p                   ptr,                                       00121501
+         b                   bit(8)              based(p);              00121601
+                                                                        00121701
+ p = pBM;                                                               00121801
+ ColBit = ColWidth - Col - 1;                                           00121901
+ ColByte = ColBit/8;                                                    00122001
+ ColBit  = ColBit - ColByte*8 + 1;                                      00122101
+ p = p + Row * RowWidth;                                                00122401
+ p = p + ColByte;                                                       00122501
+ substr(b,ColBit,1)='1'b;                                               00122801
+ end PutBit;                                                            00122901
+                                                                        00123001
+ /*-----------------------------------*/                                00123101
+ /* Get a source bit                  */                                00123201
+ /*-----------------------------------*/                                00123301
+ GetBit: Proc( pBM, Row, RowWidth, Col ) returns( bit(1) );             00123401
+ dcl     pBM                 ptr;                                       00123501
+ dcl    (Row,Col)            fixed bin(31);                             00123601
+ dcl     RowWidth            fixed bin(31);                             00123701
+ dcl    (ColByte,ColBit)     fixed bin(31);                             00123801
+ dcl     p                   ptr,                                       00123901
+         b                   bit(8)              based(p);              00124001
+                                                                        00124101
+ p = pBM;                                                               00124201
+ ColByte = Col/8;                                                       00124301
+ ColBit  = Col - ColByte*8 + 1;                                         00124401
+ p = p + Row * RowWidth;                                                00124501
+ p = p + ColByte;                                                       00124601
+ return( substr(b,ColBit,1) );                                          00124701
+ end GetBit;                                                            00124801
+                                                                        00124901
+ /*-----------------------------------*/                                00125001
+ /* Zero out a bitmap                 */                                00125101
+ /*-----------------------------------*/                                00125201
+ ZeroOut: Proc( pBM, Size );                                            00125301
+ dcl     pBM                 ptr;                                       00125401
+ dcl     Size                fixed bin(31);                             00125501
+ dcl     p                   ptr,                                       00125601
+         b                   char(32760)         based(p);              00125701
+ dcl     s                   fixed bin(31);                             00125801
+                                                                        00125901
+ p = pBM;                                                               00126001
+ s = Size;                                                              00126101
+ do while(s>0);                                                         00126201
+   if s>32760 then substr(b,1,32760) = repeat( '00'x, 32759 );          00126307
+   else            substr(b,1,s)     = repeat( '00'x, s-1 );            00126407
+   p = p+32760;                                                         00126501
+   s = s-32760;                                                         00126601
+   end; /* do while */                                                  00126701
+ end ZeroOut;                                                           00126801
+                                                                        00126901
+ %include hex;                                                          00127006
+                                                                        00128001
+ end BMROT;                                                             00130002
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00140001
+//LKED.SYSLIB DD                                                        00150001
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        00160001
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      00170001
+//LKED.SYSLMOD  DD DISP=SHR,DSN=FLASS.PCL.LINKLIB                       00180001
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00190001
+//LKED.SYSIN DD *                                                       00200001
+ NAME BMROT(R)                                                          00210002
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00220001

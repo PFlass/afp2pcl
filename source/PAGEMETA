@@ -1,0 +1,298 @@
+//FLASSP   JOB  (),'PAGEMETA',CLASS=J,MSGCLASS=Z,                       00010001
+//         NOTIFY=$                                                     00020001
+//********************************************************************* 00030001
+//*                PL/I COMPILE AND LINK                              * 00040001
+//********************************************************************* 00050001
+// EXEC PLIXCL,                                                         00060001
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00070001
+//   PARM.LKED='LIST,MAP,XREF'                                          00080001
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00090001
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00100001
+//PLI.SYSIN    DD *                                                     00110001
+ /* PAGEMETA -- Print Metacode Trace                                 */ 00120001
+                                                                        00130001
+ /*------------------------------------------------------------------*/ 00140001
+ /*                                                                  */ 00141001
+ /* Module: PAGEMETA                                                 */ 00142001
+ /*                                                                  */ 00143001
+ /* Author: Peter Flass -- NYS LBDC -- Jan, 2002                     */ 00144001
+ /*                                                                  */ 00145001
+ /* Function: Select specific pages from metacode print stream       */ 00146001
+ /*                                                                  */ 00147001
+ /* Modifications:                                                   */ 00148001
+ /*                                                                  */ 00160001
+ /*------------------------------------------------------------------*/ 00170001
+                                                                        00180001
+ PAGEMETA: procedure(parm) options(main);                               00190001
+ dcl     parm                char(100) varying;                         00200001
+                                                                        00210001
+ dcl     metain              record                                     00220001
+                             env(recsize(214) blksize(0));              00230001
+ dcl     sysprint            print;                                     00240001
+ dcl     errors              print;                                     00250001
+                                                                        00260001
+ dcl     line                fixed bin(15)       init(0);               00270001
+ dcl     page                fixed bin(15)       init(0);               00280001
+ dcl     meta_page           fixed bin(15)       init(0);               00281001
+ dcl     error_count         fixed bin(15)       init(0);               00290001
+ dcl     buf                 char(214) varying;                         00300001
+ dcl     eof                 bit(1)              init( '0'b );          00310001
+                                                                        00311001
+ dcl     djde_cnt            fixed bin(15)       init(0);               00312001
+ dcl     djde_save        (8)char(214) varying;                         00313001
+ dcl     reading_djde        bit(1)              init(0);               00314001
+                                                                        00320001
+ %include builtins;                                                     00330001
+                                                                        00340001
+ %page;                                                                 00350001
+ on endfile(metain) eof='1'b;                                           00360001
+                                                                        00370001
+ open file(metain)   input,                                             00380001
+      file(errors)   output,                                            00390001
+      file(sysprint) output;                                            00391001
+ read file(metain) into(buf);                                           00392001
+                                                                        00393001
+ do while( eof='0'b );                                                  00394001
+   line = line+1;                                                       00395001
+   if substr(buf,1,1)='8B'x | substr(buf,1,1)='1'          /*PF010112*/ 00396001
+   then do;                                                /*PF010112*/ 00397001
+     page=page+1;                                          /*PF990609*/ 00398001
+     end; /* '8B' */                                       /*PF990609*/ 00399001
+   if substr(buf,1,1)ª='03'x &                             /*PF990609*/ 00400001
+      substr(buf,1,1)ª='8B'x                               /*PF990609*/ 00410001
+   then do;                                                /*PF990609*/ 00420001
+     /*-----------------------------------------------------*/          00423001
+     /*         DJDE record                                 */          00424001
+     /*-----------------------------------------------------*/          00425001
+     if substr(buf,3,8)='**DJDE**' then do;                             00426001
+       if ªreading_djde then do;                                        00426101
+         reading_djde='1'b;                                             00426201
+         djde_cnt=0;                                                    00426301
+         meta_page = meta_page+1;                                       00426401
+         end; /* ªreading_djde */                                       00426501
+       djde_cnt = djde_cnt+1;                                           00426701
+       djde_save(djde_cnt) = buf;                                       00426801
+       if index(buf,'END;')>0 |        /* EBCDIC                     */ 00426901
+          index(buf,'454E443B'x)>0     /* ASCII                      */ 00427001
+       then reading_djde='0'b;                                          00427101
+       end; /* DJDE */                                                  00427201
+     else call process_data;                              /*PF990609*/  00428001
+     end; /* then */                                      /*PF990609*/  00429001
+   read file(metain) into(buf);                                         00430001
+   end; /* do while */                                                  00440001
+                                                                        00450001
+ put file(errors) skip edit(meta_page,  ' Pages ')(p'zzz9',a);          00460001
+                                                                        00490001
+ close file(metain),                                                    00500001
+       file(errors),                                                    00510001
+       file(sysprint);                                                  00520001
+                                                                        00530001
+ return;                                                                00540001
+                                                                        00550001
+ /*-------------------------------------------------------*/            00560001
+ /*           Process Metacode record                     */            00570001
+ /*-------------------------------------------------------*/            00580001
+ process_data: proc;                                                    00590001
+   dcl   i                   fixed bin(15)       init(1);               00600001
+   dcl   c                   char(1);                                   00610001
+   dcl   hexval              char(2);                                   00620001
+   dcl   hwd                 fixed bin(15) based( addr(hexval) );       00630001
+   dcl  (dot,scan)           fixed bin(15)       init(-1);              00640001
+   dcl   text                char(214) varying   init('');              00650001
+                                                                        00660001
+   return;                                                              00661001
+   buf = substr(buf,2);                                                 00670001
+   buf = buf || '01'x;                                                  00680001
+   if substr(buf,2,8)=(8)'13'x         /* Check for RSTACK record    */ 00680101
+   then do;                                                             00680201
+     put skip edit( '<<RSTACK>>' )(a);                                  00680301
+     return;                                                            00680401
+     end; /* RSTACK */                                                  00680501
+   c = substr(buf,1,1);                                                 00680601
+   if cª='06'x then do;                                                 00680701
+     put file(errors) skip edit('Line ',line,                           00680801
+                                ' Record does not begin with ASCAN')    00680901
+                               (a,p'zzz9',a);                           00681001
+     error_count = error_count+1;                                       00681101
+     end;                                                               00681201
+                                                                        00681301
+   do while( i<=length(buf) );                                          00681401
+     c = substr(buf,i,1);                                               00681501
+     if c<'20'x then do;     /* Dump out any accumulated text        */ 00681601
+       if length(text)>0                                                00681701
+       then put skip edit( '  ''' || translate(text,ebcdic) || '''' )   00681801
+                         (a);                                           00681901
+       text='';                                                         00682001
+       end; /* c<'20'x */                                               00683001
+                                                                        00684001
+     select(c);                                                         00685001
+                                                                        00686001
+         when('00'x) do;               /* Font change                */ 00687001
+           i = i + 1;                                                   00688001
+           c = substr(buf,i,1);                                         00689001
+           put skip edit('Font   ',hex(addr(c),1) )(a);                 00690001
+           i = i + 1;                                                   00700001
+           end; /* '00'x */                                             00710001
+                                                                        00720001
+         when('01'x) return;           /* End of Meta                */ 00730001
+                                                                        00740001
+         when('02'x) do;               /* Landscape                  */ 00750001
+           put skip edit('Land')(a);                                    00760001
+           i = i + 1;                                                   00770001
+           end; /* '02'x */                                             00780001
+                                                                        00790001
+         when('03'x) do;               /* Overlay                    */ 00800001
+           put skip edit('Over')(a);                                    00810001
+           i = i + 1;                                                   00820001
+           end; /* '03'x */                                             00830001
+                                                                        00840001
+         when('04'x) do;               /* Absolute dot               */ 00850001
+           i = i + 1;                                                   00860001
+           hexval = substr(buf,i+1,1) || substr(buf,i,1);               00870001
+           put skip edit('Adot',hwd)(a,p'----9');                       00880001
+           if hwd<101 then do;                                          00890001
+             put file(errors) skip edit('Line ',line,                   00900001
+                                        ' Dot address off page')        00910001
+                                       (a,p'zzz9',a);                   00920001
+             error_count = error_count+1;                               00930001
+             end;                                                       00940001
+           if hwd>3400 then do;                                         00950001
+             put file(errors) skip edit('Line ',line,                   00951001
+                 ' Warning, Dot address off page at 8.5 x 11')          00952001
+                                       (a,p'zzz9',a);                   00953001
+             error_count = error_count+1;                               00954001
+             end;                                                       00955001
+           dot = hwd;                                                   00956001
+           i = i + 2;                                                   00957001
+           end; /* '04'x */                                             00958001
+                                                                        00959001
+         when('05'x) do;               /* Relative dot               */ 00960001
+           i = i + 1;                                                   00970001
+           hexval = substr(buf,i+1,1) || substr(buf,i,1);               00980001
+           put skip edit('Rdot',hwd)(a,p'----9');                       00990001
+           i = i + 2;                                                   01000001
+           end; /* '05'x */                                             01010001
+                                                                        01020001
+         when('06'x) do;               /* Absolute scan              */ 01030001
+           i = i + 1;                                                   01040001
+           hexval = substr(buf,i+1,1) || substr(buf,i,1);               01050001
+           put skip edit('Ascn',hwd)(a,p'----9');                       01060001
+           if hwd<=scan then do;                                        01070001
+             put file(errors) skip edit('Line ',line,                   01071001
+                 ' Scan addresses not in ascending order')              01072001
+                                       (a,p'zzz9',a);                   01072101
+             error_count = error_count+1;                               01072201
+             end;                                                       01072301
+           if hwd<22 | hwd>2571 then do;                                01072401
+             put file(errors) skip edit('Line ',line,                   01072501
+                                        ' Scan address off page')       01072601
+                                       (a,p'zzz9',a);                   01072701
+             error_count = error_count+1;                               01072801
+             end;                                                       01072901
+           scan=hwd;                                                    01073001
+           i = i + 2;                                                   01074001
+           end; /* '06'x */                                             01075001
+                                                                        01076001
+         when('07'x) do;               /* Relative scan              */ 01077001
+           i = i + 1;                                                   01078001
+           hexval = substr(buf,i+1,1) || substr(buf,i,1);               01079001
+           put skip edit('Rscn',hwd)(a,p'----9');                       01080001
+           i = i + 2;                                                   01090001
+           end; /* '07'x */                                             01100001
+                                                                        01110001
+         when('08'x) begin;            /* Scale                      */ 01120001
+           dcl     bits32    bit(32);                                   01130001
+           dcl     bits16    bit(16);                                   01140001
+           dcl     char02    char(2);                                   01150001
+           dcl     char04    char(4);                                   01160001
+           dcl     char11    char(11);                                  01170001
+           dcl    (scald,scals) fixed bin(15);                          01180001
+                                                                        01190001
+           char04 =  substr(buf,i,4);                                   01200001
+           char11 = ' (' || hex(addr(char04),4) || ')';                 01210001
+           i = i + 1;                                                   01220001
+           char02 = substr(buf,i+1,1) || substr(buf,i,1);               01230001
+           bits32 = getbits(char02);                                    01240001
+         /* Get the 'X' (dot) component of scale */                     01241001
+           bits16 = (9)'0'b || substr(bits32,17,7);                     01242001
+           scald = ( 128 - getbin(bits16) ) * 8;                        01243001
+         /* Get the 'Y' (scan) component of scale*/                     01243101
+           bits16 = (7)'0'b || substr(bits32,24,9);                     01243201
+           scals = 512 - getbin(bits16);                                01243301
+           i = i + 2;                                                   01243401
+           c = substr(buf,i,1);                                         01243501
+           put skip edit('Scal (', scald, 'd,', scals, 's) ',           01243601
+                                   hex(addr(c),1), char11 )             01243701
+                        (a,p'zzz9',a,p'zzz9',a,a,a);                    01243801
+           if (scan+scals)<22 | (scan+scals)>2571 then do;              01243901
+             put file(errors) skip edit('Line ',line,                   01244001
+                                        ' Line end scan off page')      01245001
+                                       (a,p'zzz9',a);                   01246001
+             error_count = error_count+1;                               01247001
+             end;                                                       01248001
+           if (dot+scald)<101 | (dot+scald)>3400 then do;               01249001
+             put file(errors) skip edit('Line ',line,                   01250001
+                                        ' Line end dot off page')       01260001
+                                       (a,p'zzz9',a);                   01270001
+             error_count = error_count+1;                               01280001
+             end;                                                       01290001
+           scan = scan + scals;        /* Scan pos = End-of-Line     */ 01300001
+           i = i + 1;                                                   01310001
+           end; /* '08'x */                                             01320001
+                                                                        01321001
+         when('09'x) do;               /* Portrait                   */ 01322001
+           put skip edit('Port')(a);                                    01323001
+           i = i + 1;                                                   01324001
+           end; /* '09'x */                                             01325001
+                                                                        01326001
+         otherwise do;                 /* Text characters            */ 01327001
+           text = text || c;                                            01328001
+           i = i + 1;                                                   01329001
+           end; /* otherwise */                                         01330001
+                                                                        01340001
+       end; /* select */                                                01350001
+                                                                        01360001
+     end; /* do i */                                                    01370001
+                                                                        01380001
+   /*--------------------------------------*/                           01390001
+   /* getbits: convert hex value of        */                           01400001
+   /*   char(2) to bit(32)                 */                           01410001
+   /*--------------------------------------*/                           01420001
+   getbits: proc(c) returns( bit(32) );                                 01421001
+     dcl   c                 char(2);                                   01422001
+     dcl 1 xf,                                                          01423001
+           5 xf0             char(2),                                   01424001
+           5 xf1             char(2);                                   01425001
+     dcl   xb                bit(32) based( addr(xf) );                 01426001
+     xf0 = '0000'x;                                                     01427001
+     xf1 = c;                                                           01428001
+     return(xb);                                                        01429001
+     end getbits;                                                       01429101
+                                                                        01429201
+   /*--------------------------------------*/                           01429301
+   /* getbin: convert value of bit(16)     */                           01429401
+   /*   to fixed bin(15)                   */                           01429501
+   /*--------------------------------------*/                           01429601
+   getbin: proc(b) returns( fixed bin(31) );                            01429701
+     dcl   b                 bit(16);                                   01429801
+     dcl   h                 fixed bin(15);                             01429901
+     dcl   b1                bit(16) based( addr(h) );                  01430001
+     b1 =  b;                                                           01430101
+     return(h);                                                         01430201
+     end getbin;                                                        01430301
+                                                                        01430401
+   end process_data;                                                    01430501
+                                                                        01430601
+ %include ascebc;                                                       01430701
+ %include hex;                                                          01430801
+                                                                        01430901
+ end PAGEMETA;                                                          01431001
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 01432001
+//LKED.SYSLIB DD                                                        01433001
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        01434001
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      01435001
+//LKED.SYSLMOD  DD DISP=SHR,DSN=FLASS.PCL.LINKLIB                       01436001
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  01437001
+//LKED.SYSIN DD *                                                       01438001
+ NAME PAGEMETA(R)                                                       01439001
+//* -------------- END OF LINKEDIT STEP ------------------------------* 01440001

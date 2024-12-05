@@ -1,0 +1,249 @@
+//FLASST   JOB (),'PCLSMF',CLASS=J,MSGCLASS=Z,NOTIFY=$                  00010001
+//ASM      EXEC PGM=ASMA90,                                             00020001
+//        PARM='OBJECT,NODECK,ALIGN,RENT'                               00030000
+//********************************************************************  00040000
+//**       ASSEMBLE PROGRAM -- HLASM                                 *  00050000
+//********************************************************************  00060000
+//SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                             00070000
+//         DD DSN=SYSTEMS.MACLIB,DISP=SHR                               00080000
+//         DD DSN=SYS1.MACLIB,DISP=SHR                                  00090000
+//         DD DSN=SYS1.MODGEN,DISP=SHR                                  00100000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     00110000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00120000
+//SYSUT2   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00130000
+//SYSUT3   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00140000
+//SYSLIN   DD DSN=&&ASM,UNIT=VIO,DISP=(,PASS),                          00150000
+//            SPACE=(TRK,(3,3)),DCB=BLKSIZE=400                         00160000
+         TITLE 'PCLSMF: PCL Writer Statistics'                          00170000
+PCLSMF   CSECT                                                          00180000
+                                                                        00190001
+MAXFNT   EQU  500            Maximum number of fonts                    00200001
+                                                                        00210001
+*********************************************************************** 00220000
+*                                                                     * 00230000
+*   Module: PCLSMF - SMF statistics for PCL writer                    * 00240000
+*                                                                     * 00250000
+*   Author: Peter Flass -- NYS LBDC                                   * 00260000
+*           May, 1998                                                 * 00270000
+*                                                                     * 00280000
+*   Function: Write Statistics to SMF for PCL writer                  * 00290000
+*                                                                     * 00300000
+*   Status:   APF-Authorized, problem state, user key.                * 00310001
+*                                                                     * 00320000
+*   Modifications:                                                    * 00330000
+*                                                                     * 00340000
+*********************************************************************** 00350000
+                                                                        00360000
+         REGS ,              Register equates                           00370000
+BASE     EQU  R12                                                       00380000
+                                                                        00390000
+         EJECT                                                          00400000
+PCLSMF   CSECT                                                          00410000
+         B     START-*(,R15)       Skip over comment                    00420000
+         DC    AL1(VERSIONL)       L'comment                            00430000
+PCLSMF   VERSION 2.0               Memory comment                       00440000
+         PRINT NOGEN                                                    00450000
+                                                                        00460000
+         SPACE 2                                                        00470000
+* ------------------------------- *                                     00480000
+*        Chain saveareas          *                                     00490000
+* ------------------------------- *                                     00500000
+START    EQU   *                                                        00510000
+         SAVE  (14,12)             Save caller's registers              00520000
+         LR    BASE,R15            Load base registers                  00530000
+         USING PCLSMF,BASE             .                                00540000
+         LR    R2,R1               Save parm list address               00550000
+         STORAGE OBTAIN,LENGTH=WRKLEN,LOC=BELOW                         00560000
+         ST    R1,8(,R13)          Chain saveareas                      00570000
+         ST    R13,4(,R1)               .                               00580000
+         LR    R13,R1                   .                               00590000
+         USING WORK,R13                 .                               00600000
+         MVC   COMMENT(8),VERSION  Identify workarea for dumps          00610000
+         L     R1,16              Load A(CVT)                           00620000
+         L     R1,0(,R1)               A(TCB words)                     00630000
+         L     R1,0(,R1)               A(TCB)                           00640000
+         L     R1,12(,R1)              A(TIOT)                          00650000
+         MVC   WTRNAME,0(R1)      Move jobname                          00660000
+         LR    R1,R2              Restore parm list address             00670000
+         L     R11,0(,R1)         Load Parm address                     00680000
+         LA    R11,0(,R11)        .                                     00690010
+         USING FTAB,R11           .                                     00710002
+                                                                        00740001
+         EJECT                                                          00750002
+* ------------------------------- *                                     00760001
+*        Initialize SMF record    *                                     00770001
+* ------------------------------- *                                     00780001
+         USING SMFRCD255,SMF255   Addressability to record              00790001
+         USING SMF255FH,SMF255+SMF255L .                                00800001
+         XC    SMF255LEN(4),SMF255LEN                                   00810001
+         MVI   SMF255FLG,X'1E'    System ID                             00820001
+         MVI   SMF255RTY,255      Record type                           00830001
+         L     R1,16              Load        A(CVT)                    00870001
+         ICM   R1,B'1111',CVTSMCA-CVT(R1)     A(SMCA)                   00880001
+         BZ    EXIT               SMF Not present                       00890001
+         MVC   SMF255SID,SMCASID-SMCABASE(R1) SID                       00900001
+         MVC   SMF255STP,=H'1'    Record subtype                        00910001
+         MVC   SMF255JBN,WTRNAME  Writer name                           00920001
+         L     R1,16              Load        A(CVT)                    00930001
+         L     R1,0(,R1)          .           A(TCBBP)                  00940001
+         L     R1,0(,R1)          .           A(TCB)                    00950001
+         ICM   R1,B'1111',TCBTCT-TCB(R1)      A(TCT)                    00960001
+         BZ    EXIT               No SMF for writer                     00970001
+         L     R1,TCTT30J-SMFTCT(,R1)         A(Type 30 record)         00980001
+                                                                        00980108
+*        (The 8-byte prefix is undocumented but appears in all records) 00980208
+         LA    R1,8(,R1)          Skip over record prefix ***           00981008
+                                                                        00982008
+         A     R1,SMF30IOF-SMF30LEN(,R1)      A(Ident sect)             00990001
+         MVC   SMF255RST,SMF30RST-SMF30ID(R1) Move RDR start time       01000001
+         MVC   SMF255RSD,SMF30RSD-SMF30ID(R1) Move RDR start date       01010001
+         XC    SMF255FC,SMF255FC  Zero font count                       01020001
+                                                                        01030001
+         SPACE 2                                                        01040001
+* ------------------------------- *                                     01050001
+*        Get Font Statistics      *                                     01060001
+* ------------------------------- *                                     01070001
+         LA    R2,SMF255FD        Point to first repeating group        01080001
+         USING SMF255F,R2         .                                     01090001
+         SR    R1,R1              Zero font count                       01100001
+         LH    R3,FCNT            Compute end-of-list address           01110010
+         MH    R3,=AL2(FLEN)      .                                     01111010
+         LA    R3,FENT(R3)        .                                     01112010
+         LA    R5,FENT            Point to first table entry - 1        01113013
+         SH    R5,=AL2(FLEN)      .                                     01114013
+LOOP     EQU   *                  Move font statistics                  01120001
+         LA    R5,FLEN(,R5)       Bump to next font in table            01130013
+         CR    R5,R3              Q/ All fonts processed?               01150011
+         BNL   LOOPX              .. Yes, exit loop                     01160001
+*        CLC   =F'0',FCOUNT       Q/ Use_count=0?                       01161014
+*        BE    LOOP               .. Yes, skip this font entry          01162014
+         CH    R1,=AL2(MAXFNT)    Q/ Max fonts exceeded?                01163006
+         BNL   LOOPX              .. Yes, exit loop                     01164006
+         MVC   SMF255FN,FNAME-FENT(R5)    Move Font_Name                01170012
+         MVC   SMF255FU,FCOUNT-FENT(R5)   .    Use_count                01180012
+         LA    R2,SMF255FX        Point to next SMF record slot         01200001
+         LA    R1,1(,R1)          Bump font count                       01210001
+         B     LOOP                                                     01220001
+                                                                        01230001
+LOOPX    EQU   *                  End of font loop                      01240001
+         STH   R1,SMF255FC        Store count of fonts in record        01241006
+         LA    R0,SMF255          Compute actual record size            01250003
+         SR    R2,R0              .                                     01260001
+         STH   R2,SMF255LEN       .                                     01270001
+                                                                        01280001
+         SPACE 2                                                        01290001
+* ------------------------------- *                                     01300001
+*        Write SMF Record         *                                     01310001
+* ------------------------------- *                                     01320001
+         TIME  BIN                Get date and time                     01321009
+         STCM  R0,X'F',SMF255TME  Store SMF Record time                 01322009
+         STCM  R1,X'F',SMF255DTE  .         and date                    01323009
+         LA    R1,SMF255          Point to SMF record                   01330001
+         SMFWTM (1)               Write the record                      01340001
+                                                                        01350001
+EXIT     EQU   *                                                        01360000
+         LR    R1,R13             Load address to freemain              01370001
+         L     R13,4(,R13)        Load Caller's savearea address        01380001
+         STORAGE RELEASE,LENGTH=WRKLEN,ADDR=(1) Free workarea           01390000
+         RETURN (14,12),RC=0      Return to caller                      01400001
+                                                                        01410000
+         LTORG                                                          01420001
+                                                                        01430001
+         TITLE 'PCLSMF: PCL Writer Statistics - SMF Records Format'     01440001
+SMFRCD255 DSECT          Type 255 Mapping                               01450000
+*                                                                       01460000
+*      **************************************************************** 01470000
+*      *                                                              * 01480000
+*      * Header Section                                               * 01490000
+*      *                                                              * 01500000
+*      **************************************************************** 01510000
+*                                                                       01520000
+SMF255LEN DS   H        Record Length                                   01530000
+SMF255SEG DS   H        Segment descriptor                              01540000
+SMF255FLG DS   BL1      System indicator                                01550000
+SMF255RTY DS   FL1      Record type - 255, x'FF'                        01560000
+SMF255TME DS   FL4      Time, in hundredths of a second, record         01570004
+*                       was moved to the SMF buffer.                    01580000
+SMF255DTE DS   PL4      Date that the record was moved to the SMF       01590000
+*                       buffer, in the form of 0cyydddF, where F        01600000
+*                       is the sign                                     01610000
+SMF255SID DS   CL4      System identification (taken from SID           01620000
+*                       parameter)                                      01630000
+SMF255STP DS   FL2      Record Subtype - '1' = Font Statistics          01640000
+SMF255JBN DS   CL8      Writer Job name                                 01650001
+SMF255RST DS   FL4      Writer Start Time                               01660004
+SMF255RSD DS   PL4      Writer Start Date                               01670001
+SMF255L   EQU  *-SMF255LEN Length of header                             01680001
+                                                                        01690001
+*                                                                       01700001
+*      **************************************************************** 01710001
+*      *                                                              * 01720001
+*      * Font Statistics (repeating group)                            * 01730001
+*      *                                                              * 01740001
+*      **************************************************************** 01750001
+*                                                                       01760001
+SMF255FH  DSECT         Font statistics header                          01770001
+SMF255FC  DS   H        Number of fonts (Max=500)                       01780001
+SMF255FD  EQU  *        Start of repeating group                        01790001
+SMF255FHL EQU  *-SMF255FH Length of font statistics header              01800001
+*                                                                       01810001
+SMF255F   DSECT         Font statistics repeating group                 01820001
+SMF255FN  DS   CL8      Font name                                       01830001
+SMF255FU  DS   F        Font use count                                  01840009
+SMF255FX  EQU  *        Address of next repeating group                 01850001
+SMF255FSL EQU  *-SMF255F  Length of font statistics data                01860001
+                                                                        01870001
+         TITLE 'PCLSMF: PCL Writer Statistics - workarea'               01880001
+*---------------------------------*                                     01890001
+*  Task workarea                  *                                     01900001
+*---------------------------------*                                     01910001
+WORK     DSECT ,                   Workarea                             01920001
+SAVEAREA DS    9D                  OS savearea                          01930001
+COMMENT  DS    CL8                 Memory comment                       01940001
+DWD      DS    D                   Doubleword work area                 01950001
+WTRNAME  DS    CL8                 Writer name                          01960001
+*                                                                       01970001
+*        **************************                                     01980001
+*        * SMF record build area  *                                     01990001
+*        *     (Must be last)     *                                     02000001
+*        **************************                                     02010001
+*                                                                       02020001
+         DS    0D                  Doubleword alignment                 02030001
+SMF255   DS    XL(SMF255L)         SMF Record Build area                02040001
+         DS    XL(SMF255FHL)        . Font statistics header            02050001
+         DS    XL(MAXFNT*SMF255FSL) . Font statistics data              02060001
+SMF255SIZ EQU  *-SMF255            Length of this SMF record            02070001
+                                                                        02080001
+         DS    0D                  Doubleword alignment                 02090001
+WRKLEN   EQU   *-WORK              L'Workarea                           02100001
+         SPACE 2                                                        02110001
+                                                                        02120001
+         EJECT                                                          02130001
+         PCLINCL ,                Include PCL DSECTs                    02140001
+         PRINT   NOGEN                                                  02150001
+         CVT     DSECT=YES        COPY CVT DSECT                        02160001
+         IKJTCB  ,                COPY TCB DSECT                        02170001
+         IEESMCA ,                COPY SMCA DSECT                       02180001
+         IEFTCT  ,                COPY SMF TCT DSECT                    02190001
+         IFASMFR 30               Generate SMF Type 30 record           02200001
+                                                                        02210000
+         END   PCLSMF                                                   02220000
+//SYSIN    DD *                                                         02230000
+//* --------------------------------------------------------------- *** 02240000
+//LKED     EXEC PGM=IEWL,                                              X02250000
+//            PARM='XREF,LET,LIST,NCAL,RENT,REUS,REFR',                X02260000
+//            COND=(8,LT,ASM)                                           02270000
+//********************************************************************  02280000
+//**       LINKEDIT PROGRAM                                          *  02290000
+//********************************************************************  02300000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     02310000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                02320000
+//SYSLIB   DD DSN=SYSTEMS.LINKLIB,DISP=SHR                              02330000
+//         DD DSN=FLASS.PF.LOAD,DISP=SHR                                02340000
+//SYSLMOD  DD DISP=SHR,DSN=FLASS.PCL.LINKLIB                            02350000
+//SYSLIN   DD DSN=&&ASM,DISP=(OLD,DELETE)                               02360000
+//         DD *                                                         02370000
+ MODE AMODE(31),RMODE(ANY)                                              02380000
+ SETCODE AC(1)                                                          02390000
+ NAME PCLSMF(R)                                                         02400000
+//* --------------------------------------------------------------- *** 02410000

@@ -1,0 +1,557 @@
+//FLASSP   JOB  (),'DCPAGE',CLASS=J,MSGCLASS=X,                         00000101
+//         NOTIFY=$                                                     00000201
+//********************************************************************* 00000301
+//*                PL/I COMPILE AND LINK                              * 00000401
+//********************************************************************* 00000501
+// EXEC OPLIXCL,                                                        00000619
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG',                                  00000701
+//   PARM.LKED='LIST,MAP,XREF'                                          00000801
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00000901
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00001016
+//PLI.SYSIN    DD *                                                     00001201
+*PROCESS LANGLVL(SPROG);                                                00003001
+ DCPAGE: proc(parm) options(main);                                      00010001
+                                                                        00020000
+ /********************************************************************/ 00030000
+ /*                                                                  */ 00040000
+ /*      Module id: DCPAGE                                           */ 00041000
+ /*                                                                  */ 00041118
+ /*      Author:    Peter Flass                                      */ 00042000
+ /*                 NYS Legislative Bill Drafting Commission         */ 00043000
+ /*                 May, 1995                                        */ 00044000
+ /*                                                                  */ 00044118
+ /*      Function:  Display/Update PSF codepage via ISPF             */ 00044200
+ /*                                                                  */ 00044318
+ /*      Input:     DDNAME=FONTLIB - AFP font library containing     */ 00044418
+ /*                 the input codepage.                              */ 00045018
+ /*                                                                  */ 00045118
+ /*      Output:    DDNAME=PUNCH - library to contain text-format    */ 00045218
+ /*                 codepage data, selected via 'PUNCH' command.     */ 00046018
+ /*                                                                  */ 00047018
+ /********************************************************************/ 00050000
+                                                                        00051001
+ dcl     parm                char(100)           varying;               00051109
+ dcl     fontlib             record;                                    00052009
+ dcl     sysprint            print;                                     00052101
+ dcl     punch               record;                                    00052212
+ dcl    (                                                               00052309
+         addr,                                                          00052409
+         binary,                                                        00052509
+         cstg,                                                          00052609
+         index,                                                         00052712
+         length,                                                        00052812
+         pliretc,                                                       00052909
+         pliretv,                                                       00053009
+         string,                                                        00053109
+         substr,                                                        00053209
+         unspec                                                         00053309
+        )                    builtin;                                   00054009
+                                                                        00061102
+ dcl     rc                  fixed bin(31);                             00061212
+ dcl     member              char(8);                                   00061309
+                                                                        00061409
+ dcl     PDSMEM              entry( char(8), char(8), char(8) )         00061515
+                             returns( fixed binary(31) );               00061609
+ dcl     ALLOC               entry( char(*) varying, )                  00061712
+                             options( asm inter retcode );              00061812
+ dcl     ISPLINK             external entry                             00061905
+                             options(asm retcode inter);                00062005
+                                                                        00062105
+ dcl     table_sequence      char(8);                                   00062210
+                                                                        00062310
+   /*---------------------------------*/                                00062405
+   /*    ISPF variable name lists     */                                00062505
+   /*---------------------------------*/                                00062605
+ dcl   1 tabn                                    static,                00062705
+         5 fil1              char(1)             init( '(' ),           00062805
+         5 tabn_codept       char(8)             init( 'CODEPT'   ),    00062905
+         5 fil2              char(1)             init( ' ' ),           00063005
+         5 tabn_gcid         char(8)             init( 'GCID'     ),    00063105
+         5 fil3              char(1)             init( ' ' ),           00063209
+         5 tabn_hex          char(8)             init( 'HEX'      ),    00063309
+         5 fil4              char(1)             init( ' ' ),           00063409
+         5 tabn_desc         char(8)             init( 'DESC'     ),    00063509
+         5 fil5              char(1)             init( ')' );           00063609
+                                                                        00063705
+ dcl   1 tabl                                    static,                00063805
+         5 tabl_codept       fixed bin(31)       init(  2 ),            00063909
+         5 tabl_gcid         fixed bin(31)       init(  8 ),            00064009
+         5 tabl_hex          fixed bin(31)       init(  1 ),            00064109
+         5 tabl_desc         fixed bin(31)       init( 60 );            00064209
+                                                                        00064305
+ dcl   1 tabs,                                                          00064405
+         5 tab_codept        char(2),                                   00064505
+         5 tab_gcid          char(8),                                   00064609
+         5 tab_hex           char(1),                                   00064709
+         5 tab_desc          char(60);                                  00064809
+                                                                        00064905
+ dcl     cpnamen             char(8) static      init( 'CODEPAGE' );    00065009
+ dcl     cpnames             char(8);                                   00065109
+ dcl     cpdescn             char(8) static      init( 'CPDESC  ' );    00065209
+ dcl     cpdescs             char(32);                                  00065309
+                                                                        00065409
+ dcl     zcmdn               char(8) static      init( 'ZCMD    ' );    00065509
+ dcl     zcmds               char(80);                                  00065613
+ dcl     zcmdl               fixed bin(31);                             00065713
+                                                                        00065809
+ %include(afpcpd);                                                      00065902
+                                                                        00066001
+ %page;                                                                 00066101
+                                                                        00066201
+ member = substr(parm,1,8);                                             00066301
+ rc = pdsmem('READ','FONTLIB',member);                                  00066415
+ if rcª=0 then do;                                                      00066501
+   put skip edit('Member ',member,' not found in FONTLIB')(a);          00066601
+   call pliretc(8);                                                     00066701
+   return;                                                              00066801
+   end; /* rcª=0 */                                                     00066901
+ cpnames = member;                                                      00067009
+                                                                        00067101
+   /*---------------------------------*/                                00067205
+   /*    Define ISPF variables and    */                                00067305
+   /*    create table.                */                                00067405
+   /*---------------------------------*/                                00067505
+ call ISPLINK( 'VDEFINE ',  cpnamen,     cpnames,                       00067609
+               'CHAR ', cstg(cpnames) );                                00067709
+ call ISPLINK( 'VDEFINE ',  cpdescn,     cpdescs,                       00067809
+               'CHAR ', cstg(cpdescs) );                                00067909
+ call ISPLINK( 'VDEFINE ',  tabn_codept, tab_codept,                    00068009
+               'CHAR ', tabl_codept );                                  00068109
+ call ISPLINK( 'VDEFINE ',  tabn_gcid,   tab_gcid,                      00068205
+               'CHAR ', tabl_gcid    );                                 00068305
+ call ISPLINK( 'VDEFINE ',  tabn_hex,    tab_hex,                       00068409
+               'CHAR ', tabl_hex     );                                 00068509
+ call ISPLINK( 'VDEFINE ',  tabn_desc,   tab_desc,                      00068609
+               'CHAR ', tabl_desc    );                                 00068709
+ call ISPLINK( 'TBCREATE ', 'CPTAB1 ', ' ', string(tabn),               00068805
+               'NOWRITE ', 'REPLACE ', 'SHARE ' );                      00068905
+                                                                        00069005
+ call read_codepage;                                                    00069109
+ call process_panel;                                                    00069209
+ return;                                                                00069309
+                                                                        00069409
+ %page;                                                                 00069509
+ /********************************************************************/ 00069609
+ /***    Process user interactions                                 ***/ 00069709
+ /********************************************************************/ 00069809
+                                                                        00069909
+ process_panel: procedure;                                              00070009
+ call ISPLINK( 'TBSORT  ', 'CPTAB1 ',                                   00070109
+               '(HEX,C,A)' );                                           00070209
+ table_sequence = 'CODE';                                               00070310
+                                                                        00070409
+ do while('1'b);                                                        00070509
+   call ISPLINK( 'TBTOP   ', 'CPTAB1 ');                                00070609
+   call ISPLINK( 'TBDISPL ', 'CPTAB1 ', 'CPPAN1 ') ;                    00070709
+   if pliretv>4 then leave;                                             00070809
+   call process_command;                                                00070910
+   end; /* do while */                                                  00071009
+                                                                        00071109
+ call ISPLINK( 'TBCLOSE ', 'CPTAB1 ' );                                 00071209
+ return;                                                                00071309
+                                                                        00071409
+ /*-----------------------------------*/                                00071509
+ /*    Process user command           */                                00071609
+ /*-----------------------------------*/                                00071709
+ process_command: procedure;                                            00071809
+ dcl     cmnd                char(8);                                   00071910
+ zcmdl = cstg(zcmds);                                                   00072013
+ call ISPLINK( 'VCOPY ', zcmdn, zcmdl, zcmds, 'MOVE ' );                00072109
+ if zcmds=' ' then return;                                              00072210
+ cmnd = word(zcmds,1);                                                  00072310
+                                                                        00072412
+ if cmnd = 'SORT' then do;                                              00072510
+   If word(zcmds,2)='GCID' then do;                                     00072610
+     call ISPLINK( 'TBSORT  ', 'CPTAB1 ',                               00072710
+                   '(GCID,C,A)' );                                      00072810
+     table_sequence = 'GCID';                                           00072910
+     end; /* GCID */                                                    00073010
+   If word(zcmds,2)='CODE' then do;                                     00073110
+     call ISPLINK( 'TBSORT  ', 'CPTAB1 ',                               00073210
+                   '(HEX,C,A)' );                                       00073310
+     table_sequence = 'CODE';                                           00073410
+     end; /* CODE */                                                    00073510
+   return;                                                              00073612
+   end; /* sort */                                                      00073710
+                                                                        00073812
+ if cmnd = 'PUNCH' then do;                                             00073912
+   call gen_codepage( word(zcmds,2) );                                  00074012
+   return;                                                              00074112
+   end; /* punch */                                                     00075012
+                                                                        00075112
+ end process_command;                                                   00075209
+                                                                        00075309
+ end process_panel;                                                     00075409
+                                                                        00075509
+ %page;                                                                 00075609
+ /********************************************************************/ 00075709
+ /***    Generate codepage data as EBCDIC text file                ***/ 00075818
+ /********************************************************************/ 00075909
+ gen_codepage: procedure(outputfile);                                   00076012
+                                                                        00076112
+ dcl     outputfile          char(64)           varying;                00076212
+ dcl     filename            char(44)           varying;                00076312
+ dcl     member              char(8);                                   00076412
+ dcl     card                char(80);                                  00076512
+ dcl    (i,j)                fixed bin(15);                             00076712
+ dcl     rc                  fixed bin(15);                             00076812
+ dcl     file_error          bit(1)             init('0'b);             00076912
+                                                                        00077012
+ dcl   1 alloc_status        unaligned,                                 00077112
+         5 al_dsorg          char(4),                                   00077212
+         5 al_rc             fixed bin(31),                             00077312
+         5 al_s99rc          fixed bin(31),                             00077412
+         5 al_s99rsc         fixed bin(31),                             00077512
+         5 fil               char(32);                                  00077612
+                                                                        00077712
+ if substr(outputfile,1,1)=''''                                         00077812
+ then outputfile = substr( outputfile, 2, length(outputfile)-2 );       00077913
+ i = index(outputfile,'(');                                             00078012
+ if i=0 then do;                                                        00078112
+   filename = outputfile;                                               00078212
+   member   = ' ';                                                      00078312
+   end;                                                                 00078412
+ else do;                                                               00078512
+   filename = substr(outputfile,1,i-1);                                 00078612
+   j = index(outputfile,')');                                           00078712
+   if j>i then member = substr(outputfile,i+1,j-i-1);                   00078812
+   else file_error='1'b;                                                00078912
+   end;                                                                 00079012
+ if length(filename)=0 | file_error='1'b then do;                       00079112
+   call ISPLINK( 'SETMSG', 'DCP0101' );                                 00079212
+   return;                                                              00079312
+   end;                                                                 00079412
+                                                                        00079612
+ if member=' ' then do;                                                 00079713
+   call alloc( 'ALLOC FI(PUNCH) DA(' || filename ||                     00079813
+               ') OLD',                                                 00079913
+               alloc_status );                                          00080013
+   if al_rcª=0 then do;                                                 00080113
+     call ISPLINK( 'SETMSG', 'DCP0102' );                               00080213
+     return;                                                            00080313
+     end;                                                               00080413
+   if al_dsorg ª= 'PS' then do;                                         00080513
+     call ISPLINK( 'SETMSG', 'DCP0103' );                               00080613
+     call alloc( 'FREE FI(PUNCH)' );                                    00080713
+     return;                                                            00080813
+     end;                                                               00080913
+   end; /* member=' ' */                                                00081013
+                                                                        00081113
+ call alloc( 'ALLOC FI(PUNCH) DA(' || filename ||                       00081213
+             '(' || member || ')) SHR',                                 00081313
+             alloc_status );                                            00081413
+ if al_rcª=0 then do;                                                   00081513
+   call ISPLINK( 'SETMSG', 'DCP0102' );                                 00081613
+   return;                                                              00081713
+   end;                                                                 00081813
+ if al_dsorg = 'PS' then do;                                            00081913
+   call ISPLINK( 'SETMSG', 'DCP0104' );                                 00082013
+   call alloc( 'FREE FI(PUNCH)' );                                      00082113
+   return;                                                              00082213
+   end;                                                                 00082313
+                                                                        00082412
+ open file(punch) output;                                               00082612
+ call ISPLINK( 'TBTOP   ', 'CPTAB1 ');                                  00082713
+ do while('1'b);                                                        00082813
+   call ISPLINK( 'TBSKIP  ', 'CPTAB1 ');                                00082913
+   rc = pliretv();                                                      00083013
+   if rcª=0 then leave;                                                 00083113
+   call ISPLINK( 'TBGET   ', 'CPTAB1 ');                                00083213
+   card = tab_gcid || ' ' || tab_codept;                                00083313
+   write file(punch) from(card);                                        00083413
+   end; /* do while */                                                  00083613
+ close file(punch);                                                     00083812
+ call alloc( 'FREE FI(PUNCH)' );                                        00083912
+                                                                        00084012
+ end gen_codepage;                                                      00084112
+                                                                        00084212
+ %page;                                                                 00084312
+ /********************************************************************/ 00084412
+ /***    Read data from the Codepage                               ***/ 00084512
+ /********************************************************************/ 00084612
+ read_codepage: procedure;                                              00084712
+                                                                        00084809
+ dcl     re                  ptr;                                       00084909
+ dcl    (xs,xe,xc)           ptr;                                       00085009
+                                                                        00085109
+ dcl     fp                  ptr,                                       00085209
+       1 sff                 unaligned           based(fp),             00085309
+         5 sf_len            fixed bin(15),                             00085409
+         5 sf_id             char(3),                                   00085509
+         5 sf_flag           bit(8),                                    00085609
+         5 sf_seq            fixed bin(15),                             00085709
+         5 sff_end           char(0),                                   00085809
+       1 sfe                 unaligned           based(fp),             00085909
+         5 sfel              bit(8),                                    00086009
+         5 sfet              char(0);                                   00086109
+                                                                        00086209
+ dcl     eof                 bit(1)              init('0'b);            00086309
+ dcl     save_sf_len         fixed bin(15);                             00086409
+ dcl     save_sf_id          char(3);                                   00086509
+ dcl     save_sf_desc        char(3);                                   00086609
+ dcl    (has_ext,has_pad)    bit(1);                                    00086709
+ dcl     j                   fixed bin(15);                             00086809
+ dcl     rec_length          fixed bin(31);                             00086909
+ dcl     state               fixed bin(31)       init(0);               00087009
+ dcl     oneb                bit(8)              based;                 00087109
+ dcl     twob                bit(16)             based;                 00087209
+                                                                        00087309
+ dcl     recl                entry(*)                                   00087409
+                             returns( fixed binary(31) );               00087509
+                                                                        00087609
+ dcl     cp_sfi           (7)char(3)             static                 00087712
+           init(                                                        00087809
+             'D3A887'x, 'D3A687'x, 'D3A787'x, 'D38C87'x, 'D3A987'x,     00087909
+             'D3EEEE'x, 'FFFFFF'x);                                     00088011
+ dcl     cp_sfid          (7)char(3)             static                 00088112
+           init(                                                        00088209
+             'BCP',     'CPD',     'CPC',     'CPI',     'ECP',         00088309
+             'NOP',     '***');                                         00088411
+                                                                        00088509
+ on endfile(fontlib) eof='1'b;                                          00088609
+                                                                        00088709
+ open file(fontlib) input;                                              00088801
+ call read_fontlib;          /* Read first fontlib record            */ 00088905
+                                                                        00089002
+ do while(ªeof);             /* Process fontlib codepage             */ 00089105
+                                                                        00089202
+   /*---------------------------------*/                                00089302
+   /*    Analyze structured field     */                                00089402
+   /*---------------------------------*/                                00089502
+   save_sf_len = sf_len;                                                00089602
+   save_sf_id  = sf_id;                                                 00089702
+   do j = 1 by 1                                                        00089801
+      while( (cp_sfi(j)ª='FFFFFF'x)&(cp_sfi(j)ª=save_sf_id) );          00089902
+     /* nada */                                                         00090001
+     end;                                                               00090101
+   save_sf_desc = cp_sfid(j);                                           00090202
+   if save_sf_desc='***' then do;                                       00090302
+     put skip edit('Invalid SFI ',                                      00090402
+                   quothex( hex(addr(save_sf_id),3)) )(a);              00090502
+     call pliretc(8);                                                   00090602
+     return;                                                            00090701
+     end;                                                               00090801
+   has_ext = substr(sf_flag,1,1);                                       00090902
+   has_pad = substr(sf_flag,5,1);                                       00091002
+                                                                        00091102
+   /*---------------------------------*/                                00091202
+   /*    Point to data start and end  */                                00091302
+   /*---------------------------------*/                                00091402
+   xe = fp + save_sf_len - 1;                                           00091502
+   fp = addr(sff_end);                                                  00091602
+   if has_ext then fp = fp + sfel;                                      00091702
+   if has_pad then do;                                                  00091802
+     if xe->onebª='00'X then xe = xe - xe->oneb;                        00091902
+     else do;                                                           00092002
+       xe = xe - 1;                                                     00092102
+       xe = xe - xe->twob;                                              00092202
+       end; /* else */                                                  00092302
+     end; /* has_pad */                                                 00092402
+                                                                        00092506
+   /* -------------------------------------------------------------     00092606
+   put skip edit('----> ',save_sf_desc)(a);                             00092702
+   put skip edit( 'Start ', quothex(hex(addr(xc),4)) )(a);              00092802
+   put skip edit( 'End   ', quothex(hex(addr(xe),4)) )(a);              00092902
+   put skip edit( 'Len   ', quothex(hex(addr(save_sf_len),2)) )(a);     00093002
+   put      edit( ' (',save_sf_len,')')(a,p'zzz9',a);                   00093102
+   put skip;                                                            00093202
+   ------------------------------------------------------------- */     00093306
+                                                                        00093402
+   do; /* dummy do for structural purposes */                           00093511
+                                                                        00093611
+     if save_sf_desc='NOP' then leave;                                  00093711
+                                                                        00093811
+     /*---------------------------------*/                              00093911
+     /*    check seq of struc fields    */                              00094011
+     /*---------------------------------*/                              00094111
+     select(state);                                                     00094211
+       when(0) do;                                                      00094311
+         if save_sf_descª='BCP'                                         00094411
+         then call err_state( 'BCP', save_sf_desc );                    00094511
+         else do;                                                       00094611
+           state=1;                                                     00094711
+           call analyze_bcp;                                            00094811
+           end; /* else */                                              00094911
+         end; /* 0 */                                                   00095011
+       when(1) do;                                                      00095111
+         if save_sf_desc='CPD'       then do;                           00095211
+           state=2;                                                     00095311
+           call analyze_cpd;                                            00095411
+           end; /* then */                                              00095511
+         else if save_sf_desc = 'CPC' then do;                          00095611
+           state=3;                                                     00095711
+           call analyze_cpc;                                            00095811
+           end; /* then */                                              00095911
+         else  call err_state( 'CPD or CPC', save_sf_desc );            00096011
+         end; /* 1 */                                                   00096111
+       when(2) do;                                                      00096211
+         if save_sf_descª='CPC'                                         00096311
+         then call err_state( 'CPC', save_sf_desc );                    00096411
+         else do;                                                       00096511
+           state=3;                                                     00096611
+           call analyze_cpc;                                            00096711
+           end; /* else */                                              00096811
+         end; /* 2 */                                                   00096911
+       when(3) do;                                                      00097011
+         if save_sf_descª='CPI'                                         00097111
+         then call err_state( 'CPI', save_sf_desc );                    00097211
+         else do;                                                       00097311
+           state=4;                                                     00097411
+           call analyze_cpi;                                            00097511
+           end; /* else */                                              00097611
+         end; /* 3 */                                                   00097711
+       when(4) do;                                                      00097811
+         if save_sf_descª='ECP'                                         00097911
+         then call err_state( 'ECP', save_sf_desc );                    00098011
+         else do;                                                       00098111
+           state=5;                                                     00098211
+           call analyze_ecp;                                            00098311
+           end; /* else */                                              00098411
+         end; /* 4 */                                                   00098511
+       otherwise call err_state( '<end of file>', save_sf_desc );       00098611
+       end; /* select */                                                00098711
+                                                                        00098802
+     end; /* dummy do */                                                00098911
+                                                                        00099011
+   /*---------------------------------*/                                00099102
+   /*    Point to next struc. field   */                                00099202
+   /*---------------------------------*/                                00099302
+   xc = xc + save_sf_len;                                               00099402
+   fp = xc;                                                             00099502
+   if xc>=re then call read_fontlib;                                    00099602
+                                                                        00099702
+   end; /* do while */                                                  00099801
+                                                                        00099901
+ close file(fontlib);                                                   00100001
+                                                                        00100102
+ /*-----------------------------------*/                                00100209
+ /*    Process codepage descriptor    */                                00100309
+ /*-----------------------------------*/                                00100409
+ analyze_cpd: procedure;                                                00100502
+                                                                        00100602
+ cpp = fp;                                                              00100709
+ cpdescs = cpd_desc;                                                    00100809
+                                                                        00100909
+ end analyze_cpd;                                                       00101002
+                                                                        00101102
+ /*-----------------------------------*/                                00101209
+ /*    Process codepage control       */                                00101309
+ /*-----------------------------------*/                                00101409
+ analyze_cpc: procedure;                                                00101502
+                                                                        00101602
+ end analyze_cpc;                                                       00101702
+                                                                        00101802
+ /*-----------------------------------*/                                00101905
+ /*    Process codepage index         */                                00102009
+ /*-----------------------------------*/                                00102105
+ analyze_cpi: procedure;                                                00102202
+ dcl     tc                  char(4);                                   00102302
+                                                                        00102402
+ cpp = fp;                                                              00102502
+ do while('1'b);                                                        00102602
+   if cpp>xe then leave;                                                00102702
+   if cpi_gcid='0000000000000000'X                                      00102805
+   then tab_gcid   = '<notdef>';                                        00102905
+   else tab_gcid   = cpi_gcid;                                          00103005
+   unspec(tc) = cpi_cp;                                                 00103105
+   tab_codept = hex( addr(tc), 1 );                                     00103205
+   unspec(tab_hex) = cpi_cp;                                            00103309
+   tab_desc   = ' ';                                                    00103409
+   call ISPLINK( 'TBADD ',  'CPTAB1 ' );                                00103507
+   cpp = addr(cpi_next);     /* Advance to next structured field     */ 00103605
+   end; /* do while */                                                  00103702
+                                                                        00103802
+ end analyze_cpi;                                                       00103902
+                                                                        00104002
+ analyze_bcp: procedure;                                                00104109
+                                                                        00104209
+ end analyze_bcp;                                                       00104309
+                                                                        00104409
+ analyze_ecp: procedure;                                                00104502
+                                                                        00104602
+ end analyze_ecp;                                                       00104702
+                                                                        00104802
+ /*-----------------------------------*/                                00104905
+ /*    Incorrect sequence of records  */                                00105005
+ /*-----------------------------------*/                                00105105
+ err_state: procedure(expected,found);                                  00105202
+ dcl    (expected,found)     char(*)             varying;               00105302
+                                                                        00105402
+ put skip edit('Incorrect record type ',found,' found,')(a);            00105502
+ put skip edit('          expected ',expected)(a);                      00105602
+ call pliretc(8);                                                       00105702
+                                                                        00105802
+ end err_state;                                                         00105902
+                                                                        00106002
+ /*-----------------------------------*/                                00106105
+ /*    Read record from FONTLIB       */                                00106205
+ /*-----------------------------------*/                                00106305
+ read_fontlib: procedure;                                               00106402
+ dcl     cc                  char(1)             based(xs);             00106502
+                                                                        00106602
+ read file(fontlib) set(xs);                                            00106702
+ rec_length = recl(fontlib);                                            00106814
+ if cc ª= '5A'x then do;                                                00106902
+   put skip edit('Record does not begin with x''5A''')(a);              00107002
+   put skip edit( quothex(hex(xs,8)) )(a);                              00107102
+   call pliretc(8);                                                     00107202
+   stop;                                                                00107302
+   end; /* do */                                                        00107402
+ re = xs + rec_length - 1;                                              00107502
+ xc = xs;                                                               00107602
+ fp = xs + 1;                                                           00107702
+                                                                        00107802
+ end read_fontlib;                                                      00107902
+                                                                        00108009
+ end read_codepage;                                                     00108109
+                                                                        00108200
+ %page;                                                                 00108312
+ /********************************************************************/ 00108401
+ /*   hexadecimal to character conversion                            */ 00108512
+ /********************************************************************/ 00108601
+                                                                        00108701
+ hex: proc(sp,n) returns( char(256) varying );                          00108812
+ dcl  sp                     ptr,                                       00108912
+      s                      char(4096) based(sp);                      00109012
+ dcl  n                      fixed bin(15);                             00109112
+ dcl  j                      fixed bin(15);                             00109212
+ dcl  ret                    char(256) varying   init('');              00109312
+ do j=1 to n;                                                           00109412
+   ret=ret||hexone( substr(s,j,1) );                                    00109512
+   end;                                                                 00109612
+ return(ret);                                                           00109712
+ end hex;                                                               00109812
+                                                                        00109901
+ hexone: proc(c) returns( char(2) );                                    00110012
+ dcl  c                      char;                                      00110112
+ dcl  hextabs                char(16) static     init                   00110212
+                       ('0123456789ABCDEF'),                            00110301
+      hextab           (0:15)char(1) defined hextabs;                   00110412
+ dcl  p                      ptr,                                       00110512
+      x                      bit(8) based(p);                           00110612
+ p = addr(c);                                                           00110712
+ return(                                                                00110812
+        hextab( substr(x,1,4) ) || hextab( substr(x,5,4) )              00110912
+       );                                                               00111001
+ end hexone;                                                            00111112
+                                                                        00111202
+ quothex: proc(s) returns( char(256) varying );                         00111302
+ dcl  s                      char(*) varying;                           00111402
+ return( 'X''' || s || '''' );                                          00111502
+ end quothex;                                                           00111602
+                                                                        00111701
+ %include(word);                                                        00111810
+                                                                        00111910
+ end DCPAGE;                                                            00112000
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00112101
+//LKED.SYSLIB DD                                                        00112201
+//            DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                         00113016
+//            DD DSN=FLASS.PF.LOAD,DISP=SHR                             00114016
+//            DD DSN=SYSTEMS.LINKLIB,DISP=SHR                           00120005
+//            DD DSN=ISP.SISPLOAD,DISP=SHR                              00121019
+//*LKED.SYSLMOD  DD DISP=SHR,DSN=SYSTEMS.ISPLOAD                        00130008
+//LKED.SYSLMOD  DD DISP=SHR,DSN=FLASS.PCL.LINKLIB                       00131016
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00140001
+//LKED.SYSIN DD *                                                       00150001
+ NAME DCPAGE(R)                                                         00160001
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00170001

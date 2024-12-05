@@ -1,0 +1,292 @@
+*/********************************************************************/ 00010009
+*/*      Dual Language Macro (ASM and PL/I) for AFP2PCL structures   */ 00020009
+*/*      Peter Flass -- NYS LBDC -- May, 1997                        */ 00030009
+*/*                                                                  */ 00031009
+*/*      Revision history:                                           */ 00032009
+*/*        18 Jan 2005 - STAPLE option.                              */ 00032117
+*/*        23 Apr 2003 - Add comment for 'Savin' printer type.       */ 00032217
+*/*        27 Sep 2002 - Add 'max descender' to width tables.        */ 00032317
+*/*        18 May 2000 - Add SYSOUT class                            */ 00032417
+*/*        15 Jun 1999 - Add 'page setup information'                */ 00032517
+*/*        15 Jul 1998 - Add maximum baseline extent to width table  */ 00032617
+*/*         4 May 1998 - Add maximum baseline offset to width table  */ 00032717
+*/*        16 Apr 1998 - Add 'display' point size to width table     */ 00032817
+*/*        25 Mar 1998 - 'RAW' flag                                  */ 00032917
+*/*         4 Mar 1998 - Add seglib read vector                      */ 00033017
+*/*         2 Feb 1998 - Add width table structures                  */ 00033117
+*/*        15 Dec 1997 - Add 'read width table' routine address      */ 00033217
+*/*        12 Dec 1997 - 'FTAB' add A(width_table)                   */ 00033317
+*/*         3 Nov 1997 - add metacode write parameter                */ 00033417
+*/*                                                                  */ 00033517
+*/********************************************************************/ 00033617
+*%GOTO PLI;                                                             00033717
+*/*                                                                     00033817
+         MACRO                                                          00033917
+         PCLINCL &STATONL=NO                                            00034017
+         AIF ('&STATONL' EQ 'YES').STATS                                00034117
+*---------------------------------*                                     00034217
+*  Parm area for AFP2PCL          *                                     00034317
+*---------------------------------*                                     00034417
+AFP2PCL_PARM   DSECT                                                    00034517
+*----------------- Keep the following fields in sequence -------------+ 00035009
+A2P_ECBA DS    A                   A(comm ECB) from PCLWTR            | 00036009
+A2P_FTAB DS    A                   A(FONTTAB) from PCLWTR             | 00037009
+A2P_STAT DS    A                   A(statistics) from PCLWTR          | 00038009
+A2P_PRTT DS    A                   A(printer table entry) from PCLWTR | 00039009
+*---------------------------------------------------------------------+ 00040009
+A2P_RETC DS    F                   Return code from conversion          00050009
+A2P_PRTA DS    2A                  A(print_routine)                     00060009
+A2P_RDA  DS    2A                  A(read_routine)                      00070009
+A2P_PCHA DS    2A                  A(punch_routine)                     00080009
+A2P_META DS    2A                  A(metacode_write)           PF110397 00090009
+A2P_FNTA DS    2A                  A(read_fontlib_routine)              00100009
+A2P_SRCH DS    2A                  A(printer_lookup)                    00110009
+A2P_WID  DS    2A                  A(read width tables)        PF121597 00120009
+A2P_SEG  DS    2A                  A(read seglib)              PF030498 00130009
+         DS    F                   (reserved)                  PF030498 00140009
+A2P_DEVD DS    A                   Reserved for DEVDEP         PF022598 00150009
+                                                                        00160009
+A2P_DEST DS    CL8                 Output destination                   00170009
+A2P_TRAY DS    CL1                 Default tray                         00180009
+A2P_DWNL DS    CL1                 Font download flag                   00190009
+A2P_CLAS DS    XL1                 SYSOUT class                PF000518 00200013
+         DS    XL4                 (reserved)                  PF000518 00201013
+A2P_FLAG DS    BL1                 Flags                                00210009
+A2P_DUMP EQU   X'80'               1... .... Dump struc. flds.          00220009
+A2P_TEXT EQU   X'40'               .1.. .... Dump text                  00230009
+A2P_DUPL EQU   X'20'               ..1. .... Duplex            PF011805 00231017
+A2P_STAP EQU   X'10'               ...1 .... Staple            PF011805 00232017
+A2P_RAW  EQU   X'08'               .... 1... Raw PCL output    PF032598 00240009
+A2P_PNCH EQU   X'08'               .... .1.. Punch             PF050525 00241018
+A2P_L    EQU   *-AFP2PCL_PARM      Length of parms                      00250009
+*                                                                       00260009
+* ------------------------------- *                                     00270009
+*        In-storage font table    *                                     00280009
+* ------------------------------- *                                     00290009
+FTAB     DSECT ,                   Font table DSECT                     00300009
+FCNT     DS    H                   Number of fonts                      00310009
+         DS    XL2                 (alignment)                          00320009
+*                                                                       00330009
+FENT     EQU   *                   Font entry                           00340009
+FNAME    DS    CL8                 . font name                          00350009
+FCOUNT   DS    F                   . font use count                     00360009
+FNUM     DS    H                   . font number                        00370009
+         DS    XL2                 . (alignment)                        00380009
+FMETA    DS    CL8                 . Font name for centralized PF110397 00390009
+FWIDTH   DS    A                   . A(width_table)            PF121297 00400009
+FNEXT    EQU   *                   . next entry address                 00410009
+FLEN     EQU   *-FENT              . length of entry                    00420009
+*                                                                       00421010
+* ------------------------------- *                                     00422010
+*        Page Setup Information   *                      (15 Jun, 1999) 00423010
+* ------------------------------- *                                     00424010
+PGSETUP  DSECT ,                   Page setup                           00425010
+SPAGE    DS    F                   . Page number                        00426012
+SCOPIES  DS    H                   . Number of copies                   00426112
+STRAY    DS    C                   . Tray sepcification                 00427010
+SDUPLEX  DS    C                   . Duplex specification               00428010
+         DS    XL12                . (reserved)                         00429010
+*                                                                       00440009
+* ------------------------------- *                                     00450009
+*        Character width tables   *                                     00460009
+* ------------------------------- *                                     00470009
+WIDTHS   DSECT ,                   Character Width tables               00480009
+WFACE    DS    CL32                . Face name                 PF121297 00490009
+WWEIGHT  DS    CL12                . Font weight                        00500009
+WSTYLE   DS    CL8                 . Font Style                         00510009
+WSIZEC   DS    CL2                 . Point size (Display)      PF980416 00520009
+WSIZE    DS    H                   . Point size                         00530009
+         DS    XL14                . (unused)                  PF980504 00540009
+WNUM     DS    H                   . Number of orientations             00550009
+WORIEN   EQU   *                   . (up to four orientations)          00560009
+WFLAGS   DS    BL1                 .   Flags                            00570009
+WFLGNP   EQU   X'80'               .   1... .... - non-proportional     00580009
+WFLGX    EQU   X'01'               .   .... ...1 - this orien pres      00581009
+         DS    X                   .   (alignment)                      00582009
+WVARSP   DS    H                   .   Var-space incr                   00583009
+WEMSP    DS    H                   .   Em-space incr                    00584009
+WFIGSP   DS    H                   .   Fig-space incr                   00585009
+WCHR     DS    H                   .   Character increment              00586009
+WMBO     DS    H                   .   Maximum baseline offset PF980504 00586109
+WMBE     DS    H                   .   Maximum baseline extent PF980715 00586209
+WMD      DS    H                   .   Maximum descender       PF020927 00586315
+WWID     DS    256H                .   Character widths                 00586409
+WORIENN  EQU   *                   .   Org to next orientation          00586509
+WORIENL  EQU   *-WORIEN            .   Length of orientation data       00586609
+*                                                                       00586709
+                                                                        00586809
+.STATS   ANOP                                                           00586909
+.*                                                                      00587009
+.*       Generate Statistics and Printer Dsects                         00588009
+.*                                                                      00589009
+* ------------------------------- *                                     00590009
+*        Printer table entry      *                                     00591009
+* ------------------------------- *                                     00592009
+PRINTER  DSECT ,                   Printer table DSECT                  00593009
+PRLINK   DS    A                   Forward link                         00594009
+PRID     DS    CL8                 Printer ID                           00595009
+PRDEVT   DS    BL1                 Device type (see NTCS)               00596009
+PRFLAGS  DS    BL1                 Flags (see NTCS)                     00597009
+PRMODEL  DS    CL4                 Printer model                        00598009
+PRTRAY   DS    CL1                 Default tray                         00599009
+PRFLGF   DS    BL1                 Font download flags                  00600009
+PRFLGFR  EQU   X'80'               1... .... require download           00601009
+PRFSET   DS    CL2                 Fontset number                       00602009
+         DS    XL14                (unused)                             00603009
+PRJOBS   DS    F                   Jobs printed                         00604009
+PRPAGES  DS    F                   Pages printed                        00605009
+PRFCNT   DS    H                   Permanent font count                 00606009
+PRFID    DS    25H                 Permanent font ID's                  00607009
+PRFMAX   EQU   (*-PRFID)/L'PRFID   Maximum number of permament fonts    00607109
+PRLEN    EQU   *-PRINTER           length of printer entry              00607209
+*                                                                       00607309
+*---------------------------------*                                     00607409
+*  Task statistics area           *                                     00607509
+*---------------------------------*                                     00607609
+TASKSTAT DSECT ,                   Task statistics                      00607709
+*     Life-of-task statistics                                           00607809
+TASKSTRT DS    XL8                 Task start time (STCK)               00607909
+TASKJBSP DS    F                   Jobs processed                       00608009
+*     Current job statisticss                                           00609009
+TASKJBST DS    XL8                 Job start time (STCK)                00610009
+TASKJBNM DS    CL8                 Current job name                     00620009
+TASKJBNI DS    CL8                 Current job id                       00630009
+TASKPGSP DS    F                   Pages processed - current job        00640009
+TASKCRDS DS    F                   Output records - current job         00650009
+TASKID   DS    F                   Task ID                     PF100797 00660009
+         DS    XL16                (reserved)                           00670009
+TASKSTL  EQU   *-TASKSTAT          L'Statistics area                    00680009
+                                                                        00690009
+         MEXIT                                                          00700009
+**/                                                                     00710009
+*%PLI: ;                                                                00720009
+ dcl     aparm               ptr;                                       00730009
+                                                                        00740009
+ /* ---------------------------------------------------------------- */ 00750009
+ /* Parameter area passed by calling program.                        */ 00760009
+ /* ---------------------------------------------------------------- */ 00770009
+ dcl   1 parmarea            unaligned based(aparm),                    00780009
+         5 ecb_addr          ptr,      /* Posted to shutdown task    */ 00790009
+         5 font_addr         ptr,      /* A(FONTTAB)                 */ 00800009
+         5 stat_addr         ptr,      /* A(statistics)              */ 00810009
+         5 printer_addr      ptr,      /* A(printer table entry)     */ 00820009
+         5 a2p_return_code   fixed bin(31), /* Conversion Return Code*/ 00830009
+                                                                        00840009
+         5 print_routine     entry,    /* A(print routine)           */ 00850009
+         5 read_routine      entry returns( fixed bin(31) ),            00860009
+         5 punch_routine     entry,    /* A(punch routine)           */ 00870009
+         5 metacode_routine  entry,    /* A(metacode_write)  PF110397*/ 00880009
+         5 fontlib_routine   entry returns( fixed bin(31) ),            00890009
+         5 printer_lookup    entry returns( fixed bin(31) ),            00900009
+         5 widthtab_read     entry returns( fixed bin(31) ),            00910009
+         5 seglib_read       entry returns( fixed bin(31) ),/* 030498*/ 00920009
+         5 fil1              char(4),  /* (reserved)         PF030498*/ 00930009
+         5 devd_storage      ptr,      /* Reserved for DEVD  PF022598*/ 00940009
+                                                                        00950009
+         5 dest              char(8),  /* Output destination         */ 00951009
+         5 P_tray            char(1),  /* Initial default tray       */ 00952009
+         5 P_dwnld           char(1),  /* Font download flag (P/T)   */ 00953009
+         5 P_class           char(1),  /* SYSOUT class       PF000518*/ 00953113
+         5 fil2              char(4),  /* (reserved)         PF000518*/ 00954013
+         5 P_flags,                    /* Flags                      */ 00955017
+           10 P_dump         bit(1),   /*  '1'b = dump struct fields */ 00956009
+           10 P_text         bit(1),   /*  '1'b = dump text          */ 00957009
+           10 P_duplex       bit(1),   /*  '1'b = duplex     PF010315*/ 00958014
+           10 P_staple       bit(1),   /*  '1'b = staple     PF011805*/ 00958117
+           10 P_raw          bit(1),   /*  '1'b = raw PCL outPF032598*/ 00959009
+           10 P_punch        bit(1),   /*  '1'b = punch      PF050525*/ 00959118
+           10 fil3           bit(2);   /*  (reserved)        PF032598*/ 00960018
+                                                                        00970009
+ /* ---------------------------------------------------------------- */ 00980009
+ /* Statistics area passed by calling program                        */ 00990009
+ /* ---------------------------------------------------------------- */ 01000009
+ dcl   1 statarea            unaligned based(stat_addr),                01010009
+       /* Life-of-task statistics                                    */ 01020009
+         5 stat_tasktime     char(8),       /* Task start time (STCK)*/ 01030009
+         5 stat_jobs         fixed bin(31), /* # of jobs proc        */ 01040009
+       /* Current job  statistics                                    */ 01050009
+         5 stat_jobtime      char(8),       /* Job start time (STCK) */ 01060009
+         5 stat_jobname      char(8),       /* Current job name      */ 01070009
+         5 stat_jobid        char(8),       /* Current job id        */ 01080009
+         5 stat_pages        fixed bin(31), /* Curr page count       */ 01090009
+         5 stat_cards        fixed bin(31), /* Output record count   */ 01100009
+         5 stat_taskid       fixed bin(31), /* Task ID       PF100797*/ 01110009
+         5 fil1              char(16);      /* Reserved for expansion*/ 01120009
+                                                                        01130009
+ /* ---------------------------------------------------------------- */ 01140009
+ /* Printer block passed by calling program                          */ 01150009
+ /* ---------------------------------------------------------------- */ 01160009
+ dcl   1 prtarea             unaligned based(printer_addr),             01170009
+         5 prt_link          ptr,           /* forward link          */ 01180009
+         5 prt_id            char(8),       /* printer id            */ 01190009
+         5 prt_device        bit(8),        /* printer device type   */ 01200009
+           /*      '80'x = Xerox                                 (1) */ 01210009
+           /*      '40'x = HP                                    (2) */ 01220009
+           /*      '20'x = Savin                         20030423(3) */ 01221016
+         5 prt_flags         bit(8),        /* printer flags         */ 01230009
+           /*      '40'x = duplexing allowed                     (2) */ 01240009
+           /*      '20'x = MCK=Yes                               (3) */ 01250009
+           /*      '08'x = PCL=Yes                               (5) */ 01260009
+           /*      '02'x = Landscape is default                  (7) */ 01260109
+         5 prt_model         char(4),       /* printer model         */ 01260209
+         5 prt_tray          char(1),       /* default tray          */ 01260309
+         5 prt_flgf          bit(8),        /* font download flags   */ 01260409
+           /*      '80'x = download default fonts                (1) */ 01260509
+         5 prt_fontset       char(2),       /* fontset id            */ 01260609
+         5 fil1              char(14),      /* (unused)              */ 01260709
+         5 prt_jobs          fixed bin(31), /* jobs printed          */ 01260809
+         5 prt_pages         fixed bin(31), /* pages printed         */ 01260909
+         5 prt_fcnt          fixed bin(15), /* permanent font count  */ 01261009
+         5 prt_fid       (25)fixed bin(15); /* list of perm. fonts   */ 01261109
+                                                                        01261209
+ /* ---------------------------------------------------------------- */ 01261309
+ /* Global Font Table (all fonts known to AFP2PCL) sorted by G_fname */ 01261409
+ /* ---------------------------------------------------------------- */ 01261509
+ dcl   1 G_font_table        unaligned based(font_addr),                01261609
+         5 G_fonts           fixed bin(15),      /* Number of fonts  */ 01261709
+         5 fil               char(2),            /* (unused)         */ 01261809
+         5 G_font_data    (1)unaligned,          /* Font info        */ 01261909
+           10 G_fname        char(8),            /* Font name        */ 01262009
+           10 G_font_used    fixed bin(31),      /* Font use count   */ 01263009
+           10 G_pclid        fixed bin(15),      /* Assigned PCL id  */ 01264009
+           10 fil            char(2),            /* unused           */ 01265009
+           10 G_cen_fname    char(8),            /* Cen font name    */ 01266009
+           10 G_width_tab    ptr;                /* -> width table   */ 01267009
+                                                                        01267110
+ /* ---------------------------------------------------------------- */ 01267210
+ /* Page Setup Information                            (15 Jun, 1999) */ 01267310
+ /* ---------------------------------------------------------------- */ 01267410
+ dcl   1 PageSetup           unaligned based,                           01267511
+         5 S_page            fixed bin(31), /* Page number           */ 01267612
+         5 S_copies          fixed bin(15), /* Copy count            */ 01267712
+         5 S_tray            char(1),       /* Current tray          */ 01267812
+         5 S_duplex          char(1),       /* Duplex flag (Y/b)     */ 01267912
+         5 fil1              char(12);      /* (reserved)            */ 01268012
+                                                                        01268112
+ /* ---------------------------------------------------------------- */ 01269009
+ /*                Character Width Tables                            */ 01270009
+ /* ---------------------------------------------------------------- */ 01280009
+ dcl   1 widths              unaligned based,                           01290009
+         5 w_facename        char(32),          /* Font face name    */ 01300009
+         5 w_weight          char(12),          /* Width description */ 01310009
+         5 w_style           char(8),           /* Style description */ 01320009
+         5 w_size_c          char(2),           /* Point size  980416*/ 01330009
+         5 w_size            fixed bin(15),     /* Point size        */ 01340009
+         5 fil0              char(14),          /* filler      980504*/ 01350009
+         5 w_num             fixed bin(15),     /* Num of orientatns */ 01360009
+         5 w_orientation  (4),                                          01370009
+           10 w_flags           bit(8),                                 01380009
+              /* 1... .... ('80'bx) - non-proportional               */ 01381009
+              /* .... ...1 ('01'bx) - this orientation present       */ 01382009
+           10 fil1              char(1),                                01383009
+           10 w_var_space    fixed bin(15),     /* Var space width   */ 01384009
+           10 w_em_space     fixed bin(15),     /* Em space width    */ 01385009
+           10 w_fig_space    fixed bin(15),     /* Fig space width   */ 01386009
+           10 w_char_incr    fixed bin(15),     /* Def char increment*/ 01387009
+           10 w_baseline_offset fixed bin(15),  /* Max baseln o980504*/ 01388009
+           10 w_baseline_extent fixed bin(15),  /* Max baseln e980715*/ 01388109
+           10 w_max_descender   fixed bin(15),  /* Max Desc.   020927*/ 01388215
+           10 width   (0:255)fixed bin(15);     /* Character widths  */ 01388309
+ /*                                                                     01388409
+         MEND  */                                                       01388509
+                                                                        01388609

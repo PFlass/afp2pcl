@@ -1,0 +1,735 @@
+//FLASSF   JOB  (),'PATTERN',CLASS=J,MSGCLASS=Z,                        00010001
+//         NOTIFY=$                                                     00020001
+//*                                                                     00030001
+//*                                                                     00040001
+//********************************************************************* 00050001
+//*                PL/I COMPILE AND LINK                              * 00060001
+//********************************************************************* 00070001
+// EXEC PLIXCL,                                                         00080001
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00090001
+//   PARM.LKED='LIST,MAP,XREF'                                          00100001
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110001
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120001
+//PLI.SYSIN    DD *                                                     00122001
+ /* PATTERN - Generate a PCL Bitmap Pattern                          */ 00123001
+                                                                        00124001
+ /********************************************************************/ 00125001
+ /*                                                                  */ 00126001
+ /*    Module ID: PATTERN                                            */ 00127001
+ /*                                                                  */ 00128001
+ /*    Author:    Peter Flass                                        */ 00129001
+ /*               NYS LBDC                                           */ 00130001
+ /*               Mar, 1998                                          */ 00140001
+ /*                                                                  */ 00150001
+ /*    Function:  Convert an AFP image to a PCL pattern.             */ 00160001
+ /*                                                                  */ 00180001
+ /********************************************************************/ 00190001
+                                                                        00200001
+ PATTERN: proc(parm) options(main);                                     00210001
+                                                                        00220001
+ dcl     parm                char(100)           varying;               00230001
+                                                                        00240001
+ dcl     afpin               record input;                              00250001
+ dcl     sysprint            print;                                     00260001
+ dcl     punch               record output                              00270001
+                             env(f recsize(80) );                       00280001
+                                                                        00290001
+ dcl     eof                 bit(1)              init('0'b);            00300001
+                                                                        00310001
+ dcl    (has_ext,has_pad)    bit(1);                                    00320001
+                                                                        00330001
+ dcl     rec_length          fixed bin(15);                             00340001
+ dcl     save_sf_len         fixed bin(15);                             00350001
+ dcl     sfi                 char(3);                                   00360001
+ dcl     j                   fixed bin(15);                             00370001
+ dcl     l                   fixed bin(15);                             00380001
+ dcl    (xs,xe,xc)           ptr;                                       00390001
+ dcl     re                  ptr;                                       00400001
+ dcl     raster_bytes        fixed bin(31);                             00410001
+ dcl     raster_pages        fixed bin(31);                             00411001
+ dcl     row_bytes           fixed bin(31);                             00420001
+ dcl     rp                  ptr;      /* -> Image Raster Data       */ 00430001
+ dcl    (p,q)                ptr;                                       00440001
+                                                                        00450001
+ dcl     pcl_rec             char(80);                                  00460001
+ dcl     pclo                fixed bin(15)                 init(-1);    00470001
+ dcl     pcl_work            char(200) varying;                         00480001
+ dcl     stat_cards          fixed bin(15)                 init(0);     00490001
+ dcl     x                   char(120) varying;                         00500001
+ /*           *** No compression for patterns ***                    */ 00501001
+ dcl     comp_type           char(1)                       init(' ');   00510001
+ dcl    (tot_in,tot_out)     fixed bin(31)                 init(0);     00520001
+ dcl     pos                 fixed bin(31);                             00530001
+ dcl     samp                char(120) varying;                         00540001
+                                                                        00550001
+ /*---------------------------------------------*/                      00560001
+ /* Data from IID sf - applies to entire image  */                      00570001
+ /*---------------------------------------------*/                      00580001
+ dcl    (sizx,sizy)          fixed bin(31);     /* Image size (bits) */ 00590001
+ dcl    (celx,cely)          fixed bin(31);     /* Default cell size */ 00600001
+ dcl     color               char(2);           /* Color - see codes */ 00610001
+                                                                        00620001
+ /*---------------------------------------------*/                      00630001
+ /* Data from ICP sf - applies to current cell  */                      00640001
+ /*---------------------------------------------*/                      00650001
+ dcl     read_icp            bit(1)              init('0'b);            00660001
+ dcl    (cell_xpos,cell_ypos)fixed bin(31)       init(  0 );            00670001
+ dcl    (cell_xsiz,cell_ysiz)fixed bin(31)       init( -1 );            00680001
+ dcl    (cell_xfil,cell_yfil)fixed bin(31)       init( -1 );            00690001
+                                                                        00700001
+ dcl     oneb                bit(8)              based,                 00710001
+         twob                bit(16)             based,                 00720001
+         threeb              bit(24)             based,                 00730001
+         fourb               bit(32)             based;                 00740001
+ dcl     zovl                char(32767)         based;                 00750001
+                                                                        00760001
+ /*    Structured field identification                               */ 00770001
+ dcl 1 save_sf_desc_info     char(66),                                  00780001
+     1 fil                   defined save_sf_desc_info,                 00790001
+       5 save_sf_id          char(5),                                   00800001
+       5 fil                 char(1),                                   00810001
+       5 save_sf_desc        char(60);                                  00820001
+                                                                        00830001
+ dcl   recl                  entry( * )       returns( fixed bin(31) ); 00840001
+ dcl   afptrace              entry( char(3) ) returns( char(48) );      00850001
+ dcl   pgalloc               entry( fixed bin(31) )                     00860001
+                             returns( ptr );                            00870001
+ dcl   hexdump               entry(                                     00880001
+                                    ptr,                                00890001
+                                    fixed bin(31),                      00900001
+                                    char(80) varying                    00910001
+                                  );                                    00920001
+                                                                        00930001
+ dcl     ESC                 char(1) static      init( '27'x );         00940001
+ dcl     CRLF                char(2) static      init( '0D0A'x);        00950001
+                                                                        00960001
+ %page;                                                                 00960105
+ %include pclfdesc;                                                     00960205
+ %include pclcdesc;                                                     00960305
+                                                                        00960405
+ %page;                                                                 00961005
+ %include builtins;                                                     00970001
+ %include lowercas;                                                     00980001
+                                                                        00990001
+ %page;                                                                 01000001
+ %include(afpsf);                                                       01010001
+ %include(afpimg);                                                      01020001
+ %page;                                                                 01030001
+ on endfile(afpin) eof='1'b;                                            01040001
+                                                                        01050001
+ call parse_parm;                                                       01060001
+                                                                        01070001
+ open file(afpin) input;                                                01080001
+ call read_afpin;            /* Read first afpin record              */ 01090001
+                                                                        01100001
+ do while(eof='0'b);                                                    01110001
+                                                                        01120001
+   save_sf_len = sff.sf_len;                                            01130001
+   sfi         = sff.sf_id;                                             01140001
+   save_sf_desc_info = afptrace( sfi );                                 01150001
+   has_ext = substr(sf_flag,1,1);                                       01160001
+   has_pad = substr(sf_flag,5,1);                                       01170001
+                                                                        01180001
+   /*---------------------------------*/                                01190001
+   /*    Point to data start and end  */                                01200001
+   /*---------------------------------*/                                01210001
+   xe = sfp + save_sf_len - 1;                                          01220001
+   sfp = addr(sff_end);                                                 01230001
+   if has_ext then sfp = sfp + sfel;                                    01240001
+   if has_pad then do;                                                  01250001
+     if xe->onebª='00'X then xe = xe - xe->oneb;                        01260001
+     else do;                                                           01270001
+       xe = xe - 1;                                                     01280001
+       xe = xe - xe->twob;                                              01290001
+       end; /* else */                                                  01300001
+     end; /* has_pad */                                                 01310001
+                                                                        01311004
+   ifp = sfp;                                                           01320001
+                                                                        01330001
+   /*---------------------------------*/                                01340001
+   /*    Process structured fields    */                                01350001
+   /*---------------------------------*/                                01360001
+   select( save_sf_id );                                                01370001
+                                                                        01380001
+     when( 'BPS  ' ) do;                                                01390001
+       /*-------------------------------------*/                        01400001
+       /*    Process 'BPS' structured field   */                        01410001
+       /*    (Begin Page Segment)             */                        01420001
+       /*-------------------------------------*/                        01430001
+                                                                        01440001
+       /* <ignore this structured field       */                        01450001
+                                                                        01460001
+       end; /* BPS */                                                   01470001
+                                                                        01480001
+     when( 'EPS  ' ) do;                                                01490001
+       /*-------------------------------------*/                        01500001
+       /*    Process 'EPS' structured field   */                        01510001
+       /*    (End Page Segment)               */                        01520001
+       /*-------------------------------------*/                        01530001
+                                                                        01540001
+       /* <ignore this structured field       */                        01550001
+                                                                        01560001
+       end; /* EPS */                                                   01570001
+                                                                        01580001
+     when( 'BIM  ' ) do;                                                01590001
+       /*-------------------------------------*/                        01600001
+       /*    Process 'BIM' structured field   */                        01610001
+       /*    (Begin Image)                    */                        01620001
+       /*-------------------------------------*/                        01630001
+                                                                        01640001
+       /* <ignore this structured field       */                        01650001
+                                                                        01660001
+       end; /* BIM */                                                   01670001
+                                                                        01680001
+     when( 'EIM  ' ) do;                                                01690001
+       /*-------------------------------------*/                        01700001
+       /*    Process 'EIM' structured field   */                        01710001
+       /*    (End Image)                      */                        01720001
+       /*-------------------------------------*/                        01730001
+                                                                        01740001
+       /* <ignore this structured field       */                        01750001
+                                                                        01760001
+       end; /* EIM */                                                   01770001
+                                                                        01780001
+     when( 'IOC  ' ) do;                                                01790001
+       /*-------------------------------------*/                        01800001
+       /*    Process 'IOC' structured field   */                        01810001
+       /*    (Image Output Control)           */                        01820001
+       /*-------------------------------------*/                        01830001
+       end; /* IOC */                                                   01840001
+                                                                        01850001
+     when( 'IID  ' ) begin;                                             01860001
+       /*-------------------------------------*/                        01870001
+       /*    Process 'IID' structured field   */                        01880001
+       /*    (Image Input Descriptor)         */                        01890001
+       /*-------------------------------------*/                        01900001
+       dcl size              fixed bin(31);                             01910001
+       dcl p                 ptr;                                       01920001
+       dcl s                 fixed bin(31);                             01930001
+                                                                        01940001
+       if iid_ppubx ª= 3000 |                                           01950001
+          iid_ppuby ª= 3000                                             01960001
+       then do;                                                         01970001
+         put skip edit('IID: Pels per unit base not 3000 - (',          01980001
+                       iid_ppubx, ',', iid_ppuby, ')' )                 01990001
+                      (a,p'zzz9',a,p'zzz9',a);                          02000001
+         return;                                                        02010001
+         end;                                                           02020001
+       size = ubin(iid_iszx) * ubin(iid_iszy);                          02030001
+       raster_bytes = (size+7)/8;      /* Convert to bytes           */ 02040001
+       raster_pages = (raster_bytes+4095) / 4096;/* Convert to pages */ 02050001
+       rp = PGALLOC(raster_pages);                                      02060001
+       sizx  = ubin(iid_iszx);         /* Save image size data       */ 02070001
+       sizy  = ubin(iid_iszy);                                          02080001
+       celx  = ubin(iid_dszx);                                          02090001
+       cely  = ubin(iid_dszy);                                          02100001
+       color = iid_col;                                                 02110001
+       p = rp;                                                          02120001
+       size = raster_bytes;                                             02130001
+       /* Zero out Bitmap Raster Storage */                             02140001
+       do while( size>0 );             /* Clear raster area          */ 02150001
+         if size>32760 then s=32760;                                    02160001
+         else               s=size;                                     02170001
+         substr(p->zovl,1,s) = repeat('00'x,s-1);                       02180004
+         size=size-s;                                                   02190001
+         p = p+s;                                                       02200001
+         end; /* do while */                                            02210001
+       end; /* IID */                                                   02220001
+                                                                        02230001
+     when( 'ICP  ' ) do;                                                02240001
+       /*-------------------------------------*/                        02250001
+       /*    Process 'ICP' structured field   */                        02260001
+       /*    (Image Cell Position)            */                        02270001
+       /*-------------------------------------*/                        02280001
+       cell_xpos = ubin(icp_xoff);     /* Save cell size and pos     */ 02290001
+       cell_ypos = ubin(icp_yoff);                                      02300001
+       cell_xsiz = ubin(icp_xsiz);                                      02310001
+       cell_ysiz = ubin(icp_ysiz);                                      02320001
+       cell_xfil = ubin(icp_xfill);                                     02330001
+       cell_yfil = ubin(icp_yfill);                                     02340001
+       read_icp = '1'b;                /* Indicate ICP read          */ 02350001
+       end; /* ICP */                                                   02360001
+                                                                        02370001
+     when( 'IRD  ' ) do;                                                02380001
+       /*-------------------------------------*/                        02390001
+       /*    Process 'IRD' structured field   */                        02400001
+       /*    (Image Raster Data)              */                        02410001
+       /*-------------------------------------*/                        02420001
+       call process_ird;                                                02430001
+       end; /* IRD */                                                   02440001
+                                                                        02450001
+     otherwise do;                                                      02460001
+       /*-------------------------------------*/                        02470001
+       /* Ignore unused structured fields     */                        02480001
+       /*-------------------------------------*/                        02490001
+       put skip edit('Unrecognized structured field ',                  02500001
+                     quothex(sfi) )(a);                                 02510001
+       end; /* otherwise */                                             02520001
+                                                                        02530001
+     end; /* select */                                                  02540001
+                                                                        02550001
+   /*---------------------------------*/                                02560001
+   /*    Point to next struc. field   */                                02570001
+   /*---------------------------------*/                                02580001
+   xc = xc + save_sf_len;                                               02590001
+   sfp = xc;                                                            02600001
+   if xc>=re then call read_afpin;                                      02610001
+                                                                        02620001
+   end; /* do while */                                                  02630001
+                                                                        02640001
+ row_bytes = (sizx+7)/8;                                                02650001
+                                                                        02660001
+ /*-----------------------------------*/                                02670001
+ /*  Dump bitmap                      */                                02680002
+ /*-----------------------------------*/                                02690001
+ p = rp;                                                                02690202
+                                                                        02691002
+ /*-----------------------------------*/                                02692002
+ /*  Shade Bitmap                     */                                02693002
+ /*-----------------------------------*/                                02694002
+ call shade_bitmap( rp, raster_bytes, row_bytes, 25 );                  02700001
+                                                                        02706001
+ /*-----------------------------------*/                                02707001
+ /*  Build PCL Font                   */                                02708005
+ /*-----------------------------------*/                                02709001
+ call build_font;                                                       02709105
+ return;                                                                02709205
+                                                                        02709305
+ /*-----------------------------------*/                                02709405
+ /*  Printer Initialization           */                                02709505
+ /*-----------------------------------*/                                02709605
+ put string(pcl_work) edit( ESC||'E' )(a);       /* Reset            */ 02710001
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02720001
+ pcl_work = ESC || '*t300R';           /* Graphics resolution        */ 02730001
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02740001
+ pcl_work = ESC || '*c0Q';             /* Delete all patterns        */ 02740101
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02740201
+                                                                        02741001
+ /*-----------------------------------*/                                02750001
+ /*  Pattern Control                  */                                02760001
+ /*-----------------------------------*/                                02770001
+ pcl_work = ESC || '*c256G';           /* Pattern id=256             */ 02780001
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02781001
+                                                                        02790001
+ /*-----------------------------------*/                                02800001
+ /*  Send Bitmap Header               */                                02810001
+ /*-----------------------------------*/                                02820001
+ begin;                                                                 02820101
+   dcl   zero                fixed bin(15)       init(0);               02820201
+   dcl   one                 fixed bin(15)       init(1);               02820301
+   dcl   temp                fixed bin(15);                             02820401
+   put skip edit('Raster_bytes   ',raster_bytes)(a,p'zzz,zz9');         02820501
+   put skip edit('Bytes/row      ',row_bytes)(a,p'zzz,zz9');            02820601
+   put string(pcl_work) edit( ESC||'*c' || toc(raster_bytes+8) || 'W')  02820701
+                            (a);                                        02820801
+   call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );   02820901
+   call write_pcl( addr(zero),   2, null() );                           02821001
+   call write_pcl( addr(one)+1,  1, null() );                           02821101
+   call write_pcl( addr(zero),   1, null() );                           02821201
+   temp = raster_bytes / row_bytes;                                     02821301
+   put skip edit('Pattern height ',temp)(a,p'zzz,zz9');                 02821401
+   call write_pcl( addr(temp),   2, null() );                           02821501
+   temp = row_bytes * 8;                                                02821601
+   put skip edit('Pattern width  ',temp)(a,p'zzz,zz9');                 02821701
+   call write_pcl( addr(temp),   2, null() );                           02821801
+   end; /* Bitmap Header */                                             02821901
+                                                                        03010001
+ /*-----------------------------------*/                                03020001
+ /*  Raster display                   */                                03030001
+ /*-----------------------------------*/                                03040001
+ p = rp;                                                                03110001
+ pos=1;                                                                 03120001
+ do while(pos<raster_bytes);                                            03130001
+   tot_in  = tot_in  + row_bytes;                                       03140001
+   call write_pcl( p, (row_bytes), null() );                            03450003
+   p   = p + row_bytes;                                                 03480001
+   pos = pos+row_bytes;                                                 03490001
+   end; /* do pos */                                                    03500001
+                                                                        03510001
+ /*-----------------------------------*/                                03515101
+ /*  Make Pattern Permanent           */                                03515201
+ /*-----------------------------------*/                                03515301
+ pcl_work = ESC || '*c5Q';             /* Make Pattern permanent     */ 03516001
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03517001
+                                                                        03550001
+ /*-----------------------------------*/                                03560001
+ /*  Display the pattern              */                                03570001
+ /*-----------------------------------*/                                03580001
+ pcl_work = ESC || '*p450x600Y';       /* Position the Pattern       */ 03580101
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03581001
+ pcl_work = ESC || '*p0R';             /* Tile position=ref point    */ 03581101
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03581201
+ pcl_work = ESC || '*c2880h2880V';     /* Size the fill area         */ 03582001
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03583001
+ pcl_work = ESC || '*c256G';           /* Select pattern #256        */ 03584001
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03585001
+ pcl_work = ESC || '*c5P';             /* Fill the area - UD pattern */ 03585301
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03585401
+                                                                        03587001
+ /*------%%%--------------------------*/                                03588001
+ /*  Sample Text                      */                                03589001
+ /*-----------------------------------*/                                03589101
+ pcl_work = ESC || '*p300x300Y';       /* Position the Text          */ 03590001
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03600001
+ samp = repeat('The quick brown fox jumped over the lazy dog ',10);     03610001
+ do j=1 to 30;                                                          03620001
+   pcl_work = substr(samp,1,120) || '0D0A'x;                            03630001
+   pcl_work = translate( pcl_work, ascii ) || '0D0A'x;                  03640001
+   call write_pcl( addr(pcl_work)+2, length(pcl_work), null() );        03650001
+   samp = substr(samp,6) || substr(samp,1,5);                           03660001
+   end;                                                                 03670001
+                                                                        03680001
+ put string(pcl_work) edit( ESC||'&l0H' )(a);    /* Page eject       */ 03690001
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03691001
+ put string(pcl_work) edit( ESC||'E' )(a);       /* Reset            */ 03692001
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03693001
+                                                                        03694001
+ call write_pcl( null(), -1, null() ); /* Flush out last records     */ 03695001
+                                                                        03696001
+ return;                                                                03697001
+                                                                        05190001
+ %page;                                                                 05200001
+ /*------------------------------------------------------------------*/ 05210001
+ /*   Build a PCL font from raster data                              */ 05220005
+ /*------------------------------------------------------------------*/ 05230001
+ build_font: procedure;                                                 05240005
+   dcl   n_char              fixed bin(15);                             05240105
+   dcl   bytes_per_char      fixed bin(15);                             05240205
+   dcl  (char_height,char_width)                                        05240305
+                             fixed bin(15);                             05240405
+   dcl   baseline            fixed bin(15);                             05240505
+   put skip edit('Raster bytes ',raster_bytes)(a,p'z,zzz,zz9',a);       05240605
+   n_char = ceil( raster_bytes/3.276e4 );                               05240705
+   bytes_per_char = ceil( raster_bytes/n_char );                        05240805
+   put skip edit('Building ',n_char,' characters, ')(a,p'zz9',a);       05240905
+   put      edit(bytes_per_char,' bytes per character')(p'zz,zz9',a);   05241005
+   char_height = ceil( sqrt(bytes_per_char) );                          05241105
+   char_width  = ceil( bytes_per_char/(char_height*1e0) );              05241205
+   put skip edit('Char H=',char_height,                                 05241305
+                 ' Char W=',char_width)((2)(a,p'zz,zz9'));              05241405
+   baseline = char_height*8;                                            05241505
+   put skip edit('Baseline=',baseline)(a,p'zzz9',a);                    05241605
+   allocate font_desc;                                                  05241705
+   substr( fp->zovl, 1, cstg(font_desc) ) =                             05241805
+          repeat( '00'x, cstg(font_desc)-1 );                           05241905
+   font_desc.size        = 64;                                          05242005
+   font_desc.baseline    = baseline;                                    05242105
+   font_desc.cell_width  = char_width*8;                                05242205
+   font_desc.cell_height = char_height*8;                               05242305
+   end build_font;                                                      05242405
+                                                                        05242505
+ %page;                                                                 05242605
+ /*------------------------------------------------------------------*/ 05243005
+ /*   Process Image raster data                                      */ 05244005
+ /*------------------------------------------------------------------*/ 05245005
+ process_ird: procedure;                                                05246005
+   dcl   i                   fixed bin(15);                             05250001
+                                                                        05260001
+   if cell_xsiz = -1 then cell_xsiz = sizx; /* Image cell size       */ 05270001
+   if cell_ysiz = -1 then cell_ysiz = sizy;                             05280001
+   if cell_xfil = ubin(-1)                  /* Fill rectangle size   */ 05290001
+   then cell_xfil = sizx;                                               05300001
+   if cell_yfil = ubin(-1)                                              05310001
+   then cell_yfil = sizy;                                               05320001
+                                                                        05330001
+   do i=1 to cell_ysiz;                /* Do all rows of cell bitmap */ 05340001
+   /*                                                                   05340103
+     put skip edit('Blitting ',cell_xsiz,' from ',                      05341003
+                   (i-1)*cell_xsiz,' to ',                              05342003
+                   (i-1+cell_ypos)*sizx+cell_xpos)                      05343003
+                   ((3)(a,p'zzz,zz9'));                                 05344003
+    */                                                                  05345003
+     call bitblt( rp, ifp,                       /* src, dst bitmap  */ 05350001
+                  (i-1+cell_ypos)*sizx+cell_xpos,/* bitmap row pos   */ 05360001
+                  (i-1)*cell_xsiz,               /* cell row bit pos */ 05370001
+                  cell_xsiz );                   /* number of bits   */ 05380001
+     end; /* do while */                                                05390001
+                                                                        05400001
+   end process_ird;                                                     05410001
+                                                                        05420001
+ %page;                                                                 05430001
+ /********************************************************************/ 05440001
+ /*   shade_bitmap: Shade bitmap data                                */ 05450001
+ /********************************************************************/ 05460001
+ shade_bitmap: procedure( dst, count, row, pct );                       05470001
+   dcl   dst                 ptr;                                       05480001
+   dcl  (p,q)                ptr;                                       05490001
+   dcl   count               fixed bin(31);                             05500001
+   dcl   row                 fixed bin(31);                             05510001
+   dcl   rows                fixed bin(31);                             05520001
+   dcl  (r,c,z)              fixed bin(31);                             05530001
+   dcl  (pct,xpct)           fixed bin(15);                             05530101
+   dcl   bovl                bit(8)              based;                 05530201
+   dcl   covl                char(32760)         based;                 05530301
+   dcl  (oddr,oddc)          fixed bin(31);                             05530401
+                                                                        05530501
+   xpct = 100/pct;                                                      05530601
+   oddc = 0;                                                            05530701
+   oddr = xpct/2+1;                                                     05530801
+   p = dst;                                                             05530901
+   rows = count/row;                                                    05531001
+   do r=1 to rows;                                                      05531101
+     if mod(r+oddr,xpct)ª=0                                             05531201
+     then substr(p->covl,1,row) = repeat( '00'x, row-1 );               05531301
+     else do;                                                           05531401
+       if oddr=0 then oddr=xpct/2+1; else oddr=0;                       05531501
+       do c=1 to row*8;                                                 05531601
+         q = p+((c-1)/8); /* ->this byte */                             05531701
+         if mod( c+oddc, xpct )ª=0 then do;                             05531801
+           z =mod((c-1),8)+1;                                           05531901
+           substr( q->bovl, z, 1 )='0'b;                                05532001
+           end;                                                         05533001
+         end; /* do c */                                                05533101
+       if oddc=0 then oddc=xpct/2+1; else oddc=0;                       05533201
+       end; /* else */                                                  05533301
+     p = p + row;                                                       05533401
+     end; /* do r */                                                    05533501
+   end shade_bitmap;                                                    05533601
+                                                                        05533701
+ %page;                                                                 05533801
+ /********************************************************************/ 05533901
+ /*   BITBLT: Move one scan line                                     */ 05534001
+ /********************************************************************/ 05535001
+ bitblt: procedure( dst, src, dstbit, srcbit, count );                  05536001
+   dcl  (dst,src)            ptr;                                       05537001
+   dcl  (srcbit,dstbit)      fixed bin(31);                             05538001
+   dcl   count               fixed bin(31);                             05539001
+                                                                        05540001
+   dcl  (srcbyte,dstbyte)    fixed bin(31);                             05550001
+   dcl  (srcoff,dstoff)      fixed bin(15);                             05560001
+   dcl  (s,d)                ptr;                                       05570001
+   dcl   cnt                 fixed bin(31);                             05580001
+   dcl   c                   fixed bin(15);                             05590001
+   dcl   bovl                bit(32760)          based;                 05600001
+                                                                        05610001
+   if count<=0 then return;                                             05620001
+   cnt = count;                                                         05630001
+                                                                        05640001
+   srcbyte = srcbit/8;                                                  05650001
+   dstbyte = dstbit/8;                                                  05660001
+   srcoff = srcbit - (srcbyte*8) + 1;                                   05670001
+   dstoff = dstbit - (dstbyte*8) + 1;                                   05680001
+   s = src + srcbyte;                                                   05690001
+   d = dst + dstbyte;                                                   05700001
+                                                                        05710001
+   do while( cnt>0 );                                                   05720001
+     if cnt>32752 then c=32752;                                         05730001
+     else              c=cnt;                                           05740001
+     substr(d->bovl,dstoff,c) = substr(s->bovl,srcoff,c);               05750001
+     s = s + floor(c/8);                                                05760001
+     d = d + floor(c/8);                                                05770001
+     cnt = cnt - c;                                                     05780001
+     end; /* do while */                                                05790001
+                                                                        05800001
+   end bitblt;                                                          05810001
+                                                                        05820001
+ %page;                                                                 05830001
+ /********************************************************************/ 05840001
+ /*   Write data to pclout                                           */ 05850001
+ /********************************************************************/ 05860001
+ write_pcl: procedure(p,len,t) options( reentrant );                    05870001
+ dcl     p                   ptr;                                       05880001
+ dcl     len                 fixed bin(15);                             05890001
+ dcl     t                   ptr;                                       05900001
+                                                                        05910001
+ dcl     pcl_hdr             char(80)  static                           05920001
+              init( ('5A'x || 'JES328X' || '01DA'x || (70)'FF'x) );     05930001
+ dcl     buffer_init         char(3)   static                           05940001
+              init( '5A354D'x );                                        05950001
+ dcl     buffer_init_trnsp   char(3)   static                           05960001
+              init( '5A4A5B'x );                                        05970001
+                                                                        05980001
+ /*-------------------------*/                                          05990001
+ /* First time thru         */                                          06000001
+ /*-------------------------*/                                          06010001
+ if pclo<=0 then do;                                                    06020001
+   pcl_rec = buffer_init || (80)'00'x;                                  06030001
+   pclo=length(buffer_init)+1;                                          06040001
+   end; /* pclo=0 */                                                    06050001
+                                                                        06060001
+ /*-------------------------*/                                          06070001
+ /* Flush out last card(s)  */                                          06080001
+ /*-------------------------*/                                          06090001
+ if len<0 then do;                                                      06100001
+   if pclo>4 then call punch_one_card;                                  06110001
+   do while( mod(stat_cards,6)ª=0 );                                    06120001
+     call punch_one_card; /* punch empty cards */                       06130001
+     end; /* do while */                                                06140001
+   return;                                                              06150001
+   end; /* len<0 */                                                     06160001
+                                                                        06170001
+ /* All parameters called by value */                                   06180001
+ call move_data( (p), (len), (t) );                                     06190001
+                                                                        06200001
+ return;                                                                06210001
+                                                                        06220001
+ /*-------------------------*/                                          06230001
+ /* Data mover              */                                          06240001
+ /*-------------------------*/                                          06250001
+ move_data: procedure(atext,count,atab) options( reentrant );           06260001
+   dcl   atext               ptr,                                       06270001
+         text                char(32767)         based(atext);          06280001
+   dcl   count               fixed bin(15);                             06290001
+   dcl   atab                ptr,                                       06300001
+         ttab                char(256)           based(atab);           06310001
+   dcl  (char_in,char_out)   fixed bin(15);                             06320001
+   dcl   n                   fixed bin(15);                             06330001
+                                                                        06340001
+   char_in  = count;                                                    06350001
+   do while(char_in>0);                                                 06360001
+     char_out = 80-pclo+1;                                              06370001
+     n = min(char_in,char_out);                                         06380001
+     substr(pcl_rec,pclo,n) = substr(text,1,n);                         06390001
+     if atabª=null() then substr(pcl_rec,pclo,n) =                      06400001
+           translate( substr(pcl_rec,pclo,n), ttab );                   06410001
+     atext   = atext+n;                                                 06420001
+     char_in = char_in-n;                                               06430001
+     if n = char_out then call punch_one_card;                          06440001
+     else pclo=pclo+n;                                                  06450001
+     end; /* do while */                                                06460001
+                                                                        06470001
+   end move_data;                                                       06480001
+                                                                        06490001
+ punch_one_card: procedure options( reentrant );                        06500001
+   if mod(stat_cards,6) = 0                                             06510001
+   then write file(punch) from(pcl_hdr);                                06520001
+   stat_cards = stat_cards + 1;                                         06530001
+   write file(punch) from(pcl_rec);                                     06540001
+   pcl_rec = buffer_init || (80)'00'x;                                  06550001
+   pclo=length(buffer_init)+1;                                          06560001
+   end punch_one_card;                                                  06570001
+                                                                        06580001
+ end write_pcl;                                                         06590001
+                                                                        06600001
+ %page;                                                                 06610001
+ /********************************************************************/ 06620001
+ /*   Hexadecimal to character conversion                            */ 06630001
+ /********************************************************************/ 06640001
+                                                                        06650001
+ hex: proc(sp,n) returns( char(256) varying );                          06660001
+ dcl  sp                     ptr,                                       06670001
+      s                      char(4096) based(sp);                      06680001
+ dcl  n                      fixed bin(15);                             06690001
+ dcl  j                      fixed bin(15);                             06700001
+ dcl  ret                    char(256) varying   init('');              06710001
+ do j=1 to n;                                                           06720001
+   ret=ret||hexone( substr(s,j,1) );                                    06730001
+   end;                                                                 06740001
+ return(ret);                                                           06750001
+ end hex;                                                               06760001
+                                                                        06770001
+ hexone: proc(c) returns( char(2) );                                    06780001
+ dcl  c                      char;                                      06790001
+ dcl  hextabs                char(16) static     init                   06800001
+                       ('0123456789ABCDEF'),                            06810001
+      hextab           (0:15)char(1) defined hextabs;                   06820001
+ dcl  p                      ptr,                                       06830001
+      x                      bit(8) based(p);                           06840001
+ p = addr(c);                                                           06850001
+ return(                                                                06860001
+        hextab( substr(x,1,4) ) || hextab( substr(x,5,4) )              06870001
+       );                                                               06880001
+ end hexone;                                                            06890001
+                                                                        06900001
+ %page;                                                                 06910001
+ /*-----------------------------------*/                                06920001
+ /*    Read record from afpin         */                                06930001
+ /*-----------------------------------*/                                06940001
+ read_afpin: procedure;                                                 06950001
+ dcl     cc                  char(1)             based(xs);             06960001
+                                                                        06970001
+ read file(afpin) set(xs);                                              06980001
+ rec_length = recl(afpin);                                              06990001
+ if cc ª= '5A'x then do;                                                07000001
+   put skip edit('Record does not begin with x''5A''')(a);              07010001
+   put skip edit( quothex(hex(xs,8)) )(a);                              07020001
+   call pliretc(8);                                                     07030001
+   stop;                                                                07040001
+   end; /* do */                                                        07050001
+ re = xs + rec_length - 1;                                              07060001
+ xc = xs;                                                               07070001
+ sfp = xs + 1;                                                          07080001
+                                                                        07090001
+ end read_afpin;                                                        07100001
+                                                                        07110001
+ quothex: proc(s) returns( char(256) varying );                         07120001
+ dcl  s                      char(*) varying;                           07130001
+ return( 'X''' || s || '''' );                                          07140001
+ end quothex;                                                           07150001
+                                                                        07160001
+ %include word;                                                         07170001
+ %page;                                                                 07180001
+                                                                        07190001
+ /*-----------------------------------*/                                07200001
+ /*    Parse Parm information         */                                07210001
+ /*-----------------------------------*/                                07220001
+ parse_parm: procedure;                                                 07230001
+ dcl     w                   char(80)       varying;                    07240001
+ dcl     i                   fixed bin(15);                             07250001
+                                                                        07260001
+ i = index( parm, 'COMP(' );                                            07270001
+ if i>0 then do;                                                        07280001
+   w = substr(parm,i+5);                                                07290001
+   i = index(w,')');                                                    07300001
+   if i>0 then w=substr(w,1,i-1);                                       07310001
+   comp_type = w;                                                       07320001
+   end; /* COMP */                                                      07330001
+                                                                        07340001
+ end parse_parm;                                                        07350001
+                                                                        07360001
+ /*-----------------------------------*/                                07370001
+ /*    Convert unsigned 15-bit value  */                                07380001
+ /*      to fixed bin(31)             */                                07390001
+ /*-----------------------------------*/                                07400001
+ ubin: proc(h) returns( fixed bin(31) );                                07410001
+ dcl     h                   fixed bin(15);                             07420001
+ dcl     zw                  fixed bin(31),                             07430001
+       1 zs                  unaligned based( addr(zw) ),               07440001
+         5 fil               fixed bin(15),                             07450001
+         5 zh                fixed bin(15);                             07460001
+ zw = 0;                                                                07470001
+ zh = h;                                                                07480001
+ return(zw);                                                            07490001
+ end ubin;                                                              07500001
+                                                                        07510001
+ /********************************************************************/ 07520001
+ /*    Convert Number to Varying Character String                    */ 07530001
+ /*         (positive integers only)                                 */ 07540001
+ /********************************************************************/ 07550001
+ toc: procedure(w) options( reentrant )                                 07560001
+                   returns( char(10) varying );                         07570001
+ dcl     w                   fixed bin(31);                             07580001
+ dcl     c                   char(10) varying;                          07590001
+                                                                        07600001
+ select;                                                                07610001
+   when( w>999999999 ) put string(c) edit(w)(p'(10)9');                 07620001
+   when( w>99999999  ) put string(c) edit(w)(p'(9)9');                  07630001
+   when( w>9999999   ) put string(c) edit(w)(p'(8)9');                  07640001
+   when( w>999999    ) put string(c) edit(w)(p'(7)9');                  07650001
+   when( w>99999     ) put string(c) edit(w)(p'(6)9');                  07660001
+   when( w>9999      ) put string(c) edit(w)(p'(5)9');                  07670001
+   when( w>999       ) put string(c) edit(w)(p'(4)9');                  07680001
+   when( w>99        ) put string(c) edit(w)(p'(3)9');                  07690001
+   when( w>9         ) put string(c) edit(w)(p'(2)9');                  07700001
+   otherwise           put string(c) edit(w)(p'(1)9');                  07710001
+   end; /* select */                                                    07720001
+                                                                        07730001
+ return(c);                                                             07740001
+                                                                        07750001
+ end toc;                                                               07760001
+                                                                        07770001
+ %include ebcasc;                                                       07780001
+                                                                        07790001
+ end PATTERN;                                                           07800001
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 07810001
+//LKED.SYSLIB DD                                                        07820001
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    07830001
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        07840001
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      07850001
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       07860001
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  07870001
+//LKED.SYSIN DD *                                                       07880001
+ MODE AMODE(31)                                                         07890001
+ MODE RMODE(ANY)                                                        07900001
+ NAME PATTERN(R)                                                        07910001
+//* -------------- END OF LINKEDIT STEP ------------------------------* 07920001

@@ -1,0 +1,65 @@
+ /********************************************************************/ 00010000
+ /*      ASCII Codepage 819 to Metacode for Century and Helvetica    */ 00011000
+ /*      Translates the following characters:                        */ 00011100
+ /*      Character       ASCII  META                                 */ 00011200
+ /*      Left brace        7B    1A                                  */ 00011300
+ /*      Vertical bar      7C    1B                                  */ 00011400
+ /*      Right brace       7D    1C                                  */ 00011500
+ /*      Tilde             7E    1D                                  */ 00011600
+ /*      Cent sign         A2    60                                  */ 00011700
+ /*      Section symbol    A7    8F                                  */ 00011800
+ /*      Open dblquote     AA    FC                                  */ 00011900
+ /*      Degree sign       B0    7B                                  */ 00012000
+ /*      Plusorminus       B1    7C                                  */ 00012100
+ /*      Paragraph Symbol  B6    8E                                  */ 00012200
+ /*      Divide            B8    CB                                  */ 00012300
+ /*      Close dblquote    BA    FD                                  */ 00012400
+ /*      One-fourth        BC    1E                                  */ 00012500
+ /*      One-half          BD    1F                                  */ 00012600
+ /*      Prime             C2    FB                                  */ 00012700
+ /*      Dblprime          CD    22                                  */ 00012800
+ /*      Registered        D2    9D                                  */ 00012900
+ /*      Copyright         D3    9C                                  */ 00013000
+ /*      Close snglquote   A9    FA                                  */ 00013100
+ /*                                                                  */ 00013200
+ /*      Unavailable (translate to large dot (92) )                  */ 00013300
+ /*      60 A1 A3 A4 A5 A6 AA AB AC B2 B3 B5 B7 B8 B9 BA BB          */ 00013400
+ /*      BE BF C0-FF                                                 */ 00013500
+ /*                                                                  */ 00013600
+ /*      Modifications:                                              */ 00013700
+ /********************************************************************/ 00013800
+ DCL     META_TAB        (32)CHAR(8)        INIT                        00013900
+        ('9292929292929292'X ,    /* ASCII 00-07 */                     00014000
+         '9292929292929292'X ,    /* ASCII 08-0F */                     00014100
+         '1011121314151617'X ,    /* ASCII 10-17 */                     00014200
+         '18191A1B1C1D1E1F'X ,    /* ASCII 18-1F */                     00014300
+         '2021222324252627'X ,    /* ASCII 20-27 */                     00014400
+         '28292A2B2C2D2E2F'X ,    /* ASCII 28-2F */                     00014500
+         '3031323334353637'X ,    /* ASCII 30-37 */                     00014600
+         '38393A3B3C3D3E3F'X ,    /* ASCII 38-3F */                     00014700
+         '4041424344454647'X ,    /* ASCII 40-47 */                     00014800
+         '48494A4B4C4D4E4F'X ,    /* ASCII 48-4F */                     00014900
+         '5051525354555657'X ,    /* ASCII 50-57 */                     00015000
+         '58595A5B5C5D5E5F'X ,    /* ASCII 58-5F */                     00015100
+         '9261626364656667'X ,    /* ASCII 60-67 */                     00015200
+         '68696A6B6C6D6E6F'X ,    /* ASCII 68-6F */                     00015300
+         '7071727374757677'X ,    /* ASCII 70-77 */                     00015400
+         '78797A1A1B1C1D7F'X ,    /* ASCII 78-7F */                     00015500
+         '8081828384858687'X ,    /* ASCII 80-87 */                     00015600
+         '88898A8B8C8D8E8F'X ,    /* ASCII 88-8F */                     00015700
+         '9091929394959697'X ,    /* ASCII 90-97 */                     00015800
+         '98999A9B9C9D9E9F'X ,    /* ASCII 98-9F */                     00015900
+         'A09260929292928F'X ,    /* ASCII A0-A7 */                     00016001
+         'A8FAFC9292AD92AF'X ,    /* ASCII A8-AF */                     00016100
+         '7B7C9292B4928E92'X ,    /* ASCII B0-B7 */                     00016201
+         'CB92FD921E1F9292'X ,    /* ASCII B8-BF */                     00016300
+         '9292FB9292929292'X ,    /* ASCII C0-C7 */                     00016400
+         '9292929292229292'X ,    /* ASCII C8-CF */                     00016500
+         '92929D9C92929292'X ,    /* ASCII D0-D7 */                     00016600
+         '9292929292929292'X ,    /* ASCII D8-DF */                     00016700
+         '9292929292929292'X ,    /* ASCII E0-E7 */                     00016800
+         '992A929292929292'X ,    /* ASCII E8-EF */                     00016900
+         '9292929292929292'X ,    /* ASCII F0-F7 */                     00017000
+         '9292929292929292'X ),   /* ASCII F8-FF */                     00018000
+         META                CHAR(256)      defined META_TAB;           00019000
+                                                                        00020000

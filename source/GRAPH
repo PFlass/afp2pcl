@@ -1,0 +1,857 @@
+//FLASSF   JOB  (),'GRAPH',CLASS=J,MSGCLASS=Z,                          00010000
+//         NOTIFY=$                                                     00020000
+//*                                                                     00030000
+//*                                                                     00040000
+//********************************************************************* 00050000
+//*                PL/I COMPILE AND LINK                              * 00060000
+//********************************************************************* 00070000
+// EXEC PLIXCL,                                                         00080000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00090000
+//   PARM.LKED='LIST,MAP,XREF'                                          00100000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120013
+//PLI.SYSIN    DD *                                                     00130000
+ /* GRAPH - Print an AFP graphic (test program)                      */ 00140017
+                                                                        00150000
+ /********************************************************************/ 00160000
+ /*                                                                  */ 00170000
+ /*    Module ID: GRAPH                                              */ 00180000
+ /*                                                                  */ 00190000
+ /*    Author:    Peter Flass                                        */ 00200000
+ /*               NYS LBDC                                           */ 00210000
+ /*               Feb, 1998                                          */ 00220000
+ /*                                                                  */ 00230000
+ /*    Function:  Print an AFP graphic on a PCL printer.             */ 00240000
+ /*               (sample program)                                   */ 00250002
+ /*                                                                  */ 00260002
+ /********************************************************************/ 00270000
+                                                                        00280000
+ GRAPH: proc(parm) options(main);                                       00290000
+                                                                        00300000
+ dcl     parm                char(100)           varying;               00310000
+                                                                        00320000
+ dcl     afpin               record input;                              00330000
+ dcl     sysprint            print;                                     00340000
+ dcl     punch               record output                              00350003
+                             env(f recsize(80) );                       00360003
+                                                                        00370000
+ dcl     eof                 bit(1)              init('0'b);            00380000
+                                                                        00390000
+ dcl    (has_ext,has_pad)    bit(1);                                    00400000
+                                                                        00410000
+ dcl     rec_length          fixed bin(15);                             00420000
+ dcl     save_sf_len         fixed bin(15);                             00430000
+ dcl     sfi                 char(3);                                   00440000
+ dcl     j                   fixed bin(15);                             00450000
+ dcl     l                   fixed bin(15);                             00460000
+ dcl    (xs,xe,xc)           ptr;                                       00470000
+ dcl     re                  ptr;                                       00480000
+ dcl     raster_bytes        fixed bin(31);                             00490002
+ dcl     row_bytes           fixed bin(31);                             00491014
+ dcl     rp                  ptr;      /* -> Image Raster Data       */ 00500000
+ dcl    (p,q)                ptr;                                       00501015
+                                                                        00510002
+ dcl     pcl_rec             char(80);                                  00520002
+ dcl     pclo                fixed bin(15)                 init(-1);    00530002
+ dcl     pcl_work            char(200) varying;                         00540004
+ dcl     stat_cards          fixed bin(15)                 init(0);     00550002
+ dcl     x                   char(120) varying;                         00560005
+ dcl     comp_type           char(1)                       init('D');   00570014
+ dcl    (tot_in,tot_out)     fixed bin(31)                 init(0);     00580007
+ dcl     pos                 fixed bin(31);                             00581015
+ dcl     samp                char(120) varying;                         00582015
+                                                                        00590000
+ /*---------------------------------------------*/                      00600003
+ /* Data from IID sf - applies to entire image  */                      00610003
+ /*---------------------------------------------*/                      00620003
+ dcl    (sizx,sizy)          fixed bin(31);     /* Image size (bits) */ 00630003
+ dcl    (celx,cely)          fixed bin(31);     /* Default cell size */ 00640003
+ dcl     color               char(2);           /* Color - see codes */ 00650003
+                                                                        00660000
+ /*---------------------------------------------*/                      00670003
+ /* Data from ICP sf - applies to current cell  */                      00680003
+ /*---------------------------------------------*/                      00690003
+ dcl     read_icp            bit(1)              init('0'b);            00700000
+ dcl    (cell_xpos,cell_ypos)fixed bin(31)       init(  0 );            00710003
+ dcl    (cell_xsiz,cell_ysiz)fixed bin(31)       init( -1 );            00720003
+ dcl    (cell_xfil,cell_yfil)fixed bin(31)       init( -1 );            00730003
+                                                                        00740000
+ dcl     oneb                bit(8)              based,                 00750000
+         twob                bit(16)             based,                 00760000
+         threeb              bit(24)             based,                 00770000
+         fourb               bit(32)             based;                 00780000
+ dcl     zovl                char(32767)         based;                 00790000
+                                                                        00800000
+ /*    Structured field identification                               */ 00810000
+ dcl 1 save_sf_desc_info     char(66),                                  00820000
+     1 fil                   defined save_sf_desc_info,                 00830000
+       5 save_sf_id          char(5),                                   00840000
+       5 fil                 char(1),                                   00850000
+       5 save_sf_desc        char(60);                                  00860000
+                                                                        00870000
+ dcl   recl                  entry( * )       returns( fixed bin(31) ); 00880000
+ dcl   afptrace              entry( char(3) ) returns( char(48) );      00890000
+ dcl   pgalloc               entry( fixed bin(31) )                     00900000
+                             returns( ptr );                            00910000
+ dcl   hexdump               entry(                                     00920002
+                                    ptr,                                00930002
+                                    fixed bin(31),                      00940003
+                                    char(80) varying                    00950002
+                                  );                                    00960002
+                                                                        00970003
+ dcl     ESC                 char(1) static      init( '27'x );         00980003
+ dcl     CRLF                char(2) static      init( '0D0A'x);        00990004
+                                                                        01000000
+ %include builtins;                                                     01010000
+ %include lowercas;                                                     01020000
+                                                                        01030000
+ %page;                                                                 01040000
+ %include(afpsf);                                                       01050000
+ %include(afpimg);                                                      01060000
+ %page;                                                                 01070000
+ on endfile(afpin) eof='1'b;                                            01080000
+                                                                        01090000
+ call parse_parm;                                                       01100000
+                                                                        01110000
+ open file(afpin) input;                                                01120000
+ call read_afpin;            /* Read first afpin record              */ 01130000
+                                                                        01140000
+ do while(eof='0'b);                                                    01150000
+                                                                        01160000
+   save_sf_len = sff.sf_len;                                            01170000
+   sfi         = sff.sf_id;                                             01180000
+   save_sf_desc_info = afptrace( sfi );                                 01190000
+   has_ext = substr(sf_flag,1,1);                                       01200000
+   has_pad = substr(sf_flag,5,1);                                       01210000
+                                                                        01220000
+   /*---------------------------------*/                                01230000
+   /*    Point to data start and end  */                                01240000
+   /*---------------------------------*/                                01250000
+   xe = sfp + save_sf_len - 1;                                          01260000
+   sfp = addr(sff_end);                                                 01270000
+   if has_ext then sfp = sfp + sfel;                                    01280000
+   if has_pad then do;                                                  01290000
+     if xe->onebª='00'X then xe = xe - xe->oneb;                        01300000
+     else do;                                                           01310000
+       xe = xe - 1;                                                     01320000
+       xe = xe - xe->twob;                                              01330000
+       end; /* else */                                                  01340000
+     end; /* has_pad */                                                 01350000
+   ifp = sfp;                                                           01360003
+                                                                        01370000
+   /*---------------------------------*/                                01380000
+   /*    Process structured fields    */                                01390000
+   /*---------------------------------*/                                01400000
+   select( save_sf_id );                                                01410000
+                                                                        01420000
+     when( 'BPS  ' ) do;                                                01430000
+       /*-------------------------------------*/                        01440000
+       /*    Process 'BPS' structured field   */                        01450000
+       /*    (Begin Page Segment)             */                        01460000
+       /*-------------------------------------*/                        01470000
+                                                                        01480000
+       /* <ignore this structured field       */                        01490000
+                                                                        01500000
+       end; /* BPS */                                                   01510000
+                                                                        01520000
+     when( 'EPS  ' ) do;                                                01530000
+       /*-------------------------------------*/                        01540000
+       /*    Process 'EPS' structured field   */                        01550000
+       /*    (End Page Segment)               */                        01560000
+       /*-------------------------------------*/                        01570000
+                                                                        01580000
+       /* <ignore this structured field       */                        01590000
+                                                                        01600000
+       end; /* EPS */                                                   01610000
+                                                                        01620000
+     when( 'BIM  ' ) do;                                                01630000
+       /*-------------------------------------*/                        01640000
+       /*    Process 'BIM' structured field   */                        01650000
+       /*    (Begin Image)                    */                        01660000
+       /*-------------------------------------*/                        01670000
+                                                                        01680000
+       /* <ignore this structured field       */                        01690000
+                                                                        01700000
+       end; /* BIM */                                                   01710000
+                                                                        01720000
+     when( 'EIM  ' ) do;                                                01730000
+       /*-------------------------------------*/                        01740000
+       /*    Process 'EIM' structured field   */                        01750000
+       /*    (End Image)                      */                        01760000
+       /*-------------------------------------*/                        01770000
+                                                                        01780000
+       /* <ignore this structured field       */                        01790000
+                                                                        01800000
+       end; /* EIM */                                                   01810000
+                                                                        01820000
+     when( 'IOC  ' ) do;                                                01830000
+       /*-------------------------------------*/                        01840000
+       /*    Process 'IOC' structured field   */                        01850000
+       /*    (Image Output Control)           */                        01860000
+       /*-------------------------------------*/                        01870000
+       end; /* IOC */                                                   01880000
+                                                                        01890000
+     when( 'IID  ' ) begin;                                             01900000
+       /*-------------------------------------*/                        01910000
+       /*    Process 'IID' structured field   */                        01920000
+       /*    (Image Input Descriptor)         */                        01930000
+       /*-------------------------------------*/                        01940000
+       dcl size              fixed bin(31);                             01950000
+       dcl p                 ptr;                                       01960001
+       dcl s                 fixed bin(31);                             01970001
+                                                                        01980001
+       if iid_ppubx ª= 3000 |                                           01990000
+          iid_ppuby ª= 3000                                             02000000
+       then do;                                                         02010000
+         put skip edit('IID: Pels per unit base not 3000 - (',          02020003
+                       iid_ppubx, ',', iid_ppuby, ')' )                 02030003
+                      (a,p'zzz9',a,p'zzz9',a);                          02040003
+         return;                                                        02050000
+         end;                                                           02060000
+       size = ubin(iid_iszx) * ubin(iid_iszy);                          02070003
+       raster_bytes = (size+7)/8;      /* Convert to bytes           */ 02080002
+       raster_pages = (raster_bytes+4095) / 4096;/* Convert to pages */ 02090014
+       rp = PGALLOC(raster_pages);                                      02100014
+       sizx  = ubin(iid_iszx);         /* Save image size data       */ 02110003
+       sizy  = ubin(iid_iszy);                                          02120003
+       celx  = ubin(iid_dszx);                                          02130003
+       cely  = ubin(iid_dszy);                                          02140003
+       color = iid_col;                                                 02150002
+       p = rp;                                                          02160001
+       size = raster_bytes;                                             02170002
+       /* Zero out Bitmap Raster Storage */                             02171014
+       do while( size>0 );             /* Clear raster area          */ 02180001
+         if size>32760 then s=32760;                                    02190002
+         else               s=size;                                     02200001
+         substr(p->zovl,1,s) = repeat('00'x,s-1);                       02210001
+         size=size-s;                                                   02220001
+         p = p+s;                                                       02230001
+         end; /* do while */                                            02240001
+       end; /* IID */                                                   02250000
+                                                                        02260000
+     when( 'ICP  ' ) do;                                                02270000
+       /*-------------------------------------*/                        02280000
+       /*    Process 'ICP' structured field   */                        02290000
+       /*    (Image Cell Position)            */                        02300000
+       /*-------------------------------------*/                        02310000
+       cell_xpos = ubin(icp_xoff);     /* Save cell size and pos     */ 02320003
+       cell_ypos = ubin(icp_yoff);                                      02330003
+       cell_xsiz = ubin(icp_xsiz);                                      02340003
+       cell_ysiz = ubin(icp_ysiz);                                      02350003
+       cell_xfil = ubin(icp_xfill);                                     02360003
+       cell_yfil = ubin(icp_yfill);                                     02370003
+       read_icp = '1'b;                /* Indicate ICP read          */ 02380000
+       end; /* ICP */                                                   02390000
+                                                                        02400000
+     when( 'IRD  ' ) do;                                                02410000
+       /*-------------------------------------*/                        02420000
+       /*    Process 'IRD' structured field   */                        02430000
+       /*    (Image Raster Data)              */                        02440000
+       /*-------------------------------------*/                        02450000
+       call process_ird;                                                02460001
+       end; /* IRD */                                                   02470000
+                                                                        02480000
+     otherwise do;                                                      02490000
+       /*-------------------------------------*/                        02500000
+       /* Ignore unused structured fields     */                        02510000
+       /*-------------------------------------*/                        02520000
+       put skip edit('Unrecognized structured field ',                  02530000
+                     quothex(sfi) )(a);                                 02540000
+       end; /* otherwise */                                             02550000
+                                                                        02560000
+     end; /* select */                                                  02570000
+                                                                        02580000
+   /*---------------------------------*/                                02590000
+   /*    Point to next struc. field   */                                02600000
+   /*---------------------------------*/                                02610000
+   xc = xc + save_sf_len;                                               02620000
+   sfp = xc;                                                            02630000
+   if xc>=re then call read_afpin;                                      02640000
+                                                                        02650000
+   end; /* do while */                                                  02660000
+                                                                        02670002
+ row_bytes = (sizx+7)/8;                                                02671015
+                                                                        02672015
+ /*-----------------------------------*/                                02680002
+ /*  Shade Bitmap                     */                                02690015
+ /*-----------------------------------*/                                02700002
+ comp_type = ' '; /* ***** TEST ***** */                                02700117
+ /*   (***** TEST *****)                                                02700217
+  . call shade_bitmap(rp,raster_bytes,row_bytes,25);                    02700317
+  */                                                                    02700417
+                                                                        02704715
+ /*-----------------------------------*/                                02704815
+ /*  Dump Raster bitmap               */                                02704915
+ /*-----------------------------------*/                                02705015
+ /* call hexdump( rp, (raster_bytes), 'Bitmap raster data' );        */ 02710003
+                                                                        02720000
+ /*-----------------------------------*/                                02730003
+ /*  Graphics initialization          */                                02740003
+ /*-----------------------------------*/                                02750003
+ put string(pcl_work) edit( ESC||'E' )(a);       /* Reset            */ 02760005
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02770005
+ pcl_work = ESC || '*t300R';           /* Graphics resolution        */ 02780003
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02790003
+ pcl_work = ESC || '*r0F';             /* Same orientation as page   */ 02800003
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02810003
+ pcl_work = ESC || '*p450x600Y';       /* Position the Graphic       */ 02820015
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02830015
+                                                                        02840006
+ /*-----------------------------------*/                                02850003
+ /*  Bitmap initialization            */                                02860003
+ /*-----------------------------------*/                                02870003
+ pcl_work = ESC || '*r' ||             /* Number of rows             */ 02880003
+            toc(sizy)   || 'T';                                         02890003
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02900003
+ pcl_work = ESC || '*r' ||             /* Number of columns          */ 02910003
+            toc(sizx)   || 'S';                                         02920003
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02930003
+ pcl_work = ESC || '*r1A';             /* Start raster graphics      */ 02940003
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     02950003
+                                                                        02960007
+ /*-----------------------------------*/                                02970007
+ /*  Compression method               */                                02980007
+ /*-----------------------------------*/                                02990007
+ pcl_work = ESC || '*b';                                                03000007
+ if comp_type = ' ' then pcl_work = pcl_work || '0';                    03010007
+ if comp_type = 'R' then pcl_work = pcl_work || '1';                    03020007
+ if comp_type = 'D' then pcl_work = pcl_work || '3';                    03030007
+ pcl_work = pcl_work || 'M';                                            03040007
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03050007
+                                                                        03060003
+ /*-----------------------------------*/                                03070003
+ /*  Raster display                   */                                03080003
+ /*-----------------------------------*/                                03090003
+ begin;                                                                 03100003
+   dcl   comp_bytes          fixed bin(31);                             03130006
+   dcl   row                 char(row_bytes*2);                         03150014
+   dcl   skip_rows           fixed bin(31)       init(0);               03160007
+                                                                        03170003
+   row = repeat( '00'x, row_bytes*2-1 );                                03200007
+   p = rp;                                                              03210003
+   pos=1;                                                               03220007
+   do while(pos<raster_bytes);                                          03230007
+     tot_in  = tot_in  + row_bytes;                                     03240009
+     if substr(p->zovl,1,row_bytes) = repeat( '00'x, row_bytes-1 )      03250007
+     then do;                      /* Zero row           */             03260007
+       skip_rows = skip_rows + 1;                                       03270007
+       end; /* zero row */                                              03280007
+     else do;                                                           03290007
+       if skip_rows>0 then do;                                          03300007
+         pcl_work = ESC || '*b'    ||                                   03310007
+                    toc(skip_rows) || 'Y';                              03320007
+         call write_pcl( addr(pcl_work)+2,                              03330007
+                         length(pcl_work),                              03340007
+                         addr(ascii)                                    03350007
+                       );                                               03360007
+         skip_rows = 0;                                                 03370007
+         end; /* skip_rows */                                           03380007
+       call compress( comp_type, p, row_bytes, addr(row), comp_bytes ); 03390007
+       tot_out = tot_out + comp_bytes;                                  03400007
+       if comp_bytes = 0 then do;                                       03410009
+         pcl_work = ESC || '*b0W';       /* Repeat row (delta-row)   */ 03420009
+         call write_pcl( addr(pcl_work)+2,                              03430009
+                         length(pcl_work),                              03440009
+                         addr(ascii)                                    03450009
+                       );                                               03460009
+         end; /* comp_bytes=0 */                                        03470009
+       else do;                                                         03480009
+         pcl_work = ESC || '*b'    ||    /* Raster transfer # bytes  */ 03490009
+                    toc(comp_bytes) || 'W';                             03500009
+         call write_pcl( addr(pcl_work)+2,                              03510009
+                         length(pcl_work),                              03520009
+                         addr(ascii)                                    03530009
+                       );                                               03540009
+         call write_pcl( addr(row), comp_bytes, null() );               03550009
+         end; /* else */                                                03560009
+       end; /* else */                                                  03570007
+     p   = p + row_bytes;                                               03580007
+     pos = pos+row_bytes;                                               03590003
+     end; /* do pos */                                                  03600003
+   end; /* begin */                                                     03610003
+                                                                        03620003
+ pcl_work = ESC || '*rC';              /* End raster graphics        */ 03630003
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03640003
+                                                                        03691015
+ /*------%%%--------------------------*/                                03692015
+ /*  Sample Text                      */                                03693015
+ /*-----------------------------------*/                                03694015
+ pcl_work = ESC || '*p300x300Y';       /* Position the Text          */ 03695015
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03696015
+ samp = repeat('The quick brown fox jumped over the lazy dog ',10);     03697015
+ do j=1 to 30;                                                          03698015
+   pcl_work = substr(samp,1,120) || '0D0A'x;                            03699015
+   pcl_work = translate( pcl_work, ascii ) || '0D0A'x;                  03699115
+   call write_pcl( addr(pcl_work)+2, length(pcl_work), null() );        03699215
+   samp = substr(samp,5) || substr(samp,1,4);                           03699315
+   end;                                                                 03699415
+                                                                        03699615
+ put string(pcl_work) edit( ESC||'&l0H' )(a);    /* Page eject       */ 03699715
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03699815
+ put string(pcl_work) edit( ESC||'E' )(a);       /* Reset            */ 03699915
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     03700015
+                                                                        03701003
+ call write_pcl( null(), -1, null() ); /* Flush out last records     */ 03710003
+                                                                        03720007
+ return;                                                                03730000
+                                                                        03740000
+ %page;                                                                 03750009
+ /********************************************************************/ 03760009
+ /*   Compress image raster data row                                 */ 03770009
+ /********************************************************************/ 03780009
+ compress: proc( comp_type, p, row_bytes, q, comp_bytes );              03790009
+   dcl   comp_type           char(1);                                   03800009
+   dcl   p                   ptr;                                       03810009
+   dcl   row_bytes           fixed bin(31);                             03820009
+   dcl   q                   ptr;                                       03830009
+   dcl   comp_bytes          fixed bin(31);                             03840009
+                                                                        03850009
+   dcl  (pp,qq)              ptr;                                       03860009
+   dcl   bov                 char(32760)         based;                 03870009
+   dcl   i                   fixed bin(31);                             03880009
+                                                                        03890009
+   pp=p; qq=q;                         /* Copy input and output ptrs */ 03900011
+   select( comp_type );                                                 03910009
+     when( 'R' ) call rle;                                              03920009
+     when( 'D' ) call delta;                                            03930009
+     when( ' ' ) do;                                                    03940009
+       substr(qq->bov,1,row_bytes) = substr(pp->bov,1,row_bytes);       03950009
+       comp_bytes = row_bytes;                                          03960009
+       end; /* ' ' */                                                   03970009
+     otherwise do;                                                      03980009
+       put skip edit('Unknown compression type ',comp_type)(a);         03990009
+       stop;                                                            04000009
+       end;                                                             04010009
+     end; /* select */                                                  04020009
+                                                                        04030009
+   return;                                                              04040009
+                                                                        04050009
+ /*-----------------------*/                                            04060009
+ /* Delta row compression */                                            04070009
+ /*-----------------------*/                                            04080009
+ delta: proc;                                                           04090009
+   dcl  (pr,xp,lub)          ptr;                                       04100009
+   dcl   xb                  char(1)   based;                           04110009
+   dcl  (ofst,cnt)           fixed bin(31);                             04120009
+   dcl   b                   bit(8)    based;                           04130009
+   dcl   h                   bit(15);                                   04140009
+   dcl  (c,o)                fixed bin(15);                             04150009
+                                                                        04160009
+   pr = q + row_bytes;                 /* -> Prev row                */ 04170009
+   lub = pp;                           /* Last untreated byte        */ 04180011
+                                                                        04190009
+   do while('1'b);                                                      04200009
+     do while( pp<p+row_bytes );       /* Skip matching bytes        */ 04210009
+       if pp->xbª=pr->xb then leave;                                    04220009
+       pp = pp + 1;                                                     04230009
+       pr = pr + 1;                                                     04240009
+       end; /* do while */                                              04250009
+     if pp>=p+row_bytes then leave;    /* Rest of row the same       */ 04260009
+     xp = pp;                          /* Save addr(first_unmatched) */ 04270009
+     do while( pp<p+row_bytes );       /* Count unmatched bytes      */ 04280009
+       if pp->xb=pr->xb then leave;                                     04290009
+       pp = pp + 1;                                                     04300009
+       pr = pr + 1;                                                     04310009
+       end; /* do while */                                              04320009
+     /* Now: xp->first unmatched, pp->last unmatched + 1 */             04330009
+     cnt  = pp - xp;                   /* Number of bytes            */ 04340009
+     ofst = xp - lub;                  /* Offset of these bytes      */ 04350009
+     do while(cnt>0);                  /* Write changed info group   */ 04360009
+       qq->b = '00'bx;                 /* Init command byte          */ 04370009
+       if cnt>8 then c=8;              /* Set up count -             */ 04380009
+       else          c=cnt;            /*  8 bytes per command       */ 04390009
+       cnt = cnt - c;                  /* Decrement count here       */ 04400011
+       c = c - 1;                      /* 0 is count 1, etc.         */ 04410012
+       h = c;                                                           04420012
+       c = c + 1;                      /* Restore count              */ 04430012
+       substr(qq->b,1,3) = substr(h,13,3);                              04440009
+       if ofst>31 then o=31;           /* Offset 1-32 bytes          */ 04450011
+       else            o=ofst;                                          04460009
+       h = o;                                                           04470009
+       substr(qq->b,4,5) = substr(h,11,5);                              04480009
+       qq = qq + 1;                                                     04490009
+       if ofst=31 then do;             /* Need zero length byte      */ 04500012
+         qq->b = '00'bx;                                                04510011
+         qq = qq + 1;                                                   04520011
+         end; /* ofst=31 */                                             04530011
+       ofst = ofst - o;                                                 04540011
+       do while(ofst>0);               /* Offsets 32 and greater     */ 04550009
+         if ofst>255 then o=255;                                        04560010
+         else             o=ofst;                                       04570009
+         h = o;                                                         04580009
+         qq->b = substr(h,8,8);                                         04590009
+         qq = qq + 1;                                                   04600009
+         ofst = ofst - o;                                               04610009
+         end; /* do while */                                            04620009
+       if o=255 then do;               /* Need zero length byte      */ 04630012
+         qq->b = '00'bx;                                                04640011
+         qq = qq + 1;                                                   04650011
+         end; /* o=255 */                                               04660011
+       substr(qq->zovl,1,c) = substr(xp->zovl,1,c); /* Move 'c' bytes*/ 04670009
+       lub = pp;                       /* Set next position for ofst */ 04680011
+       qq = qq + c;                                                     04690009
+       xp = xp + c;                                                     04700009
+       end; /* do while */                                              04710009
+     end; /* do forever */                                              04720009
+                                                                        04730009
+   comp_bytes = qq - q;                /* Length of compressed data  */ 04740009
+                                       /*  0 = same as prev row      */ 04750009
+   /* Save previous row as new seed */                                  04760009
+   pr = q + row_bytes;                 /* -> Prev row                */ 04770009
+   substr(pr->bov,1,row_bytes) = substr(p->bov,1,row_bytes);            04780009
+   end delta;                                                           04790009
+                                                                        04800009
+ /*-----------------------*/                                            04810009
+ /* Run-length encoding   */                                            04820009
+ /*-----------------------*/                                            04830009
+ rle: proc;                                                             04840009
+   dcl   xb                  char(1)   based;                           04850009
+   dcl   xp                  ptr;                                       04860009
+                                                                        04870009
+   xp = pp;                                                             04880009
+   pp = pp + 1;                                                         04890009
+   do while( pp<p+row_bytes );                                          04900009
+     if pp->xb = xp->xb then pp = pp + 1;                               04910009
+     else call brun;         /* Build a run               */            04920009
+     end; /* do while */                                                04930009
+   call brun;                /* Build final run           */            04940009
+   comp_bytes = qq - q;      /* Number of compressed bytes*/            04950009
+   return;                                                              04960009
+                                                                        04970009
+ /* Build one 'run'         */                                          04980009
+ brun: proc;                                                            04990009
+   dcl  (n,xn)               fixed bin(15);                             05000009
+   dcl   xxx                 char(2)   based;                           05010009
+   dcl 1 xrl                 based,                                     05020009
+         5 xrll              char(1),                                   05030009
+         5 xrlc              char(1);                                   05040009
+   n = pp-xp;                                                           05050009
+   do until(n<=0);                                                      05060009
+     if n>256 then xn=255;                                              05070009
+     else          xn=n-1;                                              05080009
+     qq->xrlc = xp->xb;      /* Build one run             */            05090009
+     qq->xrll = substr( addr(xn)->xxx, 2, 1 );                          05100009
+     qq = qq + cstg( null()->xrl );                                     05110009
+     if qq>q+row_bytes then do;                                         05120009
+       put skip edit('RLE OVERFLOW')(a);                                05130009
+       stop;                                                            05140009
+       end;                                                             05150009
+     n = n - xn - 1;                                                    05160009
+     end; /* do until */                                                05170009
+   xp = pp;                                                             05180009
+   pp = pp + 1;                                                         05190009
+   end brun;                                                            05200009
+                                                                        05210009
+   end rle;                                                             05220009
+                                                                        05230009
+   end compress;                                                        05240009
+                                                                        05250009
+ %page;                                                                 05260000
+ /*------------------------------------------------------------------*/ 05270001
+ /*   Process Image raster data                                      */ 05280001
+ /*------------------------------------------------------------------*/ 05290001
+ process_ird: procedure;                                                05300001
+   dcl   i                   fixed bin(15);                             05310002
+                                                                        05320001
+   if cell_xsiz = -1 then cell_xsiz = sizx; /* Image cell size       */ 05330001
+   if cell_ysiz = -1 then cell_ysiz = sizy;                             05340001
+   if cell_xfil = ubin(-1)                  /* Fill rectangle size   */ 05350003
+   then cell_xfil = sizx;                                               05360003
+   if cell_yfil = ubin(-1)                                              05370003
+   then cell_yfil = sizy;                                               05380003
+                                                                        05390002
+   do i=1 to cell_ysiz;                /* Do all rows of cell bitmap */ 05400002
+     call bitblt( rp, ifp,                       /* src, dst bitmap  */ 05410002
+                  (i-1+cell_ypos)*sizx+cell_xpos,/* bitmap row pos   */ 05420002
+                  (i-1)*cell_xsiz,               /* cell row bit pos */ 05430002
+                  cell_xsiz );                   /* number of bits   */ 05440003
+     end; /* do while */                                                05450002
+                                                                        05460002
+   end process_ird;                                                     05470001
+                                                                        05480001
+ %page;                                                                 05490001
+ /********************************************************************/ 05500000
+ /*   shade_bitmap: Shade bitmap data                                */ 05510015
+ /********************************************************************/ 05520000
+ shade_bitmap: procedure( dst, count, row, pct );                       05530015
+   dcl   dst                 ptr;                                       05530115
+   dcl  (p,q)                ptr;                                       05530215
+   dcl   count               fixed bin(31);                             05530315
+   dcl   row                 fixed bin(31);                             05530415
+   dcl   rows                fixed bin(31);                             05530515
+   dcl  (r,c,z)              fixed bin(31);                             05530615
+   dcl  (pct,xpct)           fixed bin(15);                             05530715
+   dcl   bovl                bit(8)              based;                 05530815
+   dcl   covl                char(32760)         based;                 05530915
+   dcl  (oddr,oddc)          fixed bin(31);                             05531015
+                                                                        05531115
+   xpct = 100/pct;                                                      05531215
+   oddc = 0;                                                            05531315
+   oddr = xpct/2+1;                                                     05531415
+   p = dst;                                                             05531515
+   rows = count/row;                                                    05531615
+   do r=1 to rows;                                                      05531715
+     if mod(r+oddr,xpct)ª=0                                             05531815
+     then substr(p->covl,1,row) = repeat( '00'x, row-1 );               05531915
+     else do;                                                           05532015
+       if oddr=0 then oddr=xpct/2+1; else oddr=0;                       05532115
+       do c=1 to row*8;                                                 05532215
+         q = p+((c-1)/8); /* ->this byte */                             05532315
+         if mod( c+oddc, xpct )ª=0 then do;                             05532415
+           z =mod((c-1),8)+1;                                           05532515
+           substr( q->bovl, z, 1 )='0'b;                                05532615
+           end;                                                         05532715
+         end; /* do c */                                                05533115
+       if oddc=0 then oddc=xpct/2+1; else oddc=0;                       05533215
+       end; /* else */                                                  05533315
+     p = p + row;                                                       05533515
+     end; /* do r */                                                    05533615
+   end shade_bitmap;                                                    05533715
+                                                                        05533815
+ %page;                                                                 05533915
+ /********************************************************************/ 05534015
+ /*   BITBLT: Move one scan line                                     */ 05534115
+ /********************************************************************/ 05535015
+ bitblt: procedure( dst, src, dstbit, srcbit, count );                  05536015
+   dcl  (dst,src)            ptr;                                       05540001
+   dcl  (srcbit,dstbit)      fixed bin(31);                             05550002
+   dcl   count               fixed bin(31);                             05560002
+                                                                        05570001
+   dcl  (srcbyte,dstbyte)    fixed bin(31);                             05580001
+   dcl  (srcoff,dstoff)      fixed bin(15);                             05590002
+   dcl  (s,d)                ptr;                                       05600001
+   dcl   cnt                 fixed bin(31);                             05610002
+   dcl   c                   fixed bin(15);                             05620002
+   dcl   bovl                bit(32760)          based;                 05630002
+                                                                        05640000
+   if count<=0 then return;                                             05650001
+   cnt = count;                                                         05660002
+                                                                        05670003
+   srcbyte = srcbit/8;                                                  05680001
+   dstbyte = dstbit/8;                                                  05690001
+   srcoff = srcbit - (srcbyte*8) + 1;                                   05700002
+   dstoff = dstbit - (dstbyte*8) + 1;                                   05710002
+   s = src + srcbyte;                                                   05720002
+   d = dst + dstbyte;                                                   05730002
+                                                                        05740001
+   do while( cnt>0 );                                                   05750002
+     if cnt>32752 then c=32752;                                         05760002
+     else              c=cnt;                                           05770002
+     substr(d->bovl,dstoff,c) = substr(s->bovl,srcoff,c);               05780002
+     s = s + floor(c/8);                                                05790002
+     d = d + floor(c/8);                                                05800002
+     cnt = cnt - c;                                                     05810002
+     end; /* do while */                                                05820002
+                                                                        05830002
+   end bitblt;                                                          05840001
+                                                                        05850009
+ %page;                                                                 05860006
+ /********************************************************************/ 05870002
+ /*   Write data to pclout                                           */ 05880002
+ /********************************************************************/ 05890002
+ write_pcl: procedure(p,len,t) options( reentrant );                    05900002
+ dcl     p                   ptr;                                       05910002
+ dcl     len                 fixed bin(15);                             05920002
+ dcl     t                   ptr;                                       05930002
+                                                                        05940002
+ dcl     pcl_hdr             char(80)  static                           05950002
+              init( ('5A'x || 'JES328X' || '01DA'x || (70)'FF'x) );     05960002
+ dcl     buffer_init         char(3)   static                           05970002
+              init( '5A354D'x );                                        05980002
+ dcl     buffer_init_trnsp   char(3)   static                           05990002
+              init( '5A4A5B'x );                                        06000002
+                                                                        06010002
+ /*-------------------------*/                                          06020002
+ /* First time thru         */                                          06030002
+ /*-------------------------*/                                          06040002
+ if pclo<=0 then do;                                                    06050002
+   pcl_rec = buffer_init || (80)'00'x;                                  06060002
+   pclo=length(buffer_init)+1;                                          06070002
+   end; /* pclo=0 */                                                    06080002
+                                                                        06090002
+ /*-------------------------*/                                          06100002
+ /* Flush out last card(s)  */                                          06110002
+ /*-------------------------*/                                          06120002
+ if len<0 then do;                                                      06130002
+   if pclo>4 then call punch_one_card;                                  06140002
+   do while( mod(stat_cards,6)ª=0 );                                    06150002
+     call punch_one_card; /* punch empty cards */                       06160002
+     end; /* do while */                                                06170002
+   return;                                                              06180002
+   end; /* len<0 */                                                     06190002
+                                                                        06200002
+ /* All parameters called by value */                                   06210002
+ call move_data( (p), (len), (t) );                                     06220002
+                                                                        06230002
+ return;                                                                06240002
+                                                                        06250002
+ /*-------------------------*/                                          06260002
+ /* Data mover              */                                          06270002
+ /*-------------------------*/                                          06280002
+ move_data: procedure(atext,count,atab) options( reentrant );           06290002
+   dcl   atext               ptr,                                       06300002
+         text                char(32767)         based(atext);          06310002
+   dcl   count               fixed bin(15);                             06320002
+   dcl   atab                ptr,                                       06330002
+         ttab                char(256)           based(atab);           06340002
+   dcl  (char_in,char_out)   fixed bin(15);                             06350002
+   dcl   n                   fixed bin(15);                             06360002
+                                                                        06370002
+   char_in  = count;                                                    06380002
+   do while(char_in>0);                                                 06390002
+     char_out = 80-pclo+1;                                              06400002
+     n = min(char_in,char_out);                                         06410002
+     substr(pcl_rec,pclo,n) = substr(text,1,n);                         06420002
+     if atabª=null() then substr(pcl_rec,pclo,n) =                      06430002
+           translate( substr(pcl_rec,pclo,n), ttab );                   06440002
+     atext   = atext+n;                                                 06450002
+     char_in = char_in-n;                                               06460002
+     if n = char_out then call punch_one_card;                          06470002
+     else pclo=pclo+n;                                                  06480002
+     end; /* do while */                                                06490002
+                                                                        06500002
+   end move_data;                                                       06510002
+                                                                        06520002
+ punch_one_card: procedure options( reentrant );                        06530002
+   if mod(stat_cards,6) = 0                                             06540002
+   then write file(punch) from(pcl_hdr);                                06550003
+   stat_cards = stat_cards + 1;                                         06560002
+   write file(punch) from(pcl_rec);                                     06570002
+   pcl_rec = buffer_init || (80)'00'x;                                  06580002
+   pclo=length(buffer_init)+1;                                          06590002
+   end punch_one_card;                                                  06600002
+                                                                        06610002
+ end write_pcl;                                                         06620002
+                                                                        06630001
+ %page;                                                                 06640001
+ /********************************************************************/ 06650001
+ /*   Hexadecimal to character conversion                            */ 06660001
+ /********************************************************************/ 06670001
+                                                                        06680001
+ hex: proc(sp,n) returns( char(256) varying );                          06690000
+ dcl  sp                     ptr,                                       06700000
+      s                      char(4096) based(sp);                      06710000
+ dcl  n                      fixed bin(15);                             06720000
+ dcl  j                      fixed bin(15);                             06730000
+ dcl  ret                    char(256) varying   init('');              06740000
+ do j=1 to n;                                                           06750000
+   ret=ret||hexone( substr(s,j,1) );                                    06760000
+   end;                                                                 06770000
+ return(ret);                                                           06780000
+ end hex;                                                               06790000
+                                                                        06800000
+ hexone: proc(c) returns( char(2) );                                    06810000
+ dcl  c                      char;                                      06820000
+ dcl  hextabs                char(16) static     init                   06830000
+                       ('0123456789ABCDEF'),                            06840000
+      hextab           (0:15)char(1) defined hextabs;                   06850000
+ dcl  p                      ptr,                                       06860000
+      x                      bit(8) based(p);                           06870000
+ p = addr(c);                                                           06880000
+ return(                                                                06890000
+        hextab( substr(x,1,4) ) || hextab( substr(x,5,4) )              06900000
+       );                                                               06910000
+ end hexone;                                                            06920000
+                                                                        06930000
+ %page;                                                                 06940000
+ /*-----------------------------------*/                                06950000
+ /*    Read record from afpin         */                                06960000
+ /*-----------------------------------*/                                06970000
+ read_afpin: procedure;                                                 06980000
+ dcl     cc                  char(1)             based(xs);             06990000
+                                                                        07000000
+ read file(afpin) set(xs);                                              07010000
+ rec_length = recl(afpin);                                              07020000
+ if cc ª= '5A'x then do;                                                07030000
+   put skip edit('Record does not begin with x''5A''')(a);              07040000
+   put skip edit( quothex(hex(xs,8)) )(a);                              07050000
+   call pliretc(8);                                                     07060000
+   stop;                                                                07070000
+   end; /* do */                                                        07080000
+ re = xs + rec_length - 1;                                              07090000
+ xc = xs;                                                               07100000
+ sfp = xs + 1;                                                          07110000
+                                                                        07120000
+ end read_afpin;                                                        07130000
+                                                                        07140000
+ quothex: proc(s) returns( char(256) varying );                         07150000
+ dcl  s                      char(*) varying;                           07160000
+ return( 'X''' || s || '''' );                                          07170000
+ end quothex;                                                           07180000
+                                                                        07190000
+ %include word;                                                         07200000
+ %page;                                                                 07210000
+                                                                        07220000
+ /*-----------------------------------*/                                07230000
+ /*    Parse Parm information         */                                07240000
+ /*-----------------------------------*/                                07250000
+ parse_parm: procedure;                                                 07260000
+ dcl     w                   char(80)       varying;                    07270006
+ dcl     i                   fixed bin(15);                             07280006
+                                                                        07290006
+ i = index( parm, 'COMP(' );                                            07300006
+ if i>0 then do;                                                        07310006
+   w = substr(parm,i+5);                                                07320006
+   i = index(w,')');                                                    07330006
+   if i>0 then w=substr(w,1,i-1);                                       07340006
+   comp_type = w;                                                       07350006
+   end; /* COMP */                                                      07360006
+                                                                        07370000
+ end parse_parm;                                                        07380000
+                                                                        07390003
+ /*-----------------------------------*/                                07400003
+ /*    Convert unsigned 15-bit value  */                                07410003
+ /*      to fixed bin(31)             */                                07420003
+ /*-----------------------------------*/                                07430003
+ ubin: proc(h) returns( fixed bin(31) );                                07440003
+ dcl     h                   fixed bin(15);                             07450003
+ dcl     zw                  fixed bin(31),                             07460003
+       1 zs                  unaligned based( addr(zw) ),               07470003
+         5 fil               fixed bin(15),                             07480003
+         5 zh                fixed bin(15);                             07490003
+ zw = 0;                                                                07500003
+ zh = h;                                                                07510003
+ return(zw);                                                            07520003
+ end ubin;                                                              07530003
+                                                                        07540003
+ /********************************************************************/ 07550003
+ /*    Convert Number to Varying Character String                    */ 07560003
+ /*         (positive integers only)                                 */ 07570003
+ /********************************************************************/ 07580003
+ toc: procedure(w) options( reentrant )                                 07590003
+                   returns( char(10) varying );                         07600003
+ dcl     w                   fixed bin(31);                             07610003
+ dcl     c                   char(10) varying;                          07620003
+                                                                        07630003
+ select;                                                                07640003
+   when( w>999999999 ) put string(c) edit(w)(p'(10)9');                 07650003
+   when( w>99999999  ) put string(c) edit(w)(p'(9)9');                  07660003
+   when( w>9999999   ) put string(c) edit(w)(p'(8)9');                  07670003
+   when( w>999999    ) put string(c) edit(w)(p'(7)9');                  07680003
+   when( w>99999     ) put string(c) edit(w)(p'(6)9');                  07690003
+   when( w>9999      ) put string(c) edit(w)(p'(5)9');                  07700003
+   when( w>999       ) put string(c) edit(w)(p'(4)9');                  07710003
+   when( w>99        ) put string(c) edit(w)(p'(3)9');                  07720003
+   when( w>9         ) put string(c) edit(w)(p'(2)9');                  07730003
+   otherwise           put string(c) edit(w)(p'(1)9');                  07740003
+   end; /* select */                                                    07750003
+                                                                        07760003
+ return(c);                                                             07770003
+                                                                        07780003
+ end toc;                                                               07790003
+                                                                        07800003
+ %include ebcasc;                                                       07810003
+                                                                        07820003
+ end GRAPH;                                                             07830000
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 07840000
+//LKED.SYSLIB DD                                                        07850000
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    07860013
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        07861013
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      07870000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       07880013
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  07890000
+//LKED.SYSIN DD *                                                       07900000
+ MODE AMODE(31)                                                         07910000
+ MODE RMODE(ANY)                                                        07920000
+ NAME GRAPH(R)                                                          07930000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 07940000

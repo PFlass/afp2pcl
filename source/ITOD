@@ -1,0 +1,33 @@
+ /********************************************************************/ 00010000
+ /*    Convert Number to Decimal Varying Character String            */ 00020000
+ /********************************************************************/ 00030000
+ ITOD: proc(i) returns( char(12) varying );                             00040000
+ dcl     i                   fixed bin(31);                             00050000
+ dcl     w                   fixed bin(31);                             00060000
+ dcl     c                   char(12) varying;                          00070000
+ dcl     s                   char(1)  varying init('');                 00080000
+                                                                        00090000
+ w = i;                                                                 00100000
+ if w<0 then do;                                                        00110000
+   s='-';                                                               00120000
+   w=-w;                                                                00130000
+   end;                                                                 00140000
+ select;                                                                00150000
+   when( w>999999999 ) put string(c) edit(w)(p'(10)9');                 00160000
+   when( w>99999999  ) put string(c) edit(w)(p'(9)9');                  00170000
+   when( w>9999999   ) put string(c) edit(w)(p'(8)9');                  00180000
+   when( w>999999    ) put string(c) edit(w)(p'(7)9');                  00190000
+   when( w>99999     ) put string(c) edit(w)(p'(6)9');                  00200000
+   when( w>9999      ) put string(c) edit(w)(p'(5)9');                  00210000
+   when( w>999       ) put string(c) edit(w)(p'(4)9');                  00220000
+   when( w>99        ) put string(c) edit(w)(p'(3)9');                  00230000
+   when( w>9         ) put string(c) edit(w)(p'(2)9');                  00240000
+   otherwise           put string(c) edit(w)(p'(1)9');                  00250000
+   end; /* select */                                                    00260000
+                                                                        00270000
+ c=s||c;                                                                00280000
+ return(c);                                                             00290000
+                                                                        00300000
+ end ITOD;                                                              00310000
+                                                                        00320000
+                                                                        00330000

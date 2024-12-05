@@ -1,0 +1,87 @@
+ /* ---------------------------------------------------------------- */ 00001000
+ /*                SMF TYPE 30 (COMMON ADDRESS SPACE WORK) RECORD    */ 00002000
+ /* ---------------------------------------------------------------- */ 00003000
+                                                                        00004000
+ DCL  1  SMF30                     UNALIGNED BASED(SMFP),               00010000
+         5 SMF30FLG                BIT(8),                              00020000
+         5 SMF30RTY                BIT(8),                              00030000
+         5 SMF30TME                FIXED BIN(31),                       00040000
+         5 SMF30DTE                FIXED DEC(7),                        00050000
+         5 SMF30SID                CHAR(4),                             00060000
+         5 SMF30WID                CHAR(4),                             00070000
+         5 SMF30STP                FIXED BIN(15),                       00080000
+         5 SMF30SOF                FIXED BIN(31),                       00090000
+         5 SMF30SLN                FIXED BIN(15),                       00100000
+         5 SMF30SON                FIXED BIN(15),                       00110000
+         5 SMF30IOF                FIXED BIN(31),                       00120000
+         5 SMF30ILN                FIXED BIN(15),                       00130000
+         5 SMF30ION                FIXED BIN(15),                       00140000
+         5 SMF30UOF                FIXED BIN(31),                       00150000
+         5 SMF30ULN                FIXED BIN(15),                       00160000
+         5 SMF30UON                FIXED BIN(15),                       00170000
+         5 SMF30TOF                FIXED BIN(31),                       00180000
+         5 SMF30TLN                FIXED BIN(15),                       00190000
+         5 SMF30TON                FIXED BIN(15),                       00200000
+         5 SMF30COF                FIXED BIN(31),                       00210000
+         5 SMF30CLN                FIXED BIN(15),                       00220000
+         5 SMF30CON                FIXED BIN(15),                       00230000
+         5 SMF30AOF                FIXED BIN(31),                       00240000
+         5 SMF30ALN                FIXED BIN(15),                       00250000
+         5 SMF30AON                FIXED BIN(15),                       00251000
+         5 SMF30ROF                FIXED BIN(31),                       00252000
+         5 SMF30RLN                FIXED BIN(15),                       00253000
+         5 SMF30RON                FIXED BIN(15),                       00254000
+         5 SMF30POF                FIXED BIN(31),                       00255000
+         5 SMF30PLN                FIXED BIN(15),                       00256000
+         5 SMF30PON                FIXED BIN(15),                       00257000
+         5 SMF30OOF                FIXED BIN(31),                       00258000
+         5 SMF30OLN                FIXED BIN(15),                       00259000
+         5 SMF30OON                FIXED BIN(15),                       00259100
+         5 SMF30EOF                FIXED BIN(31),                       00259200
+         5 SMF30ELN                FIXED BIN(15),                       00259300
+         5 SMF30EON                FIXED BIN(15),                       00259400
+         5 SMF30EOR                FIXED BIN(15),                       00259500
+         5 SMF30RVD                CHAR(2),                             00259600
+         5 SMF30EOS                FIXED BIN(31);                       00259700
+         /* SUBSYSTEM SECTION                   */                      00260000
+ DCL  1  SMF30SUBS                 UNALIGNED BASED(SMFP),               00270000
+         5 SMF30TYP                FIXED BIN(15),                       00280000
+         5 SMF30RS1                CHAR(2),                             00290000
+         5 SMF30RVN                CHAR(2),                             00300000
+         5 SMF30PNM                CHAR(8);                             00310000
+         /* IDENTIFICATION SECTION              */                      00320000
+ DCL  1  SMF30IDEN                 UNALIGNED BASED(SMFP),               00330000
+         5 SMF30JBN                CHAR(8),                             00340000
+         5 SMF30PGM                CHAR(8),                             00341000
+         5 SMF30STM                CHAR(8),                             00342000
+         5 SMF30UIF                CHAR(8),                             00343000
+         5 SMF30JNM                CHAR(8),                             00344000
+         5 SMF30STN                FIXED BIN(15),                       00350000
+         5 SMF30CLS                CHAR(1),                             00360000
+         5 FIL1                    CHAR(1),                             00370000
+         5 SMF30PGN                FIXED BIN(15),                       00380000
+         5 SMF30JPT                FIXED BIN(15),                       00390000
+         5 SMF30AST                FIXED BIN(31),                       00400000
+         5 SMF30PPS                FIXED BIN(31),                       00410000
+         5 SMF30SIT                FIXED BIN(31),                       00420000
+         5 SMF30STD                FIXED DEC(7),                        00430000
+         5 SMF30RST                FIXED BIN(31),                       00440001
+         5 SMF30RSD                FIXED DEC(7),                        00450000
+         5 SMF30RET                FIXED BIN(31),                       00460001
+         5 SMF30RED                FIXED DEC(7),                        00470000
+         5 SMF30USR                CHAR(20),                            00480000
+         5 SMF30GRP                CHAR(8),                             00490000
+         5 SMF30RUD                CHAR(8),                             00500000
+         5 SMF30TID                CHAR(8),                             00510000
+         5 SMF30TSN                CHAR(8),                             00520000
+         5 SMF30PSN                CHAR(8);                             00530000
+         /* I/O ACTIVITY         SECTION NOT DEF*/                      00540000
+         /* COMPLETION SECTION                  */                      00550000
+ DCL  1  SMF30COMP                 UNALIGNED BASED(SMFP),               00560000
+         5 SMF30SCC                FIXED BIN(15),                       00570000
+         5 SMF30STI                BIT(15),                             00580002
+         5 SMF30ARC                FIXED BIN(31);                       00590000
+         /* PROCESSOR ACCOUNTING SECTION NOT DEF*/                      00600000
+         /* ACCOUNTING           SECTION NOT DEF*/                      00610000
+         /* STORAGE AND PAGING   SECTION NOT DEF*/                      00620000
+         /* OPERATOR             SECTION NOT DEF*/                      00630000

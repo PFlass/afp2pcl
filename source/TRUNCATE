@@ -1,0 +1,15 @@
+ %SKIP(3);                                                              00000010
+ TRUNCATE: PROCEDURE(STRING1,STRING2) RETURNS(CHAR(256) VARYING);       00000020
+ DCL     (STRING1,STRING2)         CHAR(*)   VARYING;                   00000030
+ DCL     STRING3                   CHAR(256) VARYING;                   00000040
+ DCL     (INDEX,SUBSTR,LENGTH)     BUILTIN;                             00000050
+ DCL     (I,J,K)                   FIXED BIN;                           00000060
+ I=LENGTH(STRING1);                                                     00000070
+ J=LENGTH(STRING2);                                                     00000080
+ IF I=0 THEN RETURN('');                                                00000090
+ IF J=0 THEN RETURN(STRING1);                                           00000100
+ DO K=I TO 1 BY -1 WHILE(INDEX(STRING2,SUBSTR(STRING1,K,1))>0); END;    00000110
+ IF K=0 THEN RETURN('');                                                00000120
+ STRING3=SUBSTR(STRING1,1,K);                                           00000130
+ RETURN(STRING3);                                                       00000140
+ END TRUNCATE;                                                          00000150

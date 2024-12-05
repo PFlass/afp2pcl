@@ -1,0 +1,215 @@
+//FLASSP   JOB  (),'LOADFONT',CLASS=J,MSGCLASS=Z,                       00010003
+//         NOTIFY=$                                                     00020000
+//********************************************************************* 00030000
+//*                PL/I COMPILE AND LINK                              * 00040000
+//********************************************************************* 00050000
+// EXEC PLIXCL,                                                         00060000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00070003
+//   PARM.LKED='LIST,MAP,XREF'                                          00080000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00090000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00100013
+//PLI.SYSIN    DD *                                                     00110000
+ /*      LOADFONT - Load HP Font                                     */ 00120000
+                                                                        00130000
+ /********************************************************************/ 00140000
+ /*                                                                  */ 00150000
+ /*      Module ID:   LOADFONT                                       */ 00160000
+ /*      Author:      Peter Flass -- NYS LBDC -- May, 1996           */ 00170000
+ /*      Function:    Load PCL font to HP Printer                    */ 00180000
+ /*      Modifications:                                              */ 00190004
+ /*        22 Jan 1997 - Add '5A'X and SCS transparency code      PRF*/ 00200004
+ /*                                                                  */ 00210004
+ /********************************************************************/ 00220000
+                                                                        00230000
+ loadfnt: procedure(parm) options(main);                                00240002
+                                                                        00250000
+ dcl     parm                char(100) varying;                         00260000
+                                                                        00270000
+ dcl     font                record input;                              00280000
+ dcl     sample              record input;                              00290000
+ dcl     punch               record output                              00300002
+                   env( FB RECSIZE(80) );                               00310002
+ dcl     sysprint            print;                                     00320000
+                                                                        00330000
+ dcl    (il,ol)              fixed bin(15);                             00340004
+ dcl     cardin              char(80)            varying;               00350004
+ dcl     cardout             char(80);                                  00360004
+ dcl     cwork               char(77);                                  00370006
+ dcl     sbuff               char(4096)          varying;               00380002
+ dcl     eof                 bit(1)              init('0'b);            00390000
+ dcl     nover               bit(1)              init('0'b);            00391010
+ dcl     font_num            char(5)             varying;               00400003
+ dcl     temp_num            char(5);                                   00410003
+ dcl     font_name           char(16);                                  00420002
+ dcl     esc_seq             char(64)            varying;               00430004
+ dcl     i                   fixed bin(15);                             00440000
+ dcl     num                 char(10)            static                 00450000
+                   init('0123456789');           /* EBCDIC Numerics  */ 00460000
+ dcl     ascii               char(10)            static                 00470000
+                   init('30313233343536373839'x);/* ASCII Numerics   */ 00480000
+                                                                        00490000
+ %include builtins;                                                     00500004
+                                                                        00510000
+ on endfile(font)   eof='1'b;                                           00520000
+ on endfile(sample) eof='1'b;                                           00530000
+                                                                        00540000
+ i = index( parm, 'NOVER' );                                            00550010
+ if iª=0 then nover='1'b;                                               00560011
+ i = index( parm, 'FONT(' );                                            00601010
+ if i=0 then do;                                                        00602010
+   put skip edit('No font number specified')(a);                        00603010
+   call pliretc(12);                                                    00604010
+   return;                                                              00605010
+   end;                                                                 00606010
+ parm=substr(parm,i+5);                                                 00610001
+ i = index( parm, ')' );                                                00620000
+ if i<2 | i>6 then do;                                                  00630000
+   put skip edit('Invalid font number specified')(a);                   00640000
+   call pliretc(12);                                                    00650002
+   return;                                                              00660000
+   end;                                                                 00670000
+ temp_num = '00000';                                                    00680003
+ substr(temp_num,7-i,i-1) = substr(parm,1,i-1);                         00690003
+ font_num = substr(parm,1,i-1);                                         00700003
+ if verify(temp_num,num)ª=0 then do;                                    00710003
+   put skip edit('Non-numeric font number specified')(a);               00720000
+   call pliretc(12);                                                    00730002
+   return;                                                              00740000
+   end;                                                                 00750000
+ if temp_num = '00000' | temp_num>'32767' then do;                      00760003
+   put skip edit('Font number out of range - ',font_num)(a);            00770000
+   call pliretc(12);                                                    00780002
+   return;                                                              00790000
+   end;                                                                 00800000
+ font_num = translate(font_num,ascii,num);                              00810002
+                                                                        00820000
+ open file(font) input,                                                 00830000
+      file(punch) output;                                               00840000
+                                                                        00850000
+ cwork = repeat( '00'x, 76 );                                           00860007
+ cardout = '5A354D'x || repeat( '00'x, 76 );                            00870004
+ ol = 1;                                                                00880004
+                                                                        00890004
+ /*-----------------------------------*/                                00900000
+ /* <esc>*c<font_num>D                */                                00910000
+ /* FONT ID <font_num>                */                                00920000
+ /*-----------------------------------*/                                00930000
+ esc_seq = '1B2A63'x || font_num || '44'x;                              00940004
+ call pnch( esc_seq );                                                  00950004
+                                                                        00960000
+ read file(font) into(cardin);                                          00970004
+ fp = addr(cardin) + 6 + 2;            /* Point to font hdr          */ 00980004
+ font_name = font_desc.font_name;      /* Font name (ASCII)          */ 00990003
+ do while( ªeof);                                                       01000000
+   call pnch( cardin );                                                 01010007
+   read file(font) into(cardin);                                        01020004
+   end; /* do while */                                                  01030000
+                                                                        01040000
+ close file(font);                                                      01050000
+                                                                        01060004
+ /*-----------------------------------*/                                01070000
+ /* <esc>*c5F                         */                                01080000
+ /* FONT CONTROL 5 (=permanent)       */                                01090000
+ /*-----------------------------------*/                                01100000
+ esc_seq = '1B2A633546'x;                                               01110004
+ call pnch( esc_seq );                                                  01120004
+                                                                        01130000
+ /*-----------------------------------*/                                01140000
+ /* <esc>E<esc>(<font_num>X           */                                01150003
+ /* RESET                             */                                01160000
+ /* DESIGNATE FONT <font_num> PRIMARY */                                01170000
+ /*-----------------------------------*/                                01180000
+ esc_seq = '1B451B28'x || font_num || '58'x;                            01190004
+ call pnch( esc_seq );                                                  01200004
+                                                                        01201010
+ if nover='0'b then do;                                                 01201110
+   /*-----------------------------------*/                              01202010
+   /* Print font name                   */                              01204010
+   /*-----------------------------------*/                              01205010
+   esc_seq = '0D0A0D0A'x || font_num ||                                 01210010
+             '2020'x || font_name || '0D0A0D0A'x;                       01211010
+   call pnch( esc_seq );                                                01220010
+                                                                        01240010
+   eof = '0'b;                                                          01250010
+   open file(sample) input;                                             01260010
+   read file(sample) into(sbuff);                                       01270010
+   do while( ªeof);                                                     01280010
+     sbuff = sbuff || '0D0A'x;                                          01290010
+     do while( length(sbuff)>0 );                                       01300010
+       i = length(sbuff);                                               01310010
+       if i>80 then i=80;                                               01320010
+       cardin=substr(sbuff,1,i);                                        01330010
+       sbuff=substr(sbuff,i+1);                                         01340010
+       call pnch( cardin );                                             01350010
+       end; /* do while */                                              01360010
+       read file(sample) into(sbuff);                                   01370010
+     end; /* do while */                                                01380010
+                                                                        01390010
+   close file(sample);                                                  01400010
+   end; /* ªNOVER */                                                    01401010
+                                                                        01410002
+ /*-----------------------------------*/                                01420002
+ /* <esc>E                            */                                01430003
+ /* RESET                             */                                01440002
+ /*-----------------------------------*/                                01450002
+ esc_seq = '1B45'x;                                                     01460004
+ call pnch( esc_seq );                                                  01470004
+                                                                        01480007
+ /*-----------------------------------*/                                01481010
+ /* Force out last record             */                                01483010
+ /*-----------------------------------*/                                01484010
+ if ol>1 then do;                                                       01490007
+   substr(cardout,4,length(cwork)) = cwork;                             01500007
+   write file(punch) from(cardout);                                     01510007
+   end; /* ol */                                                        01520007
+                                                                        01530004
+ close file(punch);                                                     01540002
+                                                                        01550000
+ return;                                                                01560000
+                                                                        01570000
+ %page;                                                                 01571010
+ pnch: procedure(str);                                                  01580007
+                                                                        01590004
+ dcl     str                 char(32760)         varying;               01600007
+ dcl     l                   fixed bin(15);                             01610007
+                                                                        01620007
+ il = 1;                                                                01630008
+ l = length(str)+1;                                                     01640007
+ do while( il<=length(str) );                                           01650007
+   /* record length>80 */                                               01660004
+   if l-il >= (78-ol) then do;                                          01670007
+     substr(cwork,ol,78-ol) = substr(str,il,78-ol);                     01680008
+     il=il+(78-ol);                                                     01690006
+     substr(cardout,4,length(cwork)) = cwork;                           01700007
+     write file(punch) from(cardout);                                   01710007
+     cardout = '5A354D'x || repeat( '00'x, 76 );                        01720007
+     cwork = repeat( '00'x, 76 );                                       01730006
+     ol=1;                                                              01740004
+     end;                                                               01750004
+   /* record length<=80 */                                              01760004
+   else do;                                                             01770004
+     substr(cwork,ol,l-il) = substr(str,il,l-il);                       01780008
+     ol=ol+l-il;                                                        01790007
+     il=l;                                                              01800007
+     end;                                                               01810004
+   end; /* do while */                                                  01820004
+                                                                        01830004
+ return;                                                                01840004
+                                                                        01850004
+ end pnch;                                                              01860007
+                                                                        01870004
+                                                                        01880000
+ %include pclfdesc;                                                     01890003
+                                                                        01900003
+ end loadfnt;                                                           01910002
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 01920000
+//LKED.SYSLIB DD                                                        01930000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        01951012
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      01960000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       01970012
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  01980000
+//LKED.SYSIN DD *                                                       01990000
+ MODE AMODE(31)                                                         02000000
+ MODE RMODE(ANY)                                                        02010000
+ NAME LOADFONT(R)                                                       02020000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 02030000

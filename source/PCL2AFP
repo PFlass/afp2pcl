@@ -1,0 +1,2205 @@
+//FLASSP   JOB  (),'PCL2AFP',CLASS=J,MSGCLASS=Z,                        00010082
+//         NOTIFY=$                                                     00020000
+//********************************************************************* 00030000
+//*                PL/I COMPILE AND LINK                              * 00040000
+//********************************************************************* 00050000
+// EXEC PLIXCL,                                                         00060000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)', LIST,MAP',        00070099
+//   PARM.LKED='LIST,MAP'                                               00080000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00090000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00100000
+//             DD DSN=FLASS.PF.PLIMAC,DISP=SHR                          00110000
+//PLI.SYSIN    DD *                                                     00120000
+ /* PCL2AFP: Convert PCL font to 300-pel AFP font                    */ 00130000
+                                                                        00140000
+ PCL2AFP: procedure(parm) options(main);                                00150000
+                                                                        00160000
+ /*------------------------------------------------------------------*/ 00170000
+ /*                                                                  */ 00180000
+ /*      Module ID: PCL2AFP                                          */ 00190000
+ /*                                                                  */ 00200000
+ /*      Function: Convert PCL font to 300-pel AFP font.             */ 00210000
+ /*                                                                  */ 00220000
+ /*      Author:   Peter Flass -- NYS LBDC                           */ 00230000
+ /*                Jan, 1997                                         */ 00240000
+ /*                                                                  */ 00250000
+ /*      Restrictions:                                               */ 00260000
+ /*                Character bitmap display doesn't work correctly.  */ 00270000
+ /*                                                                  */ 00280000
+ /*      Modifications:                                              */ 00290000
+ /*        02/09/27 - Add 'max descender'                        PRF */ 00300099
+ /*        00/06/27 - Page headings.                             PRF */ 00300199
+ /*        99/10/19 - Bitmap rotation.                           PRF */ 00301099
+ /*        99/06/24 - Add bitmaps to output.                     PRF */ 00310087
+ /*        98/12/22 - Fix entries for 'fudged' characters.       PRF */ 00320087
+ /*        98/12/21 - Correct metrics for a-sp, b-sp, and c-sp   PRF */ 00330087
+ /*        98/07/23 - Do R2P() calculations in FLOAT.            PRF */ 00340087
+ /*        98/05/05 - Correct relative metrics+misc.             PRF */ 00350087
+ /*        98/03/25 - Print GCID for character                   PRF */ 00360087
+ /*        97/02/26 - Default var space incr = 1/2 figure space  PRF */ 00370087
+ /*                                                                  */ 00380000
+ /*------------------------------------------------------------------*/ 00390000
+                                                                        00400000
+ %dcl    ESC_CHAR            char;                                      00410000
+ %ESC_CHAR = '''1B''x';                                                 00420000
+                                                                        00430000
+ dcl     parm                char(100) varying;                         00440000
+                                                                        00450000
+ dcl     sysprint            print;                                     00460000
+ dcl     sysin               record input;                              00470000
+ dcl     font                record input;                              00480000
+ dcl     fontlist            print;                                     00490000
+ dcl     afpfont             record output;                             00500000
+                                                                        00510000
+ dcl     rc                  fixed bin(31);                             00520000
+ dcl     b                   fixed bin(15);                             00530000
+ dcl     esc_seq             char(256) varying;                         00540000
+ dcl     card_in             char(80)  varying;                         00550000
+ dcl     angle               fixed bin(15);                /*PF991019*/ 00560087
+                                                                        00570000
+ dcl   1 card_data           unaligned,                                 00580000
+         5 mem_name          char(8),                                   00590000
+         5 afp_mem           char(8),                                   00600000
+         5 face_name         char(32),                                  00610000
+         5 point_size        char(2),                                   00620000
+         5 hgt               char(4),                                   00630000
+         5 emspc             char(4),                                   00640000
+         5 varspc            char(4),                                   00650000
+         5 lsp               char(4),                                   00660000
+         5 wsp               char(4),                                   00670000
+         5 fsp               char(4);                                   00680000
+                                                                        00690000
+ dcl     fng_bufsize         fixed bin(31);                             00700073
+ dcl     sysin_eof           bit(1)              init('0'b);            00710000
+ dcl     first_page          bit(1)              init('1'b);            00720000
+ dcl    (metrics,charact)    bit(1)              init('0'b);            00730000
+ dcl     first_time_font     bit(1);                                    00740000
+ dcl     print_char_data     bit(1)              init('0'b);            00750000
+ dcl     page_num            fixed dec(5);                              00751099
+ dcl     font_name           char(16);                                  00752099
+                                                                        00760000
+ /*-----------------------------------*/                                00770000
+ /* Codepage Character Set -          */                                00780000
+ /*   code point is index to codepg   */                                00790000
+ /*   cp_rel points to FNI entry      */                                00800000
+ /*     (ordered by GCID name)        */                                00810000
+ /*-----------------------------------*/                                00820000
+ dcl     cp_char_count       fixed bin(15)       init(0);               00830000
+ dcl   1 codepg       (0:255)char(8);                                   00840000
+ dcl   1 cp_rel       (0:255)fixed bin(15)       init( (256)0 );        00850000
+                                                                        00860000
+ /*-----------------------------------*/                                00870000
+ /* Pointers to AFP data structures   */                                00880000
+ /*-----------------------------------*/                                00890000
+ dcl     bfnp                ptr;                                       00900000
+ dcl     fndp                ptr;                                       00910000
+ dcl     fncp                ptr;                                       00920000
+ dcl    (fnmp,fnmc)          ptr;                                       00930085
+ dcl     fnop                ptr;                                       00940000
+ dcl     fnpp                ptr;                                       00950000
+ dcl     fni0p               ptr;                                       00960000
+ dcl     fni90p              ptr;                                       00970000
+ dcl    (fngp,fngc)          ptr;                                       00980076
+ dcl     enfp                ptr;                                       00990000
+                                                                        01000000
+ dcl     bfnl                fixed bin(15);                             01010000
+ dcl     fndl                fixed bin(15);                             01020000
+ dcl     fncl                fixed bin(15);                             01030000
+ dcl     fnml                fixed bin(15);                             01040000
+ dcl     fnol                fixed bin(15);                             01050000
+ dcl     fnpl                fixed bin(15);                             01060000
+ dcl     fnil                fixed bin(15);                             01070000
+ dcl     enfl                fixed bin(15);                             01090000
+ dcl     fng_offset          fixed bin(31)       init(0);  /*PF990715*/ 01100085
+ dcl     FF_FNM_index        fixed bin(15)       init(0);  /*PF990715*/ 01110085
+                                                                        01120000
+                                                           /*PF990624*/ 01130072
+ /* Character bitmap buffers are chained                     PF990624*/ 01140072
+ dcl   1 fng_buffer_chain    based,                        /*PF990624*/ 01150072
+         5 fng_next          ptr,                          /*PF990624*/ 01160072
+         5 fng_length        fixed bin(31),                /*PF990624*/ 01170072
+         5 fng_buffer        char(0);                      /*PF990624*/ 01180072
+                                                                        01190072
+ /*-----------------------------------*/                                01200000
+ /* Font-wide character metrics       */                                01210000
+ /*-----------------------------------*/                                01220000
+ dcl     first_character     bit(1)              init('1'b);            01230000
+ dcl     font_points         fixed bin(15);                             01240000
+ dcl     font_inc            fixed bin(15);                             01250000
+ dcl     font_asp            fixed bin(15);                             01260000
+ dcl     font_msp            fixed bin(15);                             01270000
+ dcl     font_char_count     fixed bin(15);                /*PF980505*/ 01280000
+ dcl     font_mbe            fixed bin(15);                /*PF980722*/ 01290000
+ dcl     font_blo            fixed bin(15);                /*PF980722*/ 01300000
+ dcl     font_mxa            fixed bin(15);                /*PF020930*/ 01301099
+ dcl     font_mxd            fixed bin(15);                /*PF020927*/ 01302099
+ dcl     font_uinc           bit(1);                                    01310000
+ dcl     font_uasp           bit(1);                                    01320000
+ dcl     font_ublo           bit(1);                                    01330000
+ dcl     font_kern           bit(1);                                    01340000
+                                                                        01350000
+ %page;                                                                 01360000
+ /*-----------------------------------*/                                01370072
+ /* PCL Miscellaneous Font Descriptors*/                                01380072
+ /*-----------------------------------*/                                01390072
+ dcl     fdesc          (0:2)char(16) varying    init                   01400072
+         ( 'ASCII-7', 'ASCII-8', 'PC-8' );                              01410000
+ dcl     orien          (0:1)char(16) varying    init                   01420000
+         ( 'Portrait', 'Landscape' );                                   01430000
+ dcl     spacing        (0:1)char(16) varying    init                   01440000
+         ( 'Fixed', 'Proportional' );                                   01450000
+ dcl     sty            (0:1)char(16) varying    init                   01460000
+         ( 'Upright', 'Italic' );                                       01470000
+                                                                        01480000
+ /*-----------------------------------*/                                01490072
+ /* PCL-AFP Weight Conversions        */                                01500072
+ /*-----------------------------------*/                                01510072
+ dcl     weight        (-7:7)char(16) varying    init                   01520000
+         (                                                              01530000
+          'Ultra Thin',     /* -7 */                                    01540000
+          '',               /* -6 */                                    01550000
+          'Thin',           /* -5 */                                    01560000
+          'Ultra Light',    /* -4 */                                    01570000
+          'Light',          /* -3 */                                    01580000
+          '',               /* -2 */                                    01590000
+          '',               /* -1 */                                    01600000
+          'Medium',         /*  0 */                                    01610000
+          'Medium',         /* +1 */                                    01620000
+          'Demi Bold',      /* +2 */                                    01630000
+          'Bold',           /* +3 */                                    01640000
+          'Ultra Bold',     /* +4 */                                    01650000
+          'Black',          /* +5 */                                    01660000
+          '',               /* +6 */                                    01670000
+          'Ultra Black'     /* +7 */                                    01680000
+         );                                                             01690000
+ dcl     wgt           (-7:7)bit(8) unaligned    init                   01700000
+         (                                                              01710000
+          '00000001'b,      /* -7 */                                    01720000
+          '00000001'b,      /* -6 */                                    01730000
+          '00000010'b,      /* -5 */                                    01740000
+          '00000010'b,      /* -4 */                                    01750000
+          '00000011'b,      /* -3 */                                    01760000
+          '00000100'b,      /* -2 */                                    01770000
+          '00000100'b,      /* -1 */                                    01780000
+          '00000101'b,      /*  0 */                                    01790000
+          '00000111'b,      /* +1 - kludge for Xerox fonts */           01800000
+          '00000110'b,      /* +2 */                                    01810000
+          '00000111'b,      /* +3 */                                    01820000
+          '00001000'b,      /* +4 */                                    01830000
+          '00001000'b,      /* +5 */                                    01840000
+          '00001001'b,      /* +6 */                                    01850000
+          '00001001'b       /* +7 */                                    01860000
+         );                                                             01870000
+                                                                        01880000
+ /*-----------------------------------*/                                01890072
+ /* PCL-AFP Width Conversions         */                                01900072
+ /*-----------------------------------*/                                01910072
+ dcl     width         (-5:3)char(16) varying    init                   01920000
+         (                                                              01930000
+          'Ultra Compressed', /* -5 */                                  01940000
+          'Extra Compressed', /* -4 */                                  01950000
+          'Compressed',       /* -3 */                                  01960000
+          'Condensed',        /* -2 */                                  01970000
+          '',                 /* -1 */                                  01980000
+          'Normal',           /*  0 */                                  01990000
+          '',                 /*  1 */                                  02000000
+          'Expanded',         /*  2 */                                  02010000
+          'Extra Expanded'    /*  3 */                                  02020000
+         );                                                             02030000
+ dcl     wid           (-5:3)bit(8) unaligned    init                   02040000
+         (                                                              02050000
+          '00000001'b,        /* -5 */                                  02060072
+          '00000001'b,        /* -4 */                                  02070072
+          '00000010'b,        /* -3 */                                  02080072
+          '00000011'b,        /* -2 */                                  02090072
+          '00000011'b,        /* -1 */                                  02100072
+          '00000101'b,        /*  0 */                                  02110072
+          '00000101'b,        /*  1 */                                  02120072
+          '00000111'b,        /*  2 */                                  02130072
+          '00001000'b         /*  3 */                                  02140072
+         );                                                             02150000
+                                                                        02160000
+ /*-----------------------------------*/                                02170072
+ /* PCL Font Format Descriptors       */                                02180099
+ /*-----------------------------------*/                                02190072
+ dcl     fmt           (0:21)char(20) varying    init                   02200000
+         (                                                              02210000
+          'PCL Bitmap',          /*  0    */                            02220000
+          '', '', '', '', '',    /* 1-5   */                            02230072
+          '', '', '', '',        /* 6-9   */                            02240072
+          'Intellifount Bound',  /* 10    */                            02250000
+          'Intellifount Unound', /* 11    */                            02260000
+          '', '', '',            /* 12-14 */                            02270072
+          'TrueType Scalable',   /* 15    */                            02280000
+          '', '', '', '',        /* 16-19 */                            02290072
+          'Reso. Spec. Bitmap',  /* 20    */                            02300000
+          '***Invalid***'        /* 21+   */                            02310000
+         );                                                             02320000
+                                                                        02330000
+ /*-----------------------------------*/                                02340072
+ /* PCL Symbol Set Definitions        */                                02350072
+ /*-----------------------------------*/                                02360072
+ dcl     sset          (0:50)char(36) varying    init                   02370000
+         (                                                              02380000
+          '0001 HP Math-7',                                             02390000
+          '0002 HP Line Draw',                                          02400000
+          '0004 ISO 60: Norwegian-1',                                   02410000
+          '0036 ISO 61: Norewgian-2',                                   02420000
+          '0005 HP Roman Extensions',                                   02430000
+          '0037 ISO 4: UK English',                                     02440000
+          '0006 ISO 25: French',                                        02450000
+          '0038 ISO 69: French',                                        02460000
+          '0007 HP German',                                             02470000
+          '0039 ISO 21: German',                                        02480000
+          '0263 HP Greek-8',                                            02490000
+          '0009 ISO 15: Italian',                                       02500000
+          '0011 ISO 14: JIS ASCII',                                     02510000
+          '0075 ISO 57: Chinese',                                       02520000
+          '0045 Technical-7',                                           02530000
+          '0269 HP Math-8',                                             02540000
+          '0014 ISO 100: Latin-1',                                      02550000
+          '0015 OCR A',                                                 02560000
+          '0047 OCR B',                                                 02570000
+          '0019 ISO 11: Swedish',                                       02580000
+          '0051 HP Spanish',                                            02590000
+          '0083 ISO 17: Spanish',                                       02600000
+          '0115 ISO 10: Spanish',                                       02610000
+          '0147 ISO 16: Portuguese',                                    02620000
+          '0179 ISO 84: Portuguese',                                    02630000
+          '0211 ISO 85: Spanish',                                       02640000
+          '0021 ISO 6: ASCII',                                          02650000
+          '0053 HP Legal',                                              02660000
+          '0085 ISO 2: Int''l Ref Ver',                                 02670000
+          '0245 OEM-1',                                                 02680000
+          '0277 HP Roman-8',                                            02690000
+          '0341 PC-8',                                                  02700000
+          '0373 PC-8 D/N',                                              02710000
+          '0501 HP Pi Font',                                            02720000
+          'End'                                                         02730000
+         );                                                             02740000
+                                                                        02750000
+ %page;                                                                 02760000
+ dcl     PDSMEM              entry( char(8), char(8), char(8) )         02770000
+                             returns( fixed bin(31) );                  02780000
+ dcl     AJFCB               entry(*) returns(ptr);                     02790073
+                                                                        02800000
+ dcl     strip               entry                                      02810000
+                ( char(*) varying, char(*) varying, char(*) varying );  02820000
+                                                                        02830000
+ dcl     HEXDUMP             entry                                      02840082
+                ( ptr, fixed bin(31), char(*) varying );                02850079
+                                                                        02860000
+ dcl     vlocate             entry( file, fixed bin(31) )               02870000
+                             returns( ptr );                            02880000
+                                                                        02890000
+ dcl     Xalloc              entry( fixed bin(31) )                     02900086
+                             returns( ptr );                            02910000
+ dcl     Xfree               entry( ptr );                              02920000
+ dcl     Xstats              entry returns( ptr );                      02930000
+ dcl     BMROT               entry( ptr,                   /*PF991019*/ 02940087
+                                    fixed bin(31),         /*PF991019*/ 02950087
+                                    fixed bin(31),         /*PF991019*/ 02960087
+                                    fixed bin(15) )        /*PF991019*/ 02970087
+                             returns( ptr );               /*PF991019*/ 02980087
+                                                                        02990000
+ /*-----------------------------------*/                                03000073
+ /* Storage Statistics                */                                03010073
+ /*-----------------------------------*/                                03020073
+ dcl     sbp                 ptr,                                       03030000
+       1 sblk                unaligned based(sbp), /* Storage stats  */ 03040000
+         5 sbnalc            fixed bin(31),      /* number of allocs */ 03050000
+         5 sbnfre            fixed bin(31),      /* number of frees  */ 03060000
+         5 sbcalc            fixed bin(31),      /* current alloc stg*/ 03070000
+         5 sbmalc            fixed bin(31);      /* max alloc stg    */ 03080000
+                                                                        03090000
+ %include builtins;                                                     03100000
+ %include plijfcbn;                                                     03110099
+                                                                        03120000
+ %page;                                                                 03130000
+ %include(pclfdesc);                                                    03140000
+ %page;                                                                 03150000
+ %include(pclcdesc);                                                    03160000
+ %page;                                                                 03170000
+ %include(afpsf);                                                       03180000
+                                                                        03190000
+ /*-----------------------------------------*/                          03200000
+ /*    BFN Date and Timestamp triplet       */                          03210000
+ /*-----------------------------------------*/                          03220000
+ DCL 1 BFN_timestmp          UNALIGNED BASED,      /* Date/Timestamp */ 03230000
+       5 BFN_ts_length       bit(8),        /* Triplet length        */ 03240000
+       5 BFN_ts_id           CHAR(1),       /* ID='62'x              */ 03250000
+       5 BFN_ts_type         CHAR(1),       /* '00'x                 */ 03260000
+       5 BFN_ts_date         CHAR(6),       /* EBCDIC 'CYYDDD'       */ 03270000
+       5 BFN_ts_time         CHAR(8),       /* EBCDIC 'HHMMSStt'     */ 03280000
+       5 BFN_ts_end          CHAR(0);       /* End of triplet        */ 03290000
+                                                                        03300000
+ %page;                                                                 03310000
+                                                                        03320000
+ on endfile(sysin) sysin_eof = '1'b;                                    03330000
+ on endpage(fontlist) call print_heading;                               03331099
+                                                                        03340000
+ open file(sysprint);                                                   03350000
+                                                                        03360073
+ substr(ebcdic,128,1)='FF'x; /* Translate ASCII 7F to EBCDIC FF990715*/ 03370085
+ call process_parm;          /* Scan Parm info                       */ 03380000
+ call load_codepage;         /* EBCDIC Code Page to use              */ 03390000
+ call sort_codepage;         /* Sort codepage by GCID                */ 03400000
+ put file(sysprint) skip edit('Codepage Character count:',              03410000
+                               cp_char_count)                           03420000
+                             (a,p'zzz9');                               03430000
+ if cp_char_count = 0 then do;                                          03440000
+   put file(sysprint) skip edit('No valid characters in codepage.')(a); 03450000
+   call pliretc(12);                                                    03460000
+   return;                                                              03470000
+   end;                                                                 03480000
+ jfcbp = AJFCB(afpfont);                                                03490082
+                                                                        03500000
+ open file(sysin),                                                      03510000
+      file(fontlist);                                                   03520000
+ call read_command;                                                     03530000
+                                                                        03540000
+ /*-----------------------------------------*/                          03550072
+ /*    M A I N L I N E   L O O P            */                          03560072
+ /*-----------------------------------------*/                          03570072
+ do while( ªsysin_eof );                                                03580000
+   put skip edit(card_in)(a);                                           03590000
+   call read_command;                                                   03600000
+   if mem_name ª= ' ' then do;                                          03610000
+     rc = pdsmem( 'READ', 'FONT', mem_name );                           03620000
+     if rcª=0 then do;                                                  03630000
+       put skip edit('*** Member ',mem_name,' not found.')(a);          03640000
+       put skip edit('    PDSMEM RC=',rc)(a,p'zzz9');                   03650000
+       end; /* rcª=0 */                                                 03660000
+     else do;                                                           03670000
+       rc = pdsmem( 'WRITE', 'AFPFONT', afp_mem );                      03680000
+       if rc>4 then do;                                                 03690000
+         put skip edit('*** Cannot create AFP font ',afp_mem,'.')(a);   03700000
+         put skip edit('    PDSMEM RC=',rc)(a,p'zzz9');                 03710000
+         call pliretc(12);                                              03720000
+         return;                                                        03730000
+         end; /* rc>4 */                                                03740000
+       else call process_font;                                          03750000
+       end; /* else */                                                  03760000
+     end; /* mem_name ª= ' ' */                                         03770000
+                                                                        03780000
+   read file(sysin) into(card_in);                                      03790000
+                                                                        03800000
+   end; /* do while */                                                  03810000
+                                                                        03820000
+ /*-----------------------------------------*/                          03830072
+ /*    Print Storage Statistics             */                          03840072
+ /*-----------------------------------------*/                          03850072
+ call storage_stats;                                                    03851099
+                                                                        03970000
+ close file(sysin),                                                     03980000
+       file(sysprint),                                                  03990000
+       file(fontlist);                                                  04000000
+ return;                                                                04010000
+                                                                        04020000
+ %page;                                                                 04030000
+ /*------------------------------------------------------------------*/ 04040000
+ /*      process_font:       Process data for font                   */ 04050000
+ /*------------------------------------------------------------------*/ 04060000
+                                                                        04070000
+ process_font: procedure;                                               04080000
+                                                                        04090000
+ dcl     n                   fixed bin(15);                             04100000
+ dcl     z                   char(24) varying;                          04110000
+                                                                        04120000
+   open file(font) input;                                               04130000
+   first_time_font='1'b;                                                04140000
+                                                                        04150000
+   font_uinc = '1'b;         /* Assume Uniform Character Increment   */ 04160099
+   font_uasp = '1'b;         /* Assume Uniform A-space               */ 04170099
+   font_ublo = '0'b;         /* Non-uniform Baseline offset  PF991203*/ 04180099
+   font_kern = '0'b;         /* Assume no kerning                    */ 04190099
+   font_asp  = 0;                                                       04200000
+   font_inc  = 0;                                                       04210000
+   font_msp  = 0;                                                       04220000
+   font_mxa  = 0;                                          /*PF020930*/ 04230099
+   font_mxd  = 0;                                          /*PF020927*/ 04230199
+   font_char_count = 0;                                    /*PF980505*/ 04231099
+                                                                        04240000
+   do while('1'b);                                                      04250000
+     call get_esc_seq;                                                  04260000
+     if esc_seq='' then do;                                             04270000
+       put skip edit('*** No font descriptor found.')(a);               04280000
+       return;                                                          04290000
+       end;                                                             04300000
+     if length(esc_seq)=6 & substr(esc_seq,1,6) = '1B2973363457'x       04310000
+     then leave;                                                        04320000
+     end; /* do while */                                                04330000
+                                                                        04340000
+   call init_afp_records;                                               04350000
+                                                                        04360000
+   fp = Xalloc( cstg(font_desc) );                                      04370000
+   n = read_pcl( fp, cstg(font_desc) );                                 04380000
+   if nª=64 then do;                                                    04390000
+     put skip edit('*** Invalid font descriptor.')(a);                  04400000
+     return;                                                            04410000
+     end;                                                               04420000
+                                                                        04430000
+   call list_font_attrs(fp);                                            04440000
+   call list_font_metrics;                                              04450000
+   call list_char_metrics;                                              04460000
+                                                                        04470000
+   /*-------------------------------*/                                  04480000
+   /*  Finalize Fontwide Metrics    */                                  04490000
+   /*-------------------------------*/                                  04500000
+   put file(fontlist) skip(2)                                           04510000
+       edit('Computed AFP Metrics------')(a);                           04520000
+   if font_uinc = '1'b then z = 'Uniform'; else z='Maximum';            04530000
+   put file(fontlist) skip                                              04540000
+       edit(z, ' Character Increment ',font_inc,                        04550000
+             '(', R2P(font_inc,font_points/10), ' pels)' )              04560000
+           (a,a,col(30),p'zzzz9',a,p'zz9',a);                           04570000
+   if font_uasp = '1'b then z = 'Uniform'; else z='Minimum';            04580000
+   put file(fontlist) skip                                              04590000
+       edit(z, ' A-Space ',font_asp,                                    04600000
+             '(', R2P(font_asp,font_points/10), ' pels)' )              04610000
+           (a,a,col(30),p'zzzz9',a,p'zz9',a);                           04620000
+   put file(fontlist) skip                                              04630000
+       edit( 'Em-space:   ', font_msp,                                  04640000
+             '(', R2P(font_msp,font_points/10), ' pels)' )              04650000
+           (a,col(30),p'zzzz9',a,p'zz9',a);                             04660000
+ /*font_mbe = P2R(b);*/                                    /*PF980722*/ 04661099
+   put file(fontlist) skip                                 /*PF991203*/ 04662099
+       edit( 'Maximum Baseline extent ', font_mbe,         /*PF991203*/ 04663099
+             '(', R2P(font_mbe,font_points/10), ' pels)' ) /*PF991203*/ 04663199
+           (a,col(30),p'zzzz9',a,p'zz9',a);                /*PF991203*/ 04665099
+   put file(fontlist) skip                                 /*PF020927*/ 04666099
+       edit( 'Maximum Descender       ', font_mxd,         /*PF020927*/ 04667099
+             '(', R2P(font_mxd,font_points/10), ' pels)' ) /*PF020927*/ 04668099
+           (a,col(30),p'zzzz9',a,p'zz9',a);                /*PF020927*/ 04669099
+   put file(fontlist) skip                                 /*PF020930*/ 04669199
+       edit( 'Maximum Ascender        ', font_mxa,         /*PF020930*/ 04669299
+             '(', R2P(font_mxa,font_points/10), ' pels)' ) /*PF020930*/ 04669399
+           (a,col(30),p'zzzz9',a,p'zz9',a);                /*PF020930*/ 04669499
+   if font_kern='1'b                                                    04670000
+   then put file(fontlist) skip edit('Kerning')(a);                     04680000
+   else put file(fontlist) skip edit('No Kerning')(a);                  04690000
+   put file(fontlist) skip edit('Characters in font: ',font_char_count) 04700000
+                               (a,col(30),p'zzzz9');       /*PF980505*/ 04710000
+                                                                        04720000
+   /*.........................*/                                        04730072
+   /*     VSI    Override     */                                        04740072
+   /*.........................*/                                        04750072
+   if varspcª=' ' then do;                                              04760000
+     b = varspc;                                                        04770000
+     put file(fontlist) skip                                            04780000
+         edit( ' VSI    override ', varspc)                             04790000
+             (a,p'zz9');                                                04800000
+     end; /* VSI    */                                                  04810000
+                                                                        04820000
+   /*.........................*/                                        04830072
+   /*     Em-space override   */                                        04840072
+   /*.........................*/                                        04850072
+   if emspcª=' ' then do;                                               04860000
+     b = emspc;                                                         04870000
+     put file(fontlist) skip                                            04880000
+         edit( ' Em-sp  override ', emspc)                              04890000
+             (a,p'zz9');                                                04900000
+     font_msp = emspc;                                                  04910000
+     end; /* Em-spc */                                                  04920000
+                                                                        04930000
+   sfp = fnop;                                                          04940000
+   fno_inc = font_inc;                                                  04950000
+   fno_asp = font_asp;                                                  04960000
+   if varspcª=' ' then fno_vsi=varspc;                                  04970000
+   else                fno_vsi=fno_fsp/2;                  /*PF022697*/ 04980000
+   fno_em = font_msp;                                                   04990000
+   substr(fno_flags,5,1)=font_kern;                                     05000000
+   substr(fno_flags,6,1)=font_uasp;                                     05010000
+   substr(fno_flags,7,1)=font_ublo;                                     05020000
+   substr(fno_flags,8,1)=font_uinc;                                     05030000
+                                                                        05040000
+   sfp = addr(fno_next);                                                05050000
+   fno_inc = font_inc;                                                  05060000
+   fno_asp = font_asp;                                                  05070000
+   if varspcª=' ' then fno_vsi=varspc;                                  05080000
+   else                fno_vsi=fno_fsp/2;                  /*PF022697*/ 05090000
+   fno_em = font_msp;                                                   05100000
+   substr(fno_flags,5,1)=font_kern;                                     05110000
+   substr(fno_flags,6,1)=font_uasp;                                     05120000
+   substr(fno_flags,7,1)=font_ublo;                                     05130000
+   substr(fno_flags,8,1)=font_uinc;                                     05140000
+   sfp = fnpp;                                             /*PF020927*/ 05141099
+   fnp_mxd =  R2P(font_mxd,font_points/10);                /*PF020927*/ 05142099
+   sfp = addr(fnp.fnp_next);           /* Point to 2nd FNP grPF020927*/ 05143099
+   fnp_mxd =  R2P(font_mxd,font_points/10);                /*PF020927*/ 05144099
+                                                                        05150000
+   /*---------------------------------*/                                05160000
+   /* Characters not in PCL font      */                                05170000
+   /*---------------------------------*/                                05180000
+   do b=0 to 255;                      /* Get data from codepage     */ 05190000
+     if cp_rel(b)ª=0 then do;                                           05200000
+       n = cp_rel(b)-1;           /* Relative # of FNI entry         */ 05210000
+       n = n * cstg(fni);         /* Offset to FNI entry             */ 05220000
+       sfp = fni0p + n;           /* A(FNI entry) - 0 degrees        */ 05230000
+       if fni_gcid = ' ' then do;                                       05240000
+         fni_gcid = codepg(b);    /* Initialize GCID                 */ 05250000
+         fni_chi  = font_inc;     /* *** (temp) default ***          */ 05260000
+         fni_idx  = FF_FNM_index;                          /*PF990715*/ 05270085
+         sfp = fni90p + n;        /* A(FNI entry) - 90 degrees       */ 05280000
+         fni_gcid = codepg(b);    /* (ditto)                         */ 05290000
+         fni_chi  = font_inc;                                           05300000
+         fni_idx  = FF_FNM_index;                          /*PF990715*/ 05310085
+         end; /* fni_gcid */                                            05320000
+       end; /* cp_rel(b) */                                             05330000
+     end; /* do b */                                                    05340000
+                                                                        05350000
+   call fix_fudged_characters;                             /*PF981222*/ 05360000
+                                                                        05370084
+   call write_afp_records;                                              05380000
+                                                                        05390000
+   Call Xfree( fp );                                                    05400000
+                                                                        05410000
+   close file(font);                                                    05420000
+                                                                        05430000
+   return;                                                              05440000
+                                                                        05450000
+   end process_font;                                                    05460000
+                                                                        05470084
+ %page;                                                                 05480084
+ /*------------------------------------------------------------------*/ 05490084
+ /*      fixed_fudged characters: fix width table entries forPF981222*/ 05500084
+ /*      the following characters that are 'fudged' by AFP2PCL: 81222*/ 05510084
+ /*          SM650000 SM660000 SA070000 LU170000             PF981222*/ 05520084
+ /*------------------------------------------------------------------*/ 05530084
+                                                                        05540084
+ fix_fudged_characters: proc;                              /*PF981222*/ 05550084
+   dcl  (chi,asp,bsp,csp)    fixed bin(15);                             05560084
+   call fix('SM060000','SM650000');    /* Alt. Left bracket  PF981222*/ 05570084
+   call fix('SM080000','SM660000');    /* Alt. Rght bracket  PF981222*/ 05580084
+   call fix('SM520000','SA070000');    /* Alt. Copyright     PF981222*/ 05590084
+   call fix('SM240000','LU170000');    /* Alt. Section sign  PF981222*/ 05600084
+   return;                                                              05610084
+                                                                        05620084
+   fix: proc(from,to);                                     /*PF981222*/ 05630084
+     dcl (from,to)           char(8);                                   05640084
+     dcl (f,t)               fixed bin(15);                             05650084
+     dcl (fp,tp)             ptr;                                       05660084
+     dcl (nt,nf)             fixed bin(15);                             05670084
+     dcl  x                  char(256)   based;                         05680084
+     f = find_gcid(from);                                               05690084
+     if f=0 then return;                                                05700084
+     t = find_gcid(to);                                                 05710084
+     if t=0 then return;                                                05720084
+     nf = f-1;                    /* Relative # of FNI entry         */ 05730084
+     nf = nf * cstg(fni);         /* Offset to FNI entry             */ 05740084
+     fp = fni0p + nf;             /* A(source FNI entry) - 0 degrees */ 05750084
+     nt = t-1;                    /* Relative # of FNI entry         */ 05760084
+     nt = nt * cstg(fni);         /* Offset to FNI entry             */ 05770084
+     tp = fni0p + nt;             /* A(target FNI entry) - 0 degrees */ 05780084
+     substr(tp->x,1,cstg(fni)) =  /* Replace FNI entry               */ 05790084
+         substr(fp->x,1,cstg(fni));                                     05800084
+     tp->fni_gcid = to;           /* but with original GCID          */ 05810084
+     fp = fni90p + nf;            /* A(source FNI entry) - 90 degrees*/ 05820084
+     tp = fni90p + nt;            /* A(target FNI entry) - 90 degrees*/ 05830084
+     substr(tp->x,1,cstg(fni)) =  /* Replace FNI entry               */ 05840084
+         substr(fp->x,1,cstg(fni));                                     05850084
+     tp->fni_gcid = to;           /* but with original GCID          */ 05860084
+     end fix;                                              /*PF981222*/ 05870084
+                                                           /*PF981222*/ 05880084
+   find_gcid: proc(gcid) returns( fixed bin(15) );         /*PF981222*/ 05890084
+     dcl  gcid               char(8);                                   05900084
+     dcl  b                  fixed bin(15);                             05910084
+     do b=0 to 255;               /* Lookup this character           */ 05920084
+       if gcid = codepg(b)        /* Character found                 */ 05930084
+       then return( cp_rel(b) );                                        05940084
+       end; /* do b */                                                  05950000
+     return(0);                   /* Character not found             */ 05960000
+     end find_gcid;                                        /*PF981222*/ 05970000
+                                                           /*PF981222*/ 05980000
+   end fix_fudged_characters;                              /*PF981222*/ 05990000
+                                                                        06000000
+ %page;                                                                 06010000
+ /*------------------------------------------------------------------*/ 06020000
+ /*      list_font_attrs:    display font info                       */ 06030000
+ /*------------------------------------------------------------------*/ 06040000
+                                                                        06050000
+ list_font_attrs: procedure(fp);                                        06060000
+                                                                        06070000
+ dcl     fp                  ptr;                                       06080000
+                                                                        06090000
+ dcl     symbol_set_n        pic'9999';                                 06100000
+ dcl     symbol_set_d        char(36);                                  06110000
+ dcl     style_b             bit(16) unaligned;                         06130000
+ dcl     style_word          char(2) based( addr(style_b) );            06140000
+ dcl     w                   bit(8);                                    06150000
+                                                                        06160000
+   first_page = '0'b;                                                   06180000
+                                                                        06240000
+   /*-----------------------*/                                          06250000
+   /* Get font Name         */                                          06260000
+   /*-----------------------*/                                          06270000
+   font_name = translate( font_desc.font_name, ebcdic );                06280000
+                                                                        06310199
+   /*-----------------------*/                                          06310299
+   /* Print page heading    */                                          06310399
+   /*-----------------------*/                                          06310499
+   page_num  = 0;                                                       06312099
+   signal endpage(fontlist);                                            06313099
+                                                                        06314099
+   put file(fontlist) skip                                              06315099
+       edit( 'Member Name ', mem_name )(a);                             06316099
+   put file(fontlist) skip;                                             06317099
+   put file(fontlist) skip                                              06318099
+       edit( 'Font Name:', font_name )                                  06319099
+           (a,col(24),a);                                               06319199
+                                                                        06320000
+   b = c2b(font_desc.format);                                           06330000
+   put file(fontlist) skip                                              06340000
+       edit( 'Format:', b, fmt(b) )                                     06350000
+           (a,col(18),p'zzz9',col(24),a);                               06360000
+   if bª=0 then do;                                                     06370000
+     put file(fontlist) skip                                            06380000
+         edit('Unable to interpret this format.')(a);                   06390000
+     call pliretc(12);                                                  06400000
+     exit;                                                              06410000
+     end; /* bª=0 */                                                    06420000
+   /* No AFP equivalent */                                              06430000
+                                                                        06440000
+   b = c2b(font_desc.type);                                             06450000
+   put file(fontlist) skip                                              06460000
+       edit( 'Type:', b, fdesc(b) )                                     06470000
+           (a,col(18),p'zzz9',col(24),a);                               06480000
+   /* No AFP equivalent */                                              06490000
+                                                                        06500000
+   b = c2b(font_desc.orientation);                                      06510000
+   put file(fontlist) skip                                              06520000
+       edit( 'Orientation:', b, orien(b) )                              06530000
+           (a,col(18),p'zzz9',col(24),a);                               06540000
+   if bª=0 & bª=1 & bª=3 then do;                                       06550000
+     put file(fontlist) skip                                            06560000
+         edit('Invalid orientation.')(a);                               06570000
+     call pliretc(12);                                                  06580000
+     exit;                                                              06590000
+     end; /* bª=0 */                                                    06600000
+   /* No AFP equivalent */                                              06610000
+                                                                        06620000
+   /*-----------------------*/                                          06630000
+   /* Proportional/Non-Prop */                                          06640000
+   /*-----------------------*/                                          06650000
+   b = c2b(font_desc.spacing);                                          06660000
+   put file(fontlist) skip                                              06670000
+       edit( 'Spacing:', b, spacing(b) )                                06680000
+           (a,col(18),p'zzz9',col(24),a);                               06690000
+   /* save spacing -- 0=non-proportional, 1=proportional */             06700000
+   sfp = fnop;                                                          06710000
+   /*                                                                   06720000
+    . if b=0 then substr(fno.fno_flags,8,1)='1'b;                       06730000
+    . else        substr(fno.fno_flags,8,1)='0'b;                       06740000
+    . sfp = addr(fno.fno_next);                                         06750000
+    . if b=0 then substr(fno.fno_flags,8,1)='1'b;                       06760000
+    . else        substr(fno.fno_flags,8,1)='0'b;                       06770000
+   */                                                                   06780000
+   /* Derived via Character Metrics      */                             06790000
+                                                                        06800000
+   b = b2b(font_desc.symbol_set);                                       06810000
+   symbol_set_n = b;                                                    06820000
+   symbol_set_d = '';                                                   06830000
+   do b = 0 by 1 while( substr(sset(b),1,3)ª='End' );                   06840000
+     if substr(sset(b),1,4) = symbol_set_n then do;                     06850000
+       symbol_set_d = substr(sset(b),6);                                06860000
+       leave;                                                           06870000
+       end; /* if */                                                    06880000
+     end; /* do while */                                                06890000
+   put file(fontlist) skip                                              06900000
+       edit( 'Symbol set:', b, symbol_set_d )                           06910000
+           (a,col(18),p'zzz9',col(24),a);                               06920000
+   /* No AFP equivalent (maybe codepage) */                             06930000
+                                                                        06940000
+   /*-----------------------*/                                          06950000
+   /* "Style Word":         */                                          06960000
+   /*   "Posture"           */                                          06970000
+   /*   "Appearance Width"  */                                          06980000
+   /*   "Structure"         */                                          06990000
+   /*-----------------------*/                                          07000000
+   sfp = fndp;                                                          07010000
+   style_word = sty_msb || sty_lsb;                                     07020000
+   /* Structure - Outline   */                                          07030000
+   b = substr(style_b,7,5);                                             07040000
+   put file(fontlist) skip                                              07050000
+       edit( 'Structure:', b)                                           07060000
+           (a,col(18),p'zzz9');                                         07070000
+   if b=1 then substr(fnd.fnd_flags1,4,1)='1'b;                         07080000
+   /* Appearance            */                                          07090000
+   b = substr(style_b,4,3);                                             07100000
+   put file(fontlist) skip                                              07110000
+       edit( 'Appearance width:', b)                                    07120000
+           (a,col(18),p'zzz9');                                         07130000
+   /* No AFP equivalent */                                              07140000
+   fnd.fnd_wid=w;                                                       07150000
+   /* Posture - Italic      */                                          07160000
+   b = substr(style_b,15,2);                                            07170000
+   put file(fontlist) skip                                              07180000
+       edit( 'Posture:', b)                                             07190000
+           (a,col(18),p'zzz9');                                         07200000
+   if bª=0 then substr(fnd.fnd_flags1,1,1)='1'b;                        07210000
+                                                                        07220000
+   /*-----------------------*/                                          07230000
+   /* Width Type            */                                          07240000
+   /*-----------------------*/                                          07250000
+   b = c2b(font_desc.width_type);                                       07260000
+   if b<-5 | b>3 then do;                                               07270000
+     put file(fontlist) skip                                            07280000
+         edit('Invalid width type',b)(a,p'--9');                        07290000
+     b = 0; /* Normal */                                                07300000
+     end; /* b */                                                       07310000
+   put file(fontlist) skip                                              07320000
+       edit( 'Width type:', b, width(b) )                               07330000
+           (a,col(18),p'---9',col(24),a);                               07340000
+   fnd.fnd_wid = wid(b);                                                07350000
+                                                                        07360000
+   /*-----------------------*/                                          07370000
+   /* Stroke Weight         */                                          07380000
+   /*-----------------------*/                                          07390000
+   b = c2b(font_desc.stroke_weight);                                    07400000
+   if b<-7 | b>7 then do;                                               07410000
+     put file(fontlist) skip                                            07420000
+         edit('Invalid stroke weight',b)(a,p'--9');                     07430000
+     b = 0; /* Medium */                                                07440000
+     end; /* b */                                                       07450000
+   put file(fontlist) skip                                              07460000
+       edit( 'Stroke weight:', b, weight(b) )                           07470000
+           (a,col(18),p'---9',col(24),a);                               07480000
+   fnd.fnd_wgt = wgt(b);                                                07490000
+                                                                        07500000
+   b = c2b(font_desc.serif_style);                                      07510000
+   put file(fontlist) skip                                              07520000
+       edit( 'Serif style:', b )                                        07530000
+           (a,col(18),p'zzz9');                                         07540000
+   /* No AFP equivalent */                                              07550000
+                                                                        07560000
+   return;                                                              07570000
+                                                                        07580000
+   end list_font_attrs;                                                 07590000
+                                                                        07600000
+ %page;                                                                 07610000
+ /*------------------------------------------------------------------*/ 07620000
+ /*      list_font_metrics:  display font metrics                    */ 07630000
+ /*------------------------------------------------------------------*/ 07640000
+                                                                        07650000
+ list_font_metrics: procedure;                                          07660000
+                                                                        07670000
+   dcl   cpi                 fixed bin(15);                             07680000
+   dcl   em_space            fixed bin(15);                             07690000
+                                                                        07700000
+   put file(fontlist) skip(2)                                           07710000
+       edit( '---- PCL Font Metrics ----' )(a);                         07720099
+                                                                        07730000
+   put file(fontlist) skip                                              07740000
+       edit( 'Cell Width  ', b2b(font_desc.cell_width), ' pels' )       07750099
+           (a,p'zzzz9',a);                                 /*PF991202*/ 07751099
+   put file(fontlist) skip                                              07760000
+       edit( 'Cell Height ', b2b(font_desc.cell_height), ' pels' )      07770099
+           (a,p'zzzz9',a);                                 /*PF991202*/ 07771099
+                                                                        07780000
+                                                                        07790000
+   b = b2b(font_desc.pitch);                                            07800000
+   cpi = 300 / floor(b/4);                                              07810000
+   put file(fontlist) skip                                              07820000
+       edit( 'Pitch       ', b, ' (', floor(b/4), ' pels -',            07830000
+             cpi, ' CPI)' )                                             07840000
+           (a,p'zzzz9',a,p'zzz9',a,p'zz9',a);                           07850000
+   /* No AFP equivalent */                                              07860000
+                                                                        07870000
+   /*-----------------------*/                                          07880000
+   /* Point Size            */                                          07890000
+   /* + Em-space default    */                                          07900000
+   /*-----------------------*/                                          07910000
+   b = b2b(font_desc.height);                                           07920000
+   font_points = floor( (b*72+600)/1200 ) * 10;                         07930000
+   put file(fontlist) skip                                              07940000
+       edit( 'Height      ', b, ' (', floor(b/4), ' pels -',            07950000
+             floor(font_points/10), ' points)' )                        07960000
+           (a,p'zzzz9',a,p'zzz9',a,p'zz9',a);                           07970000
+                                                                        07980000
+   /* *** Point Size override *** */                                    07990000
+   if point_sizeª=' ' then do;                                          08000000
+     font_points = point_size * 10;                                     08010000
+     put file(fontlist) skip                                            08020000
+         edit( 'Point size override ',                                  08030000
+               floor(font_points/10), ' points' )                       08040000
+             (a,p'zz9',a);                                              08050000
+     end; /* point_size */                                              08060000
+                                                                        08070000
+   sfp = fncp;                                             /*PF991207*/ 08071099
+   b = b2b(font_desc.cell_width);                          /*PF991201*/ 08080099
+   fnc_bb.fnc_mcbw = b;                                    /*PF991201*/ 08090099
+   b = b2b(font_desc.cell_height);                         /*PF980720*/ 08172099
+   fnc_bb.fnc_mcbh = b;                                    /*PF991201*/ 08172199
+                                                                        08172299
+   font_mbe = P2R(b);                                      /*PF980722*/ 08173099
+   sfp = fnop;                                             /*PF980717*/ 08178099
+   fno.fno_mbe = font_mbe;                                 /*PF980722*/ 08179099
+   sfp = addr(fno_next);     /* Go to next rotation          PF980717*/ 08179199
+   fno.fno_mbe = font_mbe;                                 /*PF980722*/ 08179299
+                                                                        08180000
+   /*-----------------------*/                                          08190000
+   /* Baseline              */                                          08200000
+   /*-----------------------*/                                          08210000
+   b = b2b(font_desc.baseline) + 1;                        /*PF991115*/ 08220099
+   font_blo = P2R(b);                                      /*PF980722*/ 08230000
+   put file(fontlist) skip                                              08240000
+       edit( 'Baseline    ', font_blo, ' (', b, ' pels)' ) /*PF980722*/ 08250099
+           (a,p'zzzz9',a,p'zzz9',a);                       /*PF980722*/ 08260099
+   sfp = fnop;                                             /*PF980717*/ 08270000
+   fno_blo = font_blo;                                     /*PF980722*/ 08280000
+   sfp = addr(fno_next);                                   /*PF980717*/ 08290000
+   fno_blo = font_blo;                                     /*PF980722*/ 08300000
+                                                                        08310000
+   /* Default Em-quad     */                                            08320000
+   em_space = 1000;                    /* By definition      PF980505*/ 08330000
+   font_msp = em_space;                                                 08340000
+                                                                        08350000
+   sfp = fndp;                                                          08360000
+   fnd.fnd_xps,fnd.fnd_nps,fnd.fnd_mps = font_points;                   08370000
+                                                                        08380000
+   /*-----------------------*/                                          08390000
+   /* X-Height              */                                          08400000
+   /*-----------------------*/                                          08410000
+   b = b2b(font_desc.xheight);                                          08420000
+   put file(fontlist) skip                                              08430000
+       edit( 'XHeight     ', b, ' (', floor(b/4), ' pels)' )            08440000
+           (a,p'zzzz9',a,p'zzz9',a);                                    08450000
+   b = floor(b/4);                                                      08460000
+   sfp = fnpp;                                                          08470000
+   b = P2R(b);                                                          08480000
+   fnp.fnp_lch = b;                                                     08490000
+   sfp = addr(fnp_next);                                                08500000
+   fnp.fnp_lch = b;                                                     08510000
+                                                                        08520000
+   /*-----------------------*/                                          08530000
+   /* Underscore data       */                                          08540000
+   /*-----------------------*/                                          08550000
+   b = sc2b(font_desc.ul_distance);                                     08560000
+   put file(fontlist) skip                                              08570000
+       edit( 'ULDist      ', b )(a,p'----9');                           08580000
+   b = P2R(-b);                                                         08600000
+   sfp = fnpp;                                                          08601099
+   fnp.fnp_usp = b;                                                     08610000
+   sfp = addr(fnp_next);                                                08620000
+   fnp.fnp_usp = b;                                                     08630000
+                                                                        08640000
+   b = c2b(font_desc.ul_height);                                        08650000
+   put file(fontlist) skip                                              08660000
+       edit( 'ULHeight    ', b )(a,p'zzzz9');                           08670000
+   b = P2R(b);                                                          08680000
+   sfp = fnpp;                                                          08690000
+   fnp.fnp_usw = b;                                                     08700000
+   sfp = addr(fnp_next);                                                08710000
+   fnp.fnp_usw = b;                                                     08720000
+                                                                        08730000
+   b = b2b(font_desc.text_width);                                       08740000
+   put file(fontlist) skip                                              08750000
+       edit( 'Text width  ', b, ' (', floor(b/4), ' pels)' )            08760000
+           (a,p'zzzz9',a,p'zzz9',a);                                    08770000
+   /* No AFP equivalent */                                              08780000
+                                                                        08790000
+   /*-----------------------*/                                          08800000
+   /* Dflt Baseline Incr.   */                                          08810000
+   /*-----------------------*/                                          08820000
+   b = b2b(font_desc.text_height);                                      08830000
+   put file(fontlist) skip                                              08840000
+       edit( 'Text height ', b, ' (', floor(b/4), ' pels)' )            08850000
+           (a,p'zzzz9',a,p'zzz9',a);                                    08860000
+   b = floor(b/4);                                                      08870000
+                                                                        08880000
+   /*....................................*/                             08890072
+   /*     Height override (points)       */                             08900072
+   /*....................................*/                             08910072
+   if hgtª=' ' then do;                                                 08920000
+     b = ceil( hgt*300/72 ); /* Points to pels */                       08930000
+     put file(fontlist) skip                                            08940000
+         edit( ' Height override ', hgt, ' points (', b, ' pels)' )     08950000
+             (a,a,a,p'zz9',a);                                          08960000
+     end; /* height */                                                  08970000
+   b = P2R(b);                                                          08980000
+                                                                        08990000
+   /*....................................*/                             09000072
+   /*     Height override (relative)     */                             09010072
+   /*....................................*/                             09020072
+   if lspª=' ' then do;                                                 09030000
+     b = lsp;                                                           09040000
+     put file(fontlist) skip                                            09050000
+         edit( ' Height override ', lsp, ' (relative)' )                09060000
+             (a,p'zzz9',a);                                             09070000
+     end; /* lsp */                                                     09080000
+                                                                        09090000
+   sfp = fnop;                                                          09100000
+   fno.fno_dbi = b;                                                     09110000
+   sfp = addr(fno_next);                                                09120000
+   fno.fno_dbi = b;                                                     09130000
+                                                                        09140000
+   put file(fontlist) skip                                              09150000
+       edit( 'Pitch-ext   ', c2b(font_desc.pitch_ext) )(a,p'zzzz9');    09160000
+   put file(fontlist) skip                                              09170000
+       edit( 'Height-ext  ', c2b(font_desc.height_ext) )                09180000
+           (a,p'zzzz9');                                                09190000
+   /* No AFP equivalent */                                              09200000
+                                                                        09210000
+   return;                                                              09220000
+                                                                        09230000
+   end list_font_metrics;                                               09240000
+                                                                        09250000
+ %page;                                                                 09260000
+ /*------------------------------------------------------------------*/ 09270000
+ /*      list_char_metrics: display character metrics                */ 09280000
+ /*------------------------------------------------------------------*/ 09290000
+                                                                        09300000
+ list_char_metrics: procedure;                                          09310000
+                                                                        09320000
+ dcl     c                   char;                                      09330000
+ dcl     n                   fixed bin(15);                             09340000
+ dcl     data_bytes          fixed bin(15);                             09350000
+ dcl     char_code           char(3);                                   09360000
+ dcl     desc_len            char(5);                                   09370000
+                                                                        09380000
+   allocate char_desc set(cp);                                          09390000
+   signal endpage(fontlist);                                            09400099
+   first_character='1'b;                                                09410000
+                                                                        09420000
+   do while('1'b);                                                      09430000
+                                                                        09440000
+     call get_esc_seq;                                                  09450000
+                                                                        09460000
+     if esc_seq='' then leave;                                          09470000
+                                                                        09480000
+     /*-------------------------------*/                                09490000
+     /*  Assign Character Code        */                                09500000
+     /*-------------------------------*/                                09510000
+     if length(esc_seq)>4 &                                             09520000
+        substr(esc_seq,1,3) = '1B2A63'x &                               09530000
+        substr(esc_seq,length(esc_seq),1)='45'x                         09540000
+     then do;                          /* Assign character code      */ 09550000
+       char_code = '303030'x;          /* ASCII zeros                */ 09560000
+       n = length(esc_seq) - 4;        /* Length of code             */ 09570000
+       if n>3 then do;                                                  09580000
+         put skip edit('*** Invalid character code ',                   09590000
+                       translate( substr(esc_seq,4,n),ebcdic) )(a);     09600000
+         return;                                                        09610000
+         end; /* n>4 */                                                 09620000
+       /*-------------------------------*/                              09630000
+       /*  Extract ASCII character code */                              09640000
+       /*    and translate to EBCDIC    */                              09650000
+       /*-------------------------------*/                              09660000
+       substr(char_code,4-n,n) = substr(esc_seq,4,n); /* 3-dig ASCII */ 09670000
+       char_code = translate(char_code,ebcdic);       /* 3-dig EBCDIC*/ 09680000
+       end; /* character code */                                        09690000
+                                                                        09700000
+     /*-------------------------------*/                                09710000
+     /*  Character Description        */                                09720000
+     /*-------------------------------*/                                09730000
+     if length(esc_seq)>4 &                                             09740000
+        substr(esc_seq,1,3) = '1B2873'x &                               09750000
+        substr(esc_seq,length(esc_seq),1)='57'x /* ASCII 'W'         */ 09760000
+     then do;                          /* Char Descr. and data       */ 09770000
+       desc_len = '3030303030'x;       /* ASCII zeros                */ 09780000
+       n = length(esc_seq) - 4;        /* Length of desc. len.       */ 09790000
+       if n>5 then do;                                                  09800000
+         put skip edit('*** Invalid descriptor length ',                09810000
+                       translate( substr(esc_seq,4,n),ebcdic) )(a);     09820000
+         return;                                                        09830000
+         end; /* n>4 */                                                 09840000
+       substr(desc_len,6-n,n) = substr(esc_seq,4,n);                    09850000
+       desc_len = translate(desc_len,ebcdic);                           09860000
+       data_bytes = desc_len;                                           09870000
+       if data_bytes>0 then do;                                         09880000
+         if data_bytes<cstg(char_desc) then do;                         09890000
+           put skip edit('*** Invalid descriptor length ',              09900000
+                         'for character ',char_code)(a);                09910000
+           put skip edit('    length=',desc_len)(a,p'zzz9');            09920000
+           return;                                                      09930000
+           end;                                                         09940000
+         data_bytes = data_bytes - cstg(char_desc);                     09950000
+         n = read_pcl( cp, cstg(char_desc) );                           09960000
+         if nª=cstg(char_desc) then do;                                 09970000
+           put skip edit('*** Invalid descriptor ',                     09980000
+                         'for character ',char_code)(a);                09990000
+           return;                                                      10000000
+           end;                                                         10010000
+         call list_char_bitmap(char_code,cp);                           10020000
+         end; /* data_bytes>0 */                                        10030000
+                                                                        10040000
+       end; /* character code */                                        10050000
+                                                                        10060000
+     end; /* do while */                                                10070000
+                                                                        10080000
+   free char_desc;                                                      10090000
+                                                                        10100000
+   return;                                                              10110000
+                                                                        10120000
+   end list_char_metrics;                                               10130000
+                                                                        10140000
+ %page;                                                                 10150000
+ /*------------------------------------------------------------------*/ 10160000
+ /*      list_char_bitmap:   display character info                  */ 10170000
+ /*------------------------------------------------------------------*/ 10180000
+                                                                        10190000
+ list_char_bitmap: procedure(char_code,cp);                             10200000
+                                                                        10210000
+ dcl     char_code           char(3);                                   10220000
+ dcl     cp                  ptr;                                       10230000
+                                                                        10240000
+ dcl     ascii_char          fixed bin(15);                             10250000
+ dcl     ascii_x             char(2) unaligned                          10260000
+                             based( addr(ascii_char) );                 10270000
+ dcl     hex_char            char(2);                                   10280000
+ dcl     ebcdic_char         char(1);                                   10290000
+ dcl     zbit                bit(8) based( addr(ebcdic_char) );         10300000
+ dcl     class               fixed bin(15);                             10310000
+ dcl     mem_size            fixed bin(31);                             10320088
+ dcl    (j,k,l)              fixed bin(15);                             10330076
+ dcl     cpx                 fixed bin(15);                /*PF032598*/ 10340000
+ dcl     n                   fixed bin(15);                             10350000
+ dcl    (w,h)                fixed bin(15);      /* Bitmap bounds    */ 10360000
+ dcl    (hpel,wpel)          fixed bin(15);      /* Bitmap bounds    */ 10370099
+ dcl     bmp_offset          fixed bin(31) static init(0);              10380074
+ dcl     zchar               char(1);                                   10390000
+ dcl     fng_end             ptr;                                       10410074
+ dcl    (bmp,bmpx)           ptr;                                       10420087
+ dcl     p                   ptr;                                       10430076
+ dcl     bitmap              char(32760) based(bmp);                    10440000
+ dcl     vfc                 char(1)             based;                 10450076
+ dcl     where_fnm           ptr;                          /*PF990715*/ 10460085
+ dcl     fnm_index           fixed bin(15);                /*PF990715*/ 10470085
+                                                                        10480000
+ /*-------------------------*/                             /*PF991201*/ 10490099
+ /* PCL Character metrics   */                             /*PF991201*/ 10500099
+ /*-------------------------*/                             /*PF991201*/ 10510099
+ dcl     pcl_char_width      fixed bin(15);                /*PF991201*/ 10510199
+ dcl     pcl_left_offset     fixed bin(15);                /*PF991201*/ 10510299
+ dcl     pcl_char_height     fixed bin(15);                /*PF991201*/ 10510399
+ dcl     pcl_top_offset      fixed bin(15);                /*PF991201*/ 10510499
+ dcl     pcl_delta_x         fixed bin(15);                /*PF991201*/ 10510599
+                                                                        10511099
+ /*-------------------------*/                                          10512099
+ /* AFP Character metrics   */                                          10513099
+ /*-------------------------*/                                          10514099
+ dcl     chi                 fixed bin(15);      /* Character incr.  */ 10520000
+ dcl     asp                 fixed bin(15);      /* A-space          */ 10530000
+ dcl     bsp                 fixed bin(15);      /* B-space          */ 10540000
+ dcl     csp                 fixed bin(15);      /* C-space          */ 10550000
+ dcl     blo                 fixed bin(15);      /* Baseline offset  */ 10560000
+ dcl     cha                 fixed bin(15);      /* Ascender PF991130*/ 10570099
+ dcl     chd                 fixed bin(15);      /* DescenderPF991130*/ 10580099
+                                                                        10590000
+   if print_char_data='1'b then                            /*PF980505*/ 10600000
+   put file(fontlist) skip;                                             10610000
+                                                                        10620000
+   /*---------------------------------*/                                10621099
+   /* Character code, GCID            */                                10622099
+   /*---------------------------------*/                                10623099
+   ascii_char = char_code;                       /* Binary ASCII     */ 10630000
+   ascii_x = translate( ascii_x, ebcdic );       /* -> EBCDIC        */ 10640000
+   ebcdic_char = substr(ascii_x,2);              /* Get EBCDIC value */ 10650000
+   hex_char = hex( addr(ebcdic_char), 1);        /* HEX EBCDIC       */ 10660000
+   cpx = zbit;                    /* Get binary character value      */ 10670000
+   if cp_rel(cpx)=0 & cpxª=0      /* S.N.O.                  PF980505*/ 10680000
+   then do;                                                /*PF980505*/ 10690000
+     put file(fontlist) skip                                            10700000
+         edit('Character ',cpx,' not found')(a,p'zz9',a);  /*PF980505*/ 10710000
+     return;                                                            10720000
+     end;                                                               10730000
+   if cp_rel(cpx)=0 then return;  /* S.N.O.                  PF980505*/ 10740000
+   font_char_count = font_char_count + 1;                  /*PF980505*/ 10750000
+   if print_char_data='1'b then                            /*PF980505*/ 10760000
+   put file(fontlist) skip                                              10770000
+       edit( 'Character code ', hex_char,                               10780000
+             ' (ASCII ', char_code, ', graphic ''',                     10790000
+             ebcdic_char, ''')' )                                       10800000
+           (a);                                                         10810000
+   if print_char_data='1'b then                            /*PF980505*/ 10820000
+   put file(fontlist) skip                                 /*PF032598*/ 10830000
+       edit( 'GCID: ', codepg(cpx) )(a,col(20),a);         /*PF032598*/ 10840000
+                                                                        10850000
+   /*---------------------------------*/                                10851099
+   /* Character orientation, class    */                                10852099
+   /*---------------------------------*/                                10853099
+   b = c2b(char_desc.orientation);                                      10860000
+   if print_char_data='1'b then                            /*PF980505*/ 10870000
+   put file(fontlist) skip                                              10880000
+       edit( 'Orientation:', b, orien(b) )                              10890000
+           (a,col(18),p'zzz9',col(24),a);                               10900000
+   class = c2b(char_desc.class);                                        10910000
+   if print_char_data='1'b then                            /*PF980505*/ 10920000
+   put file(fontlist) skip                                              10930000
+       edit( 'Class:      ', class )                                    10940000
+           (a,col(18),p'zzz9');                                         10950000
+                                                                        10951099
+   if classª=1 then do;                                                 10960000
+     put skip edit('Class',class,' not supported')                      10970000
+                  (a,p'z9',a);                                          10980000
+     exit;                                                              10990000
+     end; /* class */                                                   11000000
+                                                                        11010000
+   if print_char_data='1'b then                            /*PF980505*/ 11010199
+   put file(fontlist) skip edit('----- PCL Metrics -----')(a);          11011099
+                                                                        11012099
+   /*---------------------------------*/                                11013099
+   /* Left Offset                     */                                11014099
+   /*---------------------------------*/                                11015099
+   b = b2b(char_desc.left_offset);                         /*PF991201*/ 11020099
+   pcl_left_offset   = P2R(b);                             /*PF991201*/ 11030099
+   if print_char_data='1'b then                            /*PF980505*/ 11040000
+   put file(fontlist) skip                                              11050000
+       edit( 'Left offset:', b, ' pels ' )                 /*PF991201*/ 11060099
+           (a,col(18),p'----9',a);                         /*PF991202*/ 11070099
+                                                                        11090000
+   /*---------------------------------*/                                11091099
+   /* Character width                 */                                11092099
+   /*---------------------------------*/                                11093099
+   b,wpel = b2b(char_desc.char_width);                     /*PF991201*/ 11100099
+   pcl_char_width   = P2R(b);                              /*PF991201*/ 11110099
+   if print_char_data='1'b then                            /*PF980505*/ 11120000
+   put file(fontlist) skip                                              11130000
+       edit( 'Char width:', b, ' pels' )                   /*PF991201*/ 11140099
+           (a,col(18),p'----9',a);                         /*PF991202*/ 11140199
+                                                                        11170000
+   /*---------------------------------*/                                11171099
+   /* Character height                */                                11172099
+   /*---------------------------------*/                                11173099
+   b,hpel = b2b(char_desc.char_height);                    /*PF991201*/ 11180099
+   pcl_char_height = P2R(b);                               /*PF991201*/ 11190099
+   if print_char_data='1'b then                            /*PF980505*/ 11200000
+   put file(fontlist) skip                                              11210000
+       edit( 'Char height:', b, ' pels' )                  /*PF991201*/ 11220099
+           (a,col(18),p'----9',a);                         /*PF991202*/ 11220199
+                                                                        11250099
+   /*---------------------------------*/                                11251099
+   /* Top offset                      */                                11252099
+   /*---------------------------------*/                                11253099
+   b = b2b(char_desc.top_offset);                          /*PF991201*/ 11260099
+   pcl_top_offset   = P2R(b);                              /*PF991201*/ 11270099
+   if print_char_data='1'b then                            /*PF980505*/ 11280099
+   put file(fontlist) skip                                              11290099
+       edit( 'Top offset:', b, ' pels' )                   /*PF991201*/ 11300099
+           (a,col(18),p'----9',a);                         /*PF991202*/ 11300199
+                                                                        11340000
+   /*---------------------------------*/                                11341099
+   /* Delta X (Character increment)   */                                11342099
+   /*---------------------------------*/                                11343099
+   b = b2b(char_desc.delta_x);                                          11350000
+   pcl_delta_x  = P2R(b);                                  /*PF991201*/ 11370099
+ /*pcl_delta_x = floor(pcl_delta_x/4); /* Changed floor */ /*PF991201*/ 11371099
+ /*b = floor(b/4);                     /*   to ceil     */ /*PF991201*/ 11371199
+   pcl_delta_x = ceil(pcl_delta_x/4);                      /*PF000609*/ 11371299
+   b = ceil(b/4);                                          /*PF000609*/ 11372099
+   if print_char_data='1'b then                            /*PF980505*/ 11380000
+   put file(fontlist) skip                                              11390000
+       edit( 'Delta X:', b, ' pels' )                      /*PF991201*/ 11400099
+           (a,col(18),p'----9',a);                         /*PF991202*/ 11400199
+                                                                        11470000
+   w = ceil(wpel/8);                                       /*PF980505*/ 11480099
+   mem_size = w*hpel;                                      /*PF980505*/ 11490099
+   /*-----------------------------------*/                              11500000
+   /* read the bitmap into storage      */                              11510000
+   /*-----------------------------------*/                              11520000
+   if mem_size = 0 then do;                                             11530000
+     put skip edit('No bitmap data for ',                               11540000
+                   'Character code ', hex_char,                         11550000
+                   ' (ASCII ', char_code, ', graphic ''',               11560000
+                   ebcdic_char, ''')' )                                 11570000
+                   (a);                                                 11580000
+     return;                                                            11590000
+     end;                                                               11600000
+   bmp = Xalloc( mem_size );                                            11610000
+   do j=1 to mem_size;                                                  11620000
+     n = read_pcl( addr(zchar), 1);                                     11630000
+     substr(bitmap,j,1) = zchar;                                        11640000
+     end; /* do while */                                                11650000
+                                                                        11660087
+   /*-----------------------------------*/                 /*PF991201*/ 11670099
+   /* Compute AFP metrics for portrait  */                 /*PF991201*/ 11680099
+   /*-----------------------------------*/                 /*PF991201*/ 11700099
+   chi = pcl_delta_x;        /* Character increment          PF991201*/ 11700199
+   asp = pcl_left_offset;    /* Character A-space            PF991201*/ 11700299
+   bsp = pcl_char_width;     /* Character B-space            PF991201*/ 11700399
+   csp = chi - asp - bsp;    /* Character C-space            PF991201*/ 11700499
+   blo,cha = pcl_top_offset + P2R(1);  /* Baseline offset    PF991201*/ 11700599
+   chd = pcl_char_height - cha;        /* Descender          PF991201*/ 11700699
+                                                                        11701099
+   /*-----------------------------------*/                              11702099
+   /* Rotate bitmap and metrics         */                              11703099
+   /*  (Landscape to Portrait)          */                              11704099
+   /*-----------------------------------*/                              11705099
+   if angle=90 then do;                /* Rotate bitmap      PF991019*/ 11710087
+     /* For 90 degrees, rows and columns are reversed        PF991019*/ 11720099
+     bmpx = BMROT( bmp, hpel, wpel, angle );               /*PF991201*/ 11730099
+     call XFree(bmp);                                      /*PF991019*/ 11740087
+     bmp = bmpx;                                           /*PF991019*/ 11750087
+     b=wpel; wpel=hpel; hpel=b;        /* Swap width & heightPF991201*/ 11760099
+     w = ceil(wpel/8);                                     /*PF991103*/ 11780099
+     mem_size = w*hpel;                                    /*PF991103*/ 11790099
+     /*-----------------------------------*/               /*PF991201*/ 11800099
+     /* Compute AFP metrics for landscape */               /*PF991201*/ 11810099
+     /*-----------------------------------*/               /*PF991201*/ 11820099
+     asp = pcl_top_offset - pcl_char_height + 1;           /*PF991217*/ 11840099
+     bsp = pcl_char_height;                                /*PF991201*/ 11850099
+     csp = chi - asp - bsp;                                /*PF991201*/ 11860099
+     blo,cha = -(pcl_left_offset)+ P2R(1);                 /*PF991201*/ 11870099
+     chd = pcl_char_width - cha;                           /*PF991201*/ 11871099
+     end; /* angle=90 */                                   /*PF991019*/ 11880099
+                                                                        11890099
+   /* call HEXDUMP( bmp, mem_size, hex_char ); */                       11900082
+   /*-----------------------*/                                          11910082
+   /* Update FNM for Char   */                                          11920099
+   /*-----------------------*/                                          11930082
+   if cp_rel(ascii_char)ª=0 then do;                                    11940082
+     j = cp_rel(ascii_char)-1;                                          11950082
+     sfp = fni0p + j * cstg(fni);                                       11960082
+     j = fni_idx;                                                       11970082
+     sfp,where_fnm=fnmc;               /* Build next FNM ent PF990715*/ 11980085
+     fnm_boxw = wpel-1;                                                 11990099
+     fnm_boxh = hpel-1;                                                 12000083
+     fnm_pda = fng_offset;                                              12010082
+     fnmc = fnmc + cstg(fnm);          /* Point to next              */ 12020085
+     end; /* cp_rel(ascii_char) */                                      12030082
+                                                                        12031099
+   /*-----------------------*/                                          12032099
+   /* Update FNG for Char   */                                          12033099
+   /*-----------------------*/                                          12034099
+   if fngc=null() then k=0;                                             12041099
+   else do;                                                             12042099
+     sfp = addr(fngc->fng_buffer);     /* ->First_available_byte     */ 12050099
+     fng_end = sfp + fng_bufsize -     /* ->Last_available_byte+1    */ 12060099
+               cstg( null()->fng_buffer_chain );                        12061099
+     sfp = sfp + fngc->fng_length;                                      12070099
+     k = fng_end - sfp;                /* Bytes available            */ 12080099
+     end;                                                               12081099
+   j=mem_size;                                                          12090082
+   p=bmp;                                                               12100082
+   do while(j>0);                                                       12110082
+     if k=0 then do;                   /* Need new buffer            */ 12120082
+       sfp  = Xalloc( fng_bufsize );   /* Allocate new               */ 12130082
+       if sfp=null() then do;                                           12140099
+         put skip edit('No Buffers')(a);                                12141099
+         call storage_stats;                                            12142099
+         stop;                                                          12143099
+         end;                                                           12144099
+       if fngp=null() then fngp=sfp;                                    12145099
+       else fngc->fng_next = sfp;      /* Chain buffers              */ 12150099
+       fngc = sfp;                     /* Initialize buffer          */ 12160099
+       sfp->fng_next = null();                                          12170099
+       sfp = addr(sfp->fng_buffer);                                     12190082
+       sfp->vfc = '5A'x;                                                12210094
+       sfp = sfp + 1;                                                   12220082
+       sf_len   = 0;                   /* Set later...               */ 12230084
+       sf_id    = 'D3EE89'x;           /* FNG                        */ 12240084
+       sf_flag  = '00000000'b;                                          12250082
+       sfp = addr(sff_end);                                             12260082
+       fng_end = sfp + fng_bufsize -   /* ->Last_available_byte+1    */ 12261099
+                 cstg( null()->fng_buffer_chain );                      12262099
+       fngc->fng_length = cstg(sff) + 1;                                12262199
+       k = fng_end - sfp;              /* Bytes available            */ 12280082
+       end; /* k=0 */                                                   12290082
+     l = min(j,k);                     /* Bytes left or available    */ 12300082
+     substr( sfp->bitmap, 1, l ) =  substr( p->bitmap,1,l );            12310082
+     j   = j-l;                                                         12320082
+     k   = k-l;                                                         12330082
+     p   = p+l;                                                         12340082
+     sfp = sfp+l;                                                       12350082
+     fngc->fng_length = fngc->fng_length+l;                             12360099
+     end; /* do while */                                                12370082
+   fng_offset = fng_offset + mem_size; /* Bump bitmap position       */ 12380082
+   if bmpª=null()                                          /*PF991019*/ 12390087
+   then call Xfree( bmp );                                 /*PF990919*/ 12400087
+                                                                        12410000
+   if hex_char='00' then return;       /* No EBCDIC translation      */ 12420099
+                                                                        12430000
+ /*------------------------------*/                                     12440000
+ /* Update FNI data              */                                     12450000
+ /*------------------------------*/                                     12460000
+ if print_char_data='1'b then do;                                       12470099
+   put file(fontlist) skip edit('----- AFP Metrics (FNI) -----')(a);    12480099
+   b   = R2P(chi,font_points/10);                                       12490099
+   put file(fontlist) skip                                              12500099
+       edit( 'Increment:', chi, ' (',b, ' pels)' )                      12510099
+           (a,col(18),p'----9',a,p'---9',a);                            12520099
+   b   = R2P(cha,font_points/10);                                       12530099
+   put file(fontlist) skip                                              12540099
+       edit( 'Ascender:    ', cha, ' (',b, ' pels)' )                   12550099
+           (a,col(18),p'----9',a,p'---9',a);                            12560099
+   b   = R2P(chd,font_points/10);                                       12570099
+   put file(fontlist) skip                                              12580099
+       edit( 'Descender:   ', chd, ' (',b, ' pels)' )                   12590099
+           (a,col(18),p'----9',a,p'---9',a);                            12600099
+   b   = R2P(asp,font_points/10);                                       12610099
+   put file(fontlist) skip                                              12620099
+       edit( 'A-Space:', asp, ' (',b, ' pels)' )                        12630099
+           (a,col(18),p'----9',a,p'---9',a);                            12640099
+   b   = R2P(bsp,font_points/10);                                       12650099
+   put file(fontlist) skip                                              12660099
+       edit( 'B-Space:', bsp, ' (',b, ' pels)' )                        12670099
+           (a,col(18),p'----9',a,p'---9',a);                            12680099
+   b   = R2P(csp,font_points/10);                                       12690099
+   put file(fontlist) skip                                              12700099
+       edit( 'C-Space:', csp, ' (',b, ' pels)' )                        12710099
+           (a,col(18),p'----9',a,p'---9',a);                            12720099
+   b   = R2P(blo,font_points/10);                                       12730099
+   put file(fontlist) skip                                              12740099
+       edit( 'Baseline off:', blo, ' (',b, ' pels)' )                   12750099
+           (a,col(18),p'----9',a,p'---9',a);                            12760099
+   end; /* Print AFP metrics */                                         12770099
+                                                                        12780099
+   fnm_index = (where_fnm - fnmp) / cstg(fnm);             /*PF990715*/ 12790085
+   k = cp_rel(cpx)-1;             /* Relative # of FNI entry         */ 12800000
+   k = k * cstg(fni);             /* Offset to FNI entry             */ 12810000
+   sfp = fni0p + k;               /* A(FNI entry) - 0 degrees        */ 12820000
+   fni.fni_gcid  = codepg(cpx);   /* Indicate this character proc'd. */ 12830000
+   fni.fni_chi   = chi;                                                 12840000
+   fni.fni_cha   = cha;                                    /*PF991130*/ 12850099
+   fni.fni_chd   = chd;                                    /*PF991130*/ 12860099
+   fni.fni_idx   = fnm_index;                              /*PF990715*/ 12870099
+   fni.fni_asp   = asp;                                                 12880000
+   fni.fni_bsp   = bsp;                                                 12890000
+   fni.fni_csp   = csp;                                                 12900000
+   fni.fni_blo   = blo;                                                 12910000
+                                                                        12920000
+   sfp = fni90p + k;              /* A(FNI entry) - 90 degrees       */ 12930000
+   fni.fni_gcid  = codepg(cpx);   /* Indicate this character proc'd. */ 12940000
+   fni.fni_chi   = chi;                                                 12950000
+   fni.fni_cha   = cha;                                    /*PF991130*/ 12960099
+   fni.fni_chd   = chd;                                    /*PF991130*/ 12970099
+   fni.fni_idx   = fnm_index;                              /*PF990715*/ 12980099
+   fni.fni_asp   = asp;                                                 12990000
+   fni.fni_bsp   = bsp;                                                 13000000
+   fni.fni_csp   = csp;                                                 13010000
+   fni.fni_blo   = blo;                                                 13020000
+                                                                        13030000
+ /*------------------------------*/                                     13040000
+ /* Font-wide metrics            */                                     13050000
+ /*------------------------------*/                                     13060000
+ if first_character then do;                                            13070000
+   first_character='0'b;                                                13080000
+   font_inc = chi;                                                      13090000
+   font_asp = asp;                                                      13100000
+   font_mxd = chd;                                         /*PF020927*/ 13101099
+   end; /* first_character */                                           13110000
+ else do;                                                               13120000
+   if chiª=font_inc then font_uinc='0'b;                                13130000
+   if chi>font_inc then do;                                             13140000
+     font_inc=chi;                                                      13150000
+     end;                                                               13160000
+   if aspª=font_asp then font_uasp='0'b;                                13170000
+   if asp<font_asp then do;                                             13180000
+     font_asp=asp;                                                      13190000
+     end;                                                               13200000
+   end; /* else */                                                      13210000
+   if asp<0 then do;                   /* Kerning                    */ 13220000
+     font_kern='1'b;                                                    13230000
+     end; /* asp<0 */                                                   13240000
+   if chd>font_mxa then font_mxa = cha;                    /*PF020930*/ 13242099
+   if chd>font_mxd then font_mxd = chd;                    /*PF020927*/ 13243099
+                                                                        13250000
+ /*------------------------------*/                                     13260000
+ /* Miscellaneous metrics        */                                     13270000
+ /*------------------------------*/                                     13280000
+   if ebcdic_char = 'M' then do;       /* Uppercase-height           */ 13290000
+     sfp = fnpp;                                                        13300000
+     fnp_uch = blo;                                                     13310000
+     sfp = addr(fnp_next);                                              13320000
+     fnp_uch = blo;                                                     13330000
+     end; /* M */                                                       13340000
+   if ebcdic_char = '0' then do;       /* Figure Space               */ 13350000
+     sfp = fnop;                                                        13360000
+     fno_fsp = chi;                                                     13370000
+     sfp = addr(fno_next);                                              13380000
+     fno_fsp = chi;                                                     13390000
+     end; /* 0 */                                                       13400000
+   if ebcdic_char = ' ' then do;       /* Variable-space Increment   */ 13410000
+     sfp = fnop;                                                        13420000
+     fno_vsi = chi;                                                     13430000
+     sfp = addr(fno_next);                                              13440000
+     fno_vsi = chi;                                                     13450000
+     end; /* space */                                                   13460000
+   if ebcdic_char = 'FF'x then do;     /* Xerox special 'sub' char.  */ 13470085
+     FF_FNM_index = fnm_index;                             /*PF990715*/ 13480085
+     end; /* FF */                                                      13490085
+                                                                        13500000
+   return;                                                              13510000
+                                                                        13520000
+   end list_char_bitmap;                                                13530000
+                                                                        13540000
+ /********************************************************************/ 13550000
+ /*   Convert pels at 300DPI to relative metric.                     */ 13560000
+ /*   Relative = 1000/pels_per_inch) * 72 * pels.                    */ 13570000
+ /********************************************************************/ 13580000
+ P2R: proc(pels) returns( fixed bin(15) );                              13590000
+ dcl     pels                fixed bin(15);                             13600000
+ dcl     num                 float bin(21);                /*PF980723*/ 13610000
+ dcl     denom               float bin(21);                /*PF980723*/ 13620000
+ dcl     sgn                 fixed bin(31);                /*PF991220*/ 13621099
+ num   = pels * 7200;                                                   13630000
+ denom = font_points * 3;                                               13640000
+ if denom<0 then do;                                                    13641099
+   sgn=-1;                                                              13642099
+   denom = 0.0 - denom;                                                 13643099
+   end;                                                                 13644099
+ else sgn=1;                                                            13645099
+ if denom=0 then do;                                                    13650000
+   put skip edit('Fixed-point divide, num=',num)(a,p'zzz,zzz,zz9');     13660000
+   return(0);                                                           13670000
+   end;                                                                 13680000
+ return( sgn * ceil(num/denom) );                                       13690099
+ end P2R;                                                               13700000
+                                                                        13710000
+ /********************************************************************/ 13720000
+ /*   Convert relative font metrics to pels at 300DPI                */ 13730000
+ /*   Pels = (relative_metric * pels_per_inch * point_size)/72000    */ 13740000
+ /********************************************************************/ 13750000
+                                                                        13760000
+ R2P: proc(m,p) returns( fixed bin(15) );                               13770000
+ dcl    (m,p,r)              fixed bin(15);                             13780000
+ dcl     z                   fixed bin(31);                             13790000
+ z = m * p * 300;                                                       13800000
+ r = floor( abs(z) / 72000 ) * sign(z);                                 13810099
+ return(r);                                                             13820000
+ end R2P;                                                               13830000
+                                                                        13840000
+ %page;                                                                 13850000
+ /*------------------------------------------------------------------*/ 13860000
+ /*      read_command:       Get next member name                    */ 13870000
+ /*      Card format: PCL_member name AFP_charset_member_name        */ 13880072
+ /*                   Typeface_name [options]                        */ 13890072
+ /*------------------------------------------------------------------*/ 13900000
+ read_command: procedure;                                               13910000
+                                                                        13920000
+   dcl   (i,n)               fixed bin(15);                             13930000
+   dcl   option              char(64)            varying;               13940000
+   dcl   numeric             char(10)            static                 13950000
+              init('0123456789');                                       13960000
+                                                                        13970000
+   card_data = ' ';                                                     13980000
+   if length(card_in)>72 then card_in=substr(card_in,1,72);             13990000
+   call strip( card_in, 'B', ' ' );    /* strip blanks from card     */ 14000000
+   if card_in = ''            then return;                              14010000
+   if substr(card_in,1,1)='*' then return;                              14020000
+   mem_name   = word(card_in,1);                                        14030000
+   afp_mem    = word(card_in,2);                                        14040000
+   i =  wordpos(card_in,3);                                             14050000
+   if i>0 then do;                                                      14060000
+     if substr(card_in,i,1)='''' then do;                               14070000
+       face_name  = substr( card_in, i+1 );                             14080000
+       i = index(face_name,'''');                                       14090000
+       if i>0 then face_name = substr(face_name,1,i-1);                 14100000
+       end; /* single quote */                                          14110000
+     else if substr(card_in,i,1)='"'  then do;                          14120000
+       face_name  = substr( card_in, i+1 );                             14130000
+       i = index(face_name,'"');                                        14140000
+       if i>0 then face_name = substr(face_name,1,i-1);                 14150000
+       end; /* double quote */                                          14160000
+     else face_name  = word( card_in, 3 );                              14170000
+     end; /* facename */                                                14180000
+                                                                        14190000
+   do n=4 by 1;                                                         14200000
+                                                                        14210000
+     option     = word(card_in,n);                                      14220000
+     if option='' then leave;                                           14230000
+     option     = translate( option,  upper_case, lower_case );         14240000
+                                                                        14250000
+     if substr(option,1,7)='POINTS(' then do;                           14260000
+       option = substr(option,8);                                       14270000
+       i = index(option,')');                                           14280000
+       if i>0 then option = substr(option,1,i-1);                       14290000
+       point_size = option;                                             14300000
+       end; /* points */                                                14310000
+                                                                        14320000
+     if substr(option,1,7)='HEIGHT(' then do;                           14330000
+       option = substr(option,8);                                       14340000
+       i = index(option,')');                                           14350000
+       if i>0 then option = substr(option,1,i-1);                       14360000
+       hgt = option;                                                    14370000
+       end; /* height */                                                14380000
+                                                                        14390000
+     if substr(option,1,4)='VSI(' then do;                              14400000
+       option = substr(option,5);                                       14410000
+       i = index(option,')');                                           14420000
+       if i>0 then option = substr(option,1,i-1);                       14430000
+       varspc = option;                                                 14440000
+       end; /* VSI */                                                   14450000
+                                                                        14460000
+     if substr(option,1,4)='LSP(' then do;                              14470000
+       option = substr(option,5);                                       14480000
+       i = index(option,')');                                           14490000
+       if i>0 then option = substr(option,1,i-1);                       14500000
+       lsp = option;                                                    14510000
+       end; /* LSP */                                                   14520000
+                                                                        14530000
+     if substr(option,1,4)='FSP(' then do;                              14540000
+       option = substr(option,5);                                       14550000
+       i = index(option,')');                                           14560000
+       if i>0 then option = substr(option,1,i-1);                       14570000
+       fsp = option;                                                    14580000
+       end; /* FSP */                                                   14590000
+                                                                        14600000
+     if substr(option,1,4)='WSP(' then do;                              14610000
+       option = substr(option,5);                                       14620000
+       i = index(option,')');                                           14630000
+       if i>0 then option = substr(option,1,i-1);                       14640000
+       wsp = option;                                                    14650000
+       end; /* WSP */                                                   14660000
+                                                                        14670000
+     end; /* do n */                                                    14680000
+                                                                        14690000
+   if mem_name=' ' | afp_mem=' ' | face_name=' '                        14700000
+   then do;                                                             14710000
+     put file(fontlist) skip                                            14720000
+         edit('*** Invalid request.')(a);                               14730000
+         return;                                                        14740000
+     end; /* then */                                                    14750000
+   if point_sizeª=' ' & verify(point_size,numeric)ª=0 then do;          14760000
+     put file(fontlist) skip                                            14770000
+         edit('*** Invalid point size ',point_size)(a);                 14780000
+         point_size=' ';                                                14790000
+     end; /* point_size */                                              14800000
+                                                                        14810000
+   mem_name  = translate( mem_name,  upper_case, lower_case );          14820000
+   afp_mem   = translate( afp_mem,   upper_case, lower_case );          14830000
+   face_name = translate( face_name, upper_case, lower_case );          14840000
+                                                                        14850000
+   end read_command;                                                    14860000
+                                                                        14870000
+ %page;                                                                 14880000
+ /*-----------------------------------*/                                14890000
+ /* c2b: convert BYTE to binary       */                                14900000
+ /*-----------------------------------*/                                14910000
+ c2b: proc( c ) returns( fixed bin(15) );                               14920000
+ dcl     c                 HPBYTE;                                      14930000
+ dcl     b8                bit(8);                                      14940000
+ dcl     f15               fixed bin(15);                               14950000
+ b8 = unspec(c);                                                        14960000
+ unspec(f15) =  '00000000'b || b8;                                      14970000
+ return(f15);                                                           14980000
+ end c2b;                                                               14990000
+                                                                        15000000
+ /*-----------------------------------*/                                15010000
+ /* sc2b: SIGNED BYTE to binary       */                                15020000
+ /*-----------------------------------*/                                15030000
+ sc2b: proc( c ) returns( fixed bin(15) );                              15040000
+ dcl     c                 HPBYTE;                                      15050000
+ dcl     b8                bit(8);                                      15060000
+ dcl     f15               fixed bin(15);                               15070000
+ b8 = unspec(c);                                                        15080000
+ if substr(b8,1,1)='1'b                                                 15090000
+ then unspec(f15) = '11111111'b || b8;                                  15100000
+ else unspec(f15) = '00000000'b || b8;                                  15110000
+ return(f15);                                                           15120000
+ end sc2b;                                                              15130000
+                                                                        15140000
+ /*-----------------------------------*/                                15150000
+ /* b2b: convert HPBIN to binary      */                                15160000
+ /* (no-operation for mainframe)      */                                15170000
+ /*-----------------------------------*/                                15180000
+ b2b: proc( b ) returns( fixed bin(15) );                               15190000
+ dcl     b                 HPBIN;                                       15200000
+ dcl     b16               bit(16);                                     15210000
+ dcl     f15               fixed bin(15);                               15220000
+ b16 = unspec( substr(b,1,1) ) || unspec( substr(b,2,1) ) ;             15230000
+ unspec(f15) = b16;                                                     15240000
+ return(f15);                                                           15250000
+ end b2b;                                                               15260000
+                                                                        15270000
+ %page;                                                                 15280000
+ /*------------------------------------------------------------------*/ 15290000
+ /*      get_esc_seq:  Read one escape sequence                      */ 15300000
+ /*------------------------------------------------------------------*/ 15310000
+                                                                        15320000
+ get_esc_seq: proc;                                                     15330000
+                                                                        15340000
+ dcl     c                   char(1);                                   15350000
+ dcl     n                   fixed bin(15);                             15360000
+ dcl     in_esc              bit(1)              init('0'b);            15370000
+                                                                        15380000
+ /* ----------------------- */                                          15390000
+ /* ASCII upper-case A-Z    */                                          15400000
+ /* ----------------------- */                                          15410000
+ dcl     alpha               char(26)  static    init                   15420000
+    ('4142434445464748494A4B4C4D4E4F505152535455565758595A'x);          15430000
+                                                                        15440000
+ esc_seq='';                                                            15450000
+                                                                        15460000
+ scan: do while('1'b);                                                  15470000
+   n = read_pcl( addr(c), 1 );                                          15480000
+   if n=0 then return;       /* End of file */                          15490000
+   if in_esc then do;                                                   15500000
+     esc_seq = esc_seq || c;                                            15510000
+     if index(alpha,c)>0 then leave scan;                               15520000
+     end; /* in_esc */                                                  15530000
+   else do;                                                             15540000
+     if c=ESC_CHAR then do;                                             15550000
+       esc_seq = esc_seq || c;                                          15560000
+       in_esc='1'b;                                                     15570000
+       end;                                                             15580000
+     end; /* else */                                                    15590000
+   end; /* do while */                                                  15600000
+                                                                        15610000
+   return;                                                              15620000
+                                                                        15630000
+ end get_esc_seq;                                                       15640000
+                                                                        15650000
+ %page;                                                                 15660000
+ /*------------------------------------------------------------------*/ 15670000
+ /*      read_pcl: read data from PCL input file                     */ 15680000
+ /*------------------------------------------------------------------*/ 15690000
+                                                                        15700000
+ read_pcl: proc(where,howmuch) returns( fixed bin(15) );                15710000
+                                                                        15720000
+ dcl     where               ptr;                                       15730000
+ dcl     howmuch             fixed bin(15);                             15740000
+                                                                        15750000
+ dcl     fp                  ptr      static;                           15760000
+ dcl     font_buffer         char(80) static;                           15770000
+ dcl     c                   char(1024)          based;                 15780000
+ dcl     op                  ptr;                                       15790000
+ dcl    (n,nmax,z)           fixed bin(15);                             15800000
+ dcl     font_eof            bit(1)   static     init('0'b);            15810000
+                                                                        15820000
+ on endfile(font) font_eof='1'b;                                        15830000
+                                                                        15840000
+ if first_time_font then do;                                            15850000
+   read file(font) into(font_buffer);                                   15860000
+   fp = addr(font_buffer);                                              15870000
+   first_time_font='0'b;                                                15880000
+   font_eof='0'b;                                                       15890000
+   end; /* first_time_font */                                           15900000
+                                                                        15910000
+ op   = where;                                                          15920000
+ nmax = howmuch;                                                        15930000
+ z    = 0;                                                              15940000
+                                                                        15950000
+ do while('1'b);                                                        15960000
+                                                                        15970000
+   if nmax=0   then return(z);                                          15980000
+                                                                        15990000
+   if fp > addr(font_buffer) + 79 then do;                              16000000
+     if font_eof then return(z);                                        16010000
+     read file(font) into(font_buffer);                                 16020000
+     fp=addr(font_buffer);                                              16030000
+     end; /* if */                                                      16040000
+   n = 80 - ( fp - addr(font_buffer) );     /* Characters in buffer  */ 16050000
+   n = min(n,nmax);                         /* Characters to move    */ 16060000
+   substr(op->c,1,n) = substr(fp->c,1,n);   /* Move data             */ 16070000
+   op   = op+n;                             /* Bump output pointer   */ 16080000
+   fp   = fp+n;                             /* Bump input pointer    */ 16090000
+   z    = z+n;                              /* Count chars moved     */ 16100000
+   nmax = nmax-n;                           /* Adj chars wanted      */ 16110000
+                                                                        16120000
+   end; /* do while */                                                  16130000
+                                                                        16140000
+ end read_pcl;                                                          16150000
+                                                                        16160000
+ %page;                                                                 16170000
+ /*------------------------------------------------------------------*/ 16180000
+ /*      init_afp_records:   initialize AFP font structures          */ 16190000
+ /*------------------------------------------------------------------*/ 16200000
+                                                                        16210000
+ init_afp_records: procedure;                                           16220000
+                                                                        16230000
+ dcl     vfc                 char(1)             based;                 16240000
+ dcl     zchar               char(32767)         based;                 16250000
+ dcl     i                   fixed bin(15)       init(0);               16260000
+ dcl     datetime            char(14);                                  16270000
+ dcl     systime             entry returns( char(14) );                 16280000
+                                                                        16290000
+   /*---------------------------------*/                                16300000
+   /* Create 'BFN' (Begin Font) record*/                                16310000
+   /*---------------------------------*/                                16320000
+   bfnl = 1+cstg(sff)+cstg(bfn)+cstg( null()->BFN_timestmp );           16330000
+   sfp  = Xalloc( bfnl );                                               16340000
+   sfp->vfc = '5A'x;                                                    16350000
+   sfp = sfp + 1;                                                       16360000
+   sf_len   = bfnl - 1;                                                 16370000
+   sf_id    = 'D3A889'x;     /* BFN */                                  16380000
+   sf_flag  = '00000000'b;                                              16390000
+   sfp = addr(sff_end);                                                 16400000
+   substr( sfp->zchar, 1, cstg(bfn) ) = repeat( '00'x, cstg(bfn)-1 );   16410000
+   bfn.bfn_name = afp_mem;                                              16420000
+   datetime = systime();                                                16430000
+   addr(bfn_end)->BFN_timestmp.BFN_ts_length =                          16440000
+       bits( cstg( null()->BFN_timestmp ) );                            16450000
+   addr(bfn_end)->BFN_timestmp.BFN_ts_id      = '62'x;                  16460000
+   addr(bfn_end)->BFN_timestmp.BFN_ts_type    = '00'x;                  16470000
+   addr(bfn_end)->BFN_timestmp.BFN_ts_date    = substr(datetime,1,6);   16480000
+   addr(bfn_end)->BFN_timestmp.BFN_ts_time    = substr(datetime,7,8);   16490000
+   bfnp = sfp;                                                          16500000
+                                                                        16510000
+   /*--------------------------------------*/                           16520000
+   /* Initialize 'FND' (Font Descriptor)   */                           16530000
+   /*--------------------------------------*/                           16540000
+   fndl = 1+cstg(sff)+cstg(fnd);                                        16550000
+   sfp  = Xalloc( fndl );                                               16560000
+   sfp->vfc = '5A'x;                                                    16570000
+   sfp = sfp + 1;                                                       16580000
+   sf_len   = fndl - 1;                                                 16590000
+   sf_id    = 'D3A689'x;     /* FND */                                  16600000
+   sf_flag  = '00000000'b;                                              16610000
+   sfp = addr(sff_end);                                                 16620000
+   substr( sfp->zchar, 1, cstg(fnd) ) = repeat( '00'x, cstg(fnd)-1 );   16630000
+   fnd.fnd_face = face_name;                                            16640000
+   fndp = sfp;                                                          16650000
+                                                                        16660000
+   /*--------------------------------------*/                           16670000
+   /* Initialize 'FNC' (Font Control)      */                           16680000
+   /*--------------------------------------*/                           16690000
+   fncl = 1+cstg(sff)+cstg(fnc_bb)+cstg(fnc_opt);                       16700000
+   sfp  = Xalloc( fncl );                                               16710000
+   sfp->vfc = '5A'x;                                                    16720000
+   sfp = sfp + 1;                                                       16730000
+   sf_len   = fncl - 1;                                                 16740000
+   sf_id    = 'D3A789'x;     /* FNC */                                  16750000
+   sf_flag  = '00000000'b;                                              16760000
+   sfp = addr(sff_end);                                                 16770000
+   substr( sfp->zchar, 1, cstg(fnc_bb)+cstg(fnc_opt) ) =                16780000
+           repeat( '00'x, cstg(fnc_bb)+cstg(fnc_opt)-1 );               16790000
+   fncp = sfp;                                                          16800000
+   fnc_bb.fnc_con1  = '01'x;           /* Constant                   */ 16810000
+   fnc_bb.fnc_pti   = '05'x;           /* Pattern Technology         */ 16820000
+   fnc_bb.fnc_flags = '00000000'b;     /* Non-Uniform character box  */ 16830084
+   fnc_bb.fnc_um    = '020203E803E8'x; /* Relative/base=1000         */ 16840000
+   fnc_bb.fnc_fnol  = '00011010'b;     /* L'FNO repeating group '1A'x*/ 16850000
+   fnc_bb.fnc_fnil  = '00011100'b;     /* L'FNI repeating group '1C'x*/ 16860000
+   fnc_bb.fnc_pdc   = (3)'00'bx;       /* Init. # pattern bytes      */ 16870084
+   fnc_bb.fnc_fnpl  = '00010110'b;     /* L'FNP repeating group '16'x*/ 16880000
+   fnc_bb.fnc_fnml  = '00001000'b;     /* L'FNM repeating group '08'x*/ 16890000
+   sfp = addr(fnc_end);                /* Point to optional data     */ 16900000
+   fnc_opt.fnc_xres = '0BB8'x;         /* Indicate 300-pel           */ 16910000
+   fnc_opt.fnc_yres = '0BB8'x;         /* ditto                      */ 16920000
+                                                                        16930000
+   /*--------------------------------------*/                           16940000
+   /* Initialize 'FNM' (Font Index)        */                           16950000
+   /* (# of characters from codepage)      */                           16960000
+   /*--------------------------------------*/                           16970000
+   fnml = 1+cstg(sff)+cstg(fnm)*cp_char_count; /* Max size of FNM    */ 16980085
+   sfp  = Xalloc( fnml );                                               16990000
+   sfp->vfc = '5A'x;                                                    17000000
+   sfp = sfp + 1;                                                       17010000
+   sf_len   = cstg(sff);                       /*            PF990715*/ 17020085
+   sf_id    = 'D3A289'x;     /* FNM */                                  17030000
+   sf_flag  = '00000000'b;                                              17040000
+   sfp = addr(sff_end);                                                 17050000
+   substr( sfp->zchar, 1, cstg(fnm)*cp_char_count ) =                   17060000
+           repeat( '00'x, cstg(fnm)*cp_char_count-1 );                  17070000
+   fnmp,fnmc = sfp;                                                     17080085
+                                                                        17090000
+   /*--------------------------------------*/                           17100000
+   /* Initialize 'FNO' (Font Orientation)  */                           17110000
+   /*     (Two font orientations)          */                           17120000
+   /*--------------------------------------*/                           17130000
+   fnol = 1+cstg(sff)+cstg(fno)*2;                                      17140000
+   sfp  = Xalloc( fnol );                                               17150000
+   sfp->vfc = '5A'x;                                                    17160000
+   sfp = sfp + 1;                                                       17170000
+   sf_len   = fnol - 1;                                                 17180000
+   sf_id    = 'D3AE89'x;     /* FNO */                                  17190000
+   sf_flag  = '00000000'b;                                              17200000
+   sfp = addr(sff_end);                                                 17210000
+   substr( sfp->zchar, 1, cstg(fno)*2 ) =                               17220000
+           repeat( '00'x, cstg(fno)*2-1 );                              17230000
+   fnop = sfp;                                                          17240000
+   sfp = addr(fno.fno_next);           /* Point to 2nd FNO group     */ 17250000
+   fno.fno_rot   = '2D00'x;            /* Rotation  90 degrees       */ 17260000
+   fno.fno_flags = '00100000'B;        /* Font index number for 2nd  */ 17270099
+                                                                        17280000
+   /*--------------------------------------*/                           17290000
+   /* Initialize 'FNP' (Font Position)     */                           17300000
+   /*     (Two font orientations)          */                           17310000
+   /*--------------------------------------*/                           17320000
+   fnpl = 1+cstg(sff)+cstg(fnp)*2;                                      17330000
+   sfp  = Xalloc( fnpl );                                               17340000
+   sfp->vfc = '5A'x;                                                    17350000
+   sfp = sfp + 1;                                                       17360000
+   sf_len   = fnpl - 1;                                                 17370000
+   sf_id    = 'D3AC89'x;     /* FNP */                                  17380000
+   sf_flag  = '00000000'b;                                              17390000
+   sfp = addr(sff_end);                                                 17400000
+   substr( sfp->zchar, 1, cstg(fnp)*2 ) =                               17410000
+           repeat( '00'x, cstg(fnp)*2-1 );                              17420000
+   fnpp = sfp;                                                          17430000
+   fnp.fnp_con1 = '01'x;                                                17440000
+   sfp = addr(fnp.fnp_next);           /* Point to 2nd FNP group     */ 17450000
+   fnp.fnp_con1 = '01'x;                                                17460000
+                                                                        17470000
+   /*--------------------------------------*/                           17480000
+   /* Initialize 'FNI' (Font Index)        */                           17490000
+   /* (# of characters from codepage)      */                           17500000
+   /*--------------------------------------*/                           17510000
+   fnil = 1+cstg(sff)+cstg(fni)*cp_char_count;                          17520000
+   sfp  = Xalloc( fnil );    /* Allocate FNI for 0 degrees           */ 17530000
+   sfp->vfc = '5A'x;                                                    17540000
+   sfp = sfp + 1;                                                       17550000
+   sf_len   = fnil - 1;                                                 17560000
+   sf_id    = 'D38C89'x;     /* FNI */                                  17570000
+   sf_flag  = '00000000'b;                                              17580000
+   sfp = addr(sff_end);                                                 17590000
+   substr( sfp->zchar, 1, cstg(fni)*cp_char_count ) =                   17600000
+           repeat( '00'x, cstg(fni)*cp_char_count-1 );                  17610000
+   fni0p = sfp;                                                         17620000
+   do i=0 to 255;                      /* Get data from codepage     */ 17630000
+     if cp_rel(i)ª=0 then do;                                           17640000
+       fni_gcid = ' ';                 /* Initialize GCID            */ 17650000
+       fni_idx  = -1;                  /*     "   FNM Index  PF990715*/ 17660085
+       sfp = addr(fni_next);                                            17670000
+       end; /* cp_rel(i) */                                             17680000
+     end; /* do i */                                                    17690000
+                                                                        17700000
+   sfp = fni0p - cstg(sff) - 1;                                         17710000
+   fni90p = Xalloc( fnil );            /* Allocate FNI for 90 deg    */ 17720000
+   substr( fni90p->zchar, 1, fnil ) =  /* Copy 0 deg to 90 deg       */ 17730000
+           substr( sfp->zchar, 1, fnil );                               17740000
+   fni90p = fni90p + cstg(sff) + 1;                                     17750000
+                                                                        17760000
+   /*--------------------------------------*/                           17770099
+   /* Initialize 'FNG' (Font Patterns)     */                           17780099
+   /*--------------------------------------*/                           17800099
+   fng_bufsize = jfclrecl + cstg( null()->fng_buffer_chain ) - 4;       17810099
+   if fng_bufsize<100 then do;                                          17820093
+     put skip edit('***ERROR*** ',                                      17830093
+                   'FNG_BUFSIZE=',fng_bufsize)(a,a,p'zzz,zz9');         17840093
+     stop;                                                              17850093
+     end;                                                               17860093
+   fngp,fngc=null();                                                    17861099
+   fng_offset=0;                                                        17862099
+                                                                        18010000
+   /*---------------------------------*/                                18020000
+   /* Create 'ENF' (End Font) record  */                                18030000
+   /*---------------------------------*/                                18040000
+   enfl = 1+cstg(sff)+cstg(bfn);                                        18050000
+   sfp  = Xalloc( enfl );                                               18060000
+   sfp->vfc = '5A'x;                                                    18070000
+   sfp = sfp + 1;                                                       18080000
+   sf_len   = enfl - 1;                                                 18090000
+   sf_id    = 'D3A989'x;     /* ENF */                                  18100000
+   sf_flag  = '00000000'b;                                              18110000
+   sfp = addr(sff_end);                                                 18120000
+   substr( sfp->zchar, 1, cstg(bfn) ) = repeat( '00'x, cstg(bfn)-1 );   18130000
+   bfn.bfn_name = afp_mem;                                              18140000
+   enfp = sfp;                                                          18150000
+                                                                        18160000
+ end init_afp_records;                                                  18170000
+                                                                        18180000
+ %page;                                                                 18190000
+ /*------------------------------------------------------------------*/ 18200000
+ /*      write_afp_records:   externalize generated AFP data.        */ 18210000
+ /*------------------------------------------------------------------*/ 18220000
+                                                                        18230000
+ write_afp_records: procedure;                                          18240000
+                                                                        18250000
+ dcl     afp_seq             fixed bin(15)       init(0);               18260000
+ dcl     zp                  ptr;                                       18270000
+ dcl     zchar               char(32767)         based;                 18280000
+ dcl     zbits               bit(32)             based;                 18290084
+ dcl     fngl                fixed bin(15);                             18300099
+                                                                        18310000
+   open file(afpfont) output;                                           18320000
+                                                                        18330000
+   /*-----------------------*/                                          18340000
+   /*  Begin Font           */                                          18350000
+   /*-----------------------*/                                          18360000
+   sfp = bfnp - cstg(sff);                                              18370000
+   afp_seq = afp_seq + 1;                                               18380000
+   sf_seq   = afp_seq;                                                  18390000
+   sfp = sfp - 1;                                                       18400000
+ /*call HEXDUMP( sfp, bfnl, 'BFN' );*/                                  18410082
+   zp = vlocate( afpfont, bfnl );                                       18420000
+   substr( zp->zchar, 1, bfnl ) = substr( sfp->zchar, 1, bfnl );        18430000
+   call Xfree( sfp );                                                   18440000
+                                                                        18450000
+   /*-----------------------*/                                          18460000
+   /*  Font Descriptor      */                                          18470000
+   /*-----------------------*/                                          18480000
+   sfp = fndp - cstg(sff);                                              18490000
+   afp_seq = afp_seq + 1;                                               18500000
+   sf_seq   = afp_seq;                                                  18510000
+   sfp = sfp - 1;                                                       18520000
+ /*call HEXDUMP( sfp, fndl, 'FND' );*/                                  18530082
+   zp = vlocate( afpfont, fndl );                                       18540000
+   substr( zp->zchar, 1, fndl ) = substr( sfp->zchar, 1, fndl );        18550000
+   call Xfree( sfp );                                                   18560000
+                                                                        18570000
+   /*-----------------------*/                                          18580000
+   /*  Font Control         */                                          18590000
+   /*-----------------------*/                                          18600000
+   sfp = fncp;                                                          18610084
+   fnc_bb.fnc_pdc =                    /* Pattern data byte count    */ 18620084
+       substr( addr(fng_offset)->zbits, 9, 24 );                        18630084
+   sfp = fncp - cstg(sff);                                              18640084
+   afp_seq = afp_seq + 1;                                               18650000
+   sf_seq   = afp_seq;                                                  18660000
+   sfp = sfp - 1;                                                       18670000
+ /*call HEXDUMP( sfp, fncl, 'FNC' );*/                                  18680082
+   zp = vlocate( afpfont, fncl );                                       18690000
+   substr( zp->zchar, 1, fncl ) = substr( sfp->zchar, 1, fncl );        18700000
+   call Xfree( sfp );                                                   18710000
+                                                                        18720000
+   /*-----------------------*/                                          18730000
+   /*  Font Map             */                                          18740000
+   /*-----------------------*/                                          18750000
+   sfp = fnmp - cstg(sff);                                 /*PF990715*/ 18760085
+   fnml = fnmc - sfp;                                                   18770085
+   sf_len = fnml;                                          /*PF990715*/ 18780085
+   afp_seq = afp_seq + 1;                                               18790000
+   sf_seq   = afp_seq;                                                  18800000
+   sfp = sfp - 1;                                                       18810000
+   fnml = fnml + 1;                                        /*PF990715*/ 18820085
+ /*call HEXDUMP( sfp, fnml, 'FNM' );*/                                  18830084
+   zp = vlocate( afpfont, fnml );                                       18840000
+   substr( zp->zchar, 1, fnml ) = substr( sfp->zchar, 1, fnml );        18850000
+   call Xfree( sfp );                                                   18860000
+                                                                        18870000
+   /*-----------------------*/                                          18880000
+   /*  Font Orientation     */                                          18890000
+   /*-----------------------*/                                          18900000
+   sfp = fnop - cstg(sff);                                              18910000
+   afp_seq = afp_seq + 1;                                               18920000
+   sf_seq   = afp_seq;                                                  18930000
+   sfp = sfp - 1;                                                       18940000
+ /*call HEXDUMP( sfp, fnol, 'FNO' );*/                                  18950082
+   zp = vlocate( afpfont, fnol );                                       18960000
+   substr( zp->zchar, 1, fnol ) = substr( sfp->zchar, 1, fnol );        18970000
+   call Xfree( sfp );                                                   18980000
+                                                                        18990000
+   /*-----------------------*/                                          19000000
+   /*  Font Position        */                                          19010000
+   /*-----------------------*/                                          19020000
+   sfp = fnpp - cstg(sff);                                              19030000
+   afp_seq = afp_seq + 1;                                               19040000
+   sf_seq   = afp_seq;                                                  19050000
+   sfp = sfp - 1;                                                       19060000
+ /*call HEXDUMP( sfp, fnpl, 'FNP' );*/                                  19070082
+   zp = vlocate( afpfont, fnpl );                                       19080000
+   substr( zp->zchar, 1, fnpl ) = substr( sfp->zchar, 1, fnpl );        19090000
+   call Xfree( sfp );                                                   19100000
+                                                                        19110000
+   /*-----------------------*/                                          19120000
+   /*  Font Index           */                                          19130000
+   /*-----------------------*/                                          19140000
+   sfp = fni0p - cstg(sff);  /* FNI - 0 degrees                      */ 19150000
+   afp_seq = afp_seq + 1;                                               19160000
+   sf_seq   = afp_seq;                                                  19170000
+   sfp = sfp - 1;                                                       19180000
+ /*call HEXDUMP( sfp, fnil, 'FNI' );*/                                  19190082
+   zp = vlocate( afpfont, fnil );                                       19200000
+   substr( zp->zchar, 1, fnil ) = substr( sfp->zchar, 1, fnil );        19210000
+   call Xfree( sfp );                                                   19220000
+                                                                        19230000
+   sfp = fni90p - cstg(sff); /* FNI - 90 degrees                   */   19240000
+   afp_seq = afp_seq + 1;                                               19250000
+   sf_seq   = afp_seq;                                                  19260000
+   sfp = sfp - 1;                                                       19270000
+ /*call HEXDUMP( sfp, fnil, 'FNI' );*/                                  19280082
+   zp = vlocate( afpfont, fnil );                                       19290000
+   substr( zp->zchar, 1, fnil ) = substr( sfp->zchar, 1, fnil );        19300000
+   call Xfree( sfp );                                                   19310000
+                                                                        19320000
+   /*-----------------------*/                                          19330000
+   /*  Font Patterns        */                                          19340000
+   /*-----------------------*/                                          19350000
+   do while( fngpª=null() );                                            19360082
+     fngl = fngp->fng_length;                                           19380099
+     sfp = addr(fngp->fng_buffer) + 1;                                  19390099
+     sf_len = fngl - 1;                /* Actual length of FNG record*/ 19400084
+     afp_seq = afp_seq + 1;                                             19410082
+     sf_seq  = afp_seq;                                                 19420082
+     sfp = sfp - 1;                                                     19430082
+ /*  call HEXDUMP( sfp, fngl, 'FNG' );*/                                19440084
+     zp = vlocate( afpfont, fngl );                                     19450082
+     substr( zp->zchar, 1, fngl ) =                                     19460082
+             substr( sfp->zchar,1,fngl );                               19470082
+     fngc = fngp->fng_next;                                             19480099
+     call Xfree( fngp );                                                19490099
+     fngp = fngc;                                                       19491099
+     end; /* do while */                                                19500073
+   fngp=null();                                                         19501099
+                                                                        19510000
+   /*-----------------------*/                                          19520000
+   /*  End Font             */                                          19530000
+   /*-----------------------*/                                          19540000
+   sfp = enfp - cstg(sff);                                              19550000
+   afp_seq = afp_seq + 1;                                               19560000
+   sf_seq   = afp_seq;                                                  19570000
+   sfp = sfp - 1;                                                       19580000
+ /*call HEXDUMP( sfp, enfl, 'ENF' );*/                                  19590082
+   zp = vlocate( afpfont, enfl );                                       19600000
+   substr( zp->zchar, 1, enfl ) = substr( sfp->zchar, 1, enfl );        19610000
+   call Xfree( sfp );                                                   19620000
+                                                                        19630000
+   close file(afpfont);                                                 19640000
+                                                                        19650000
+ end write_afp_records;                                                 19660000
+                                                                        19670000
+ %include(ascebc);                                                      19680000
+ %include(lowercas);                                                    19690000
+                                                                        19691099
+ /********************************************************************/ 19692099
+ /*   Print Page Heading                                             */ 19693099
+ /********************************************************************/ 19694099
+ print_heading: proc;                                                   19695099
+   page_num = page_num+1;                                               19695199
+   put file(fontlist) page edit( 'Font ', font_name, 'Page ', page_num) 19695299
+                               ( a, a, col(110), a, p'zzz9' );          19695399
+   put file(fontlist) skip(2);                                          19695499
+   end print_heading;                                                   19696099
+ %page;                                                                 19700000
+                                                                        19701099
+ /********************************************************************/ 19710000
+ /*   Process PARM info                                              */ 19720000
+ /********************************************************************/ 19730000
+                                                                        19740000
+ process_parm: proc;                                                    19750000
+   dcl   i                   fixed bin(15);                             19760087
+   dcl   wrk                 char(10)  varying;                         19770087
+                                                                        19780087
+   if index(parm,'CHAR')>0 then print_char_data='1'b;      /*PF980505*/ 19790087
+                                                                        19800087
+   i = index(parm,'ROT(');                                 /*PF991019*/ 19810087
+   if i>0 then do;                                         /*PF991019*/ 19820087
+     wrk = substr(parm,i+4);                               /*PF991019*/ 19830087
+     i = index(wrk,')');                                   /*PF991019*/ 19840087
+     if i>0 then wrk = substr(wrk,1,i-1);                  /*PF991019*/ 19850087
+     if wrk='0' | wrk='90' | wrk='180' | wrk='270'         /*PF991019*/ 19860087
+     then angle=wrk;                                       /*PF991019*/ 19870087
+     else put skip edit('Invalid Rotation ',wrk)(a);       /*PF991019*/ 19880087
+     end; /* rot */                                        /*PF991019*/ 19890087
+                                                                        19900087
+ end process_parm;                                                      19910087
+ %page;                                                                 19920000
+ /********************************************************************/ 19930000
+ /*   Load Codepage Data                                             */ 19940000
+ /********************************************************************/ 19950000
+                                                                        19960000
+ load_codepage: proc;                                                   19970000
+ dcl     codepage            record input;                              19980000
+ dcl     card                char(80)  varying;                         19990000
+ dcl     gcid                char(8);                                   20000000
+ dcl     cp                  char(2);                                   20010000
+ dcl   1 cpb                 unaligned based,                           20020000
+         5 cpb1              bit(8),                                    20030000
+         5 cpb2              bit(8);                                    20040000
+ dcl     j                   fixed bin(15);                             20050000
+ dcl     cpeof               bit(1)    init('0'b);                      20060000
+ dcl     hexchar             char(16)  static init                      20070000
+        ('0123456789ABCDEF');                                           20080000
+ dcl     hexdig              char(16)  static init                      20090000
+        ('000102030405060708090A0B0C0D0E0F'x);                          20100000
+ dcl     lc                  char(26)  static init                      20110000
+        ('abcdefghijklmnopqrstuvwxyz');                                 20120000
+ dcl     uc                  char(26)  static init                      20130000
+        ('ABCDEFGHIJKLMNOPQRSTUVWXYZ');                                 20140000
+                                                                        20150000
+ on endfile(codepage) cpeof='1'b;                                       20160000
+                                                                        20170000
+ do j=0 to 255;                                                         20180000
+   codepg(j) = '        ';                                              20190000
+   end; /* do j */                                                      20200000
+                                                                        20210000
+ open file(codepage) input;                                             20220000
+ read file(codepage) into(card);                                        20230000
+                                                                        20240000
+ do while(ªcpeof);                                                      20250000
+   if substr(card,1,1)ª='*' &                                           20260000
+      substr(card,1,72)ª=' ' then do;                                   20270000
+     gcid = word(card,1);                                               20280000
+     gcid = translate(gcid,uc,lc);                                      20290000
+     cp   = word(card,2);                                               20300000
+     cp   = translate(cp,uc,lc);                                        20310000
+     if verify(cp,hexchar)ª=0 then do;                                  20320000
+       put skip edit('Invalid character in codepage: ',                 20330000
+                     gcid,' ',cp)(a);                                   20340000
+       gcid = '        ';                                               20350000
+       cp   = '00';                                                     20360000
+       end; /* verify */                                                20370000
+     cp   = translate(cp,hexdig,hexchar);                               20380000
+     j = (addr(cp)->cpb.cpb1)*16 + addr(cp)->cpb.cpb2;                  20390000
+     codepg(j) = gcid;                                                  20400000
+     end; /* then */                                                    20410000
+                                                                        20420000
+   read file(codepage) into(card);                                      20430000
+   end; /* do while */                                                  20440000
+                                                                        20450000
+ close file(codepage);                                                  20460000
+ return;                                                                20470000
+                                                                        20480000
+ end load_codepage;                                                     20490000
+                                                                        20500000
+ /********************************************************************/ 20510000
+ /*   Sort Codepage entry number by GCID                             */ 20520000
+ /********************************************************************/ 20530000
+                                                                        20540000
+ sort_codepage: proc;                                                   20550000
+ dcl     lowest              char(8);                                   20560000
+ dcl     where               fixed bin(15);                             20570000
+ dcl    (i,j)                fixed bin(15);                             20580000
+                                                                        20590000
+ do i=0 to 255;                                                         20600000
+                                                                        20610000
+   lowest = repeat( 'FF'x, 7 );                                         20620000
+                                                                        20630000
+   do j = 0 to 255;                                                     20640000
+     if (cp_rel(j)=0) & (codepg(j)ª=' ') then do;                       20650000
+       if codepg(j)<lowest then do;                                     20660000
+         lowest = codepg(j);                                            20670000
+         where = j;                                                     20680000
+         end;                                                           20690000
+       end; /* cp_rel(j) */                                             20700000
+     end; /* do j */                                                    20710000
+                                                                        20720000
+     if lowest = repeat( 'FF'x, 7 ) then return;                        20730000
+     cp_char_count = cp_char_count + 1;                                 20740000
+     cp_rel(where) = cp_char_count;                                     20750000
+                                                                        20760000
+   end; /* do i */                                                      20770000
+                                                                        20780000
+ return;                                                                20790000
+                                                                        20800000
+ end sort_codepage;                                                     20810000
+                                                                        20820000
+ /********************************************************************/ 20830000
+ /*   Convert 'fixed bin(15,0)' to bit(8);                           */ 20840000
+ /********************************************************************/ 20850000
+                                                                        20860000
+ bits: proc(bin) returns( bit(8) );                                     20870000
+   dcl   bin                 fixed bin(15);                             20880000
+   dcl   bits_15             bit(15);                                   20890000
+   bits_15 = bin;                                                       20900000
+   return( substr(bits_15,8,8) );                                       20910000
+   end bits;                                                            20920000
+                                                                        20920199
+ /********************************************************************/ 20920299
+ /*   Print Storage Statistics                                       */ 20920399
+ /********************************************************************/ 20920499
+ storage_stats: proc;                                                   20920599
+    dcl  sbp                 ptr;                                       20920699
+    sbp = Xstats();                                                     20921099
+    put file(sysprint) skip(2) edit                                     20922099
+            ('Storage Statistics ---')(a);                              20923099
+    put file(sysprint) skip(2) edit                                     20924099
+            ('  Number of storage allocations: ',sbnalc)(a,p'zzz9');    20925099
+    put file(sysprint) skip(2) edit                                     20926099
+        ('  Number of storage releases:    ',sbnfre)(a,p'zzz9');        20927099
+    put file(sysprint) skip(2) edit                                     20928099
+            ('  Current storage allocated:     ',sbcalc)                20929099
+            (a,p'zz,zzz,zz9');                                          20929199
+    put file(sysprint) skip(2) edit                                     20929299
+            ('  Storage highwatermark:         ',sbmalc)                20929399
+            (a,p'zz,zzz,zz9');                                          20929499
+    end storage_stats;                                                  20929599
+                                                                        20930000
+ %include word;                                                         20940000
+ %include wordpos;                                                      20950000
+ %include hex;                                                          20960000
+                                                                        20970000
+ end PCL2AFP;                                                           20980000
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 20990000
+//LKED.SYSLIB DD                                                        21000000
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    21010000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        21020000
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      21030000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       21040000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  21050000
+//LKED.SYSIN DD *                                                       21060000
+ MODE AMODE(31),RMODE(24)                                               21070089
+ NAME PCL2AFP(R)                                                        21080000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 21090000

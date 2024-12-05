@@ -1,0 +1,251 @@
+ /********************************************************************/ 00010000
+ /*                                                                  */ 00020000
+ /*      A D V A N C E D   F U N C T I O N   P R I N T I N G         */ 00021000
+ /*    S T R U C T U R E D   F I E L D   D E F I N I T I O N S       */ 00022000
+ /*                                                                  */ 00023000
+ /*    P.FLASS - NYS LBDC.                                           */ 00024000
+ /*    VERSION 1.1 - OCTOBER 1996                                    */ 00025000
+ /*                                                                  */ 00026000
+ /********************************************************************/ 00027000
+                                                                        00028000
+ DCL   SFP                   PTR;                                       00029000
+                                                                        00030000
+ /*-----------------------------------------*/                          00040000
+ /*    STRUCTURED FIELD HEADER              */                          00050000
+ /*-----------------------------------------*/                          00050100
+ DCL   1 SFF                 UNALIGNED           BASED(SFP),            00050200
+         5 SF_LEN            FIXED BIN(15),                             00050300
+         5 SF_ID             CHAR(3),                                   00050400
+         5 SF_FLAG           BIT(8),                                    00050500
+         5 SF_SEQ            FIXED BIN(15),                             00050600
+         5 SFF_END           CHAR(0),                                   00050700
+       /* STRUCTURED FIELD EXTENSION (OPTIONAL)                      */ 00050800
+       1 SFE                 UNALIGNED           BASED(SFP),            00050900
+         5 SFEL              BIT(8),                                    00051000
+         5 SFET              CHAR(0);                                   00051100
+                                                                        00051200
+ /*-----------------------------------------*/                          00051300
+ /*    BEGIN FONT - 'D3A889'X               */                          00051400
+ /*    END FONT   - 'D3A989'X               */                          00051500
+ /*-----------------------------------------*/                          00051600
+ DCL 1 BFN                   UNALIGNED BASED(SFP), /* BEGIN/END FONT */ 00051700
+       5 BFN_NAME            CHAR(8),       /* TOKEN NAME            */ 00051800
+       5 BFN_END             CHAR(0);       /* END OF BFN/ENF        */ 00051900
+                                                                        00052000
+ /*-----------------------------------------*/                          00052100
+ /*       BOUNDED BOX                       */                          00052200
+ /*    FONT DESCRIPTOR - 'D3A689'X          */                          00052300
+ /*-----------------------------------------*/                          00052400
+ DCL 1 FND                   UNALIGNED BASED(SFP), /* FONT DESCRIPTOR*/ 00052500
+       5 FND_FACE            CHAR(32),      /* TYPEFACE NAME         */ 00052600
+       5 FND_WGT             BIT(8),        /* WEIGHT                */ 00052700
+                                            /* '01'X - ULTRA-LIGHT   */ 00052800
+                                            /* '02'X - EXTRA-LIGHT   */ 00052900
+                                            /* '03'X - LIGHT         */ 00053000
+                                            /* '04'X - SEMI-LIGHT    */ 00053100
+                                            /* '05'X - MEDIUM        */ 00053200
+                                            /* '06'X - SEMI-BOLD     */ 00053300
+                                            /* '07'X - BOLD          */ 00053400
+                                            /* '08'X - EXTRA-BOLD    */ 00053500
+                                            /* '09'X - ULTRA-BOLD    */ 00053600
+       5 FND_WID             BIT(8),        /* WIDTH                 */ 00053700
+                                            /* '01'X - ULTRA-CONDENS */ 00053800
+                                            /* '02'X - EXTRA-CONDENS */ 00053900
+                                            /* '03'X - CONDENSED     */ 00054000
+                                            /* '04'X - SEMI-CONDENS  */ 00054100
+                                            /* '05'X - MEDIUM        */ 00054200
+                                            /* '06'X - SEMI-EXPANDED */ 00054300
+                                            /* '07'X - EXPANDED      */ 00054400
+                                            /* '08'X - EXTRA-EXPAND  */ 00054500
+                                            /* '09'X - ULTRA-EXPAND  */ 00054600
+       5 FND_XPS             FIXED BIN(15), /* MAX POINT SIZE        */ 00054700
+       5 FND_NPS             FIXED BIN(15), /* NOMINAL POINT SIZE    */ 00054800
+       5 FND_MPS             FIXED BIN(15), /* MINIMUM POINT SIZE    */ 00054900
+       5 FND_FIL1            CHAR(24),      /* RESERVED (ALL '00'X)  */ 00055000
+       5 FND_FLAGS1          BIT(8),        /* FLAGS BYTE 1          */ 00056000
+                                            /* 1... .... - ITALIC    */ 00057000
+                                            /* .1.. .... - UNDERSCOR */ 00057100
+                                            /* ..0. .... - UNUSED    */ 00057200
+                                            /* ...1 .... - OUTLINE   */ 00057300
+                                            /* .... 1... - OVERSTRUCK*/ 00057400
+       5 FND_FLAGS2          BIT(8),        /* FLAGS BYTE 2          */ 00057500
+       5 FND_FIL2            CHAR(14);      /* RESERVED (ALL '00'X)  */ 00057600
+                                                                        00057700
+ /*---------------------------------------------*/                      00057800
+ /*    FONT CONTROL - UNBOUNDED BOX - 'D3A789'X */                      00057900
+ /*---------------------------------------------*/                      00058000
+ DCL 1 FNC_UB                UNALIGNED BASED(SFP), /* UNBOUNDED BOX  */ 00058100
+       5 FNC_CON1            CHAR(1),       /* CONSTANT '01'X        */ 00058200
+       5 FNC_PTI             CHAR(1),       /* PATT TECH ID '01'X    */ 00058300
+       5 FNC_COMPR           CHAR(1),       /* COMPR ALGORITHM IDENT */ 00058400
+                                            /* '00'X - SINGLE BYTE   */ 00058500
+                                            /* '04'X - DOUBLE BYTE   */ 00058600
+       5 FNC_FLAGS           BIT(8),        /* FLAGS                 */ 00058700
+                                            /* .... .1.. - KERNING   */ 00058800
+                                            /* .... ..1. - UNIFORM   */ 00058900
+       5 FNC_CON2            CHAR(6),       /* '0000 0960 0960'X     */ 00059000
+       5 FNC_UCBS,                          /* UNIF. CHAR BOX SIZE   */ 00059100
+         10 FNC_UCBW         FIXED BIN(15), /* ..    ..   ..  WIDTH  */ 00059200
+         10 FNC_UCBH         FIXED BIN(15), /* ..    ..   ..  HEIGHT */ 00059300
+       5 FNC_FNOL            BIT(8),        /* FNO RPTG.GRP.LEN '18'X*/ 00059400
+       5 FNC_FNIL            BIT(8),        /* FNI RPTG.GRP.LEN '18'X*/ 00059500
+       5 FNC_PDAA            BIT(8),        /* PATT. DATA ADDR ALIGN */ 00059600
+                                            /* '03'X - SINGLE BYTE   */ 00059700
+                                            /* '02'X - DOUBLE BYTE   */ 00059800
+       5 FNC_PDC             BIT(24),       /* PATT. DATA COUNT      */ 00059900
+       5 FNC_UIO             FIXED BIN(15); /* UNIF. INLINE OFFSET   */ 00060000
+                                                                        00070000
+ /*-------------------------------------------*/                        00071000
+ /*    FONT CONTROL - BOUNDED BOX - 'D3A789'X */                        00072000
+ /*-------------------------------------------*/                        00073000
+ DCL 1 FNC_BB                UNALIGNED BASED(SFP), /* BOUNDED BOX    */ 00074000
+       5 FNC_CON1            CHAR(1),       /* CONSTANT '01'X        */ 00075000
+       5 FNC_PTI             CHAR(1),       /* PATT TECH ID '05'X    */ 00076000
+       5 FNC_COMPR           CHAR(1),       /* COMPR ALGORITHM IDENT */ 00077000
+                                            /* '00'X - SINGLE BYTE   */ 00078000
+       5 FNC_FLAGS           BIT(8),        /* FLAGS                 */ 00079000
+                                            /* .... ..1. - UNIFORM   */ 00080000
+       5 FNC_UM              CHAR(6),       /* UNIT OF MEASURE       */ 00090000
+       5 FNC_MCBS,                          /* MAX.  CHAR BOX SIZE   */ 00100000
+         10 FNC_MCBW         FIXED BIN(15), /* ..    ..   ..  WIDTH  */ 00110000
+         10 FNC_MCBH         FIXED BIN(15), /* ..    ..   ..  HEIGHT */ 00120000
+       5 FNC_FNOL            BIT(8),        /* FNO RPTG.GRP.LEN '1A'X*/ 00130000
+       5 FNC_FNIL            BIT(8),        /* FNI RPTG.GRP.LEN '1C'X*/ 00140000
+       5 FNC_PDAA            BIT(8),        /* PATT. DATA ADDR ALIGN */ 00150000
+                                            /* '00'X, '02'X OR '03'X */ 00160000
+       5 FNC_PDC             BIT(24),       /* PATT. DATA COUNT      */ 00170000
+       5 FNC_FNPL            BIT(8),        /* FNP RPTG.GRP.LEN '16'X*/ 00180000
+       5 FNC_FNML            BIT(8),        /* FNM RPTG.GRP.LEN '08'X*/ 00190000
+       5 FNC_END             CHAR(0);       /* END OF FNC BASE REC   */ 00200000
+ DCL 1 FNC_OPT               UNALIGNED BASED(SFP), /* FNC OPTONAL    */ 00210000
+       5 FNC_XBASE           CHAR(1),       /* X-UNIT BASE           */ 00220000
+                             /* '00'X   -   10 INCHES                */ 00230000
+       5 FNC_YBASE           CHAR(1),       /* Y-UNIT BASE           */ 00240000
+                             /* '00'X   -   10 INCHES                */ 00250000
+       5 FNC_XRES            CHAR(2),       /* X RESOLUTION          */ 00260000
+                             /* '0960'X -   2400 (240 PEL)           */ 00261000
+                             /* '0BB8'X -   3000 (300 PEL)           */ 00262000
+                             /* '0000'X -   NO VALUE PROVIDED        */ 00263000
+       5 FNC_YRES            CHAR(2);       /* Y RESOLUTION          */ 00263100
+                             /* (SAME AS X RESOLUTION)               */ 00263200
+                                                                        00263300
+ /*-----------------------------------------*/                          00263400
+ /*    FONT PATTERN MAP - 'D3A289'X         */                          00263500
+ /*-----------------------------------------*/                          00263600
+ DCL 1 FNM                   UNALIGNED BASED(SFP), /* FONT PATT MAP  */ 00263700
+       5 FNM_BOXW            FIXED BIN(15), /* CHAR BOX WIDTH        */ 00263800
+       5 FNM_BOXH            FIXED BIN(15), /* CHAR BOX HEIGHT       */ 00263900
+       5 FNM_PDA             FIXED BIN(31), /* OFFSET OF RASTER PATT */ 00264000
+       5 FNM_NEXT            CHAR(0);       /* NEXT REPEATING GROUP  */ 00265000
+                                                                        00266000
+ /*-----------------------------------------*/                          00267000
+ /*    FONT ORIENTATION - 'D3AE89'X         */                          00268000
+ /*-----------------------------------------*/                          00268100
+ DCL 1 FNO                   UNALIGNED BASED(SFP), /* FONT ORIENT.   */ 00268200
+       5 FNO_FIL1            CHAR(2),       /* RESERVED ('0000'X)    */ 00268300
+       5 FNO_ROT             CHAR(2),       /* CHARACTER ROTATION    */ 00268400
+                             /* '0000'X -   0 DEGREES                */ 00268500
+                             /* '2D00'X -  90 DEGREES                */ 00268600
+                             /* '5A00'X - 180 DEGREES                */ 00268700
+                             /* '8700'X - 270 DEGREES                */ 00268800
+       5 FNO_BLO             FIXED BIN(15), /* BASELINE OFFSET       */ 00268900
+       5 FNO_INC             FIXED BIN(15), /* CHAR INCREMENT        */ 00269000
+       5 FNO_VSI             FIXED BIN(15), /* VARIABLE SPACE INCR   */ 00270000
+       5 FNO_MBE             FIXED BIN(15), /* MAX BASELINE EXTENT   */ 00271000
+       5 FNO_FLAGS           BIT(8),        /* FLAGS                 */ 00272000
+                             /* 'XXX. ....'B FONT INDEX NUMBER       */ 00273000
+                             /* '...X ....'B RESERVED                */ 00274000
+                             /* '.... 1...'B KERNING                 */ 00274100
+                             /* '.... .1..'B UNIFORM A-SPACE         */ 00274200
+                             /* '.... ..1.'B UNIFORM BASELINE OFFSET */ 00274300
+                             /* '.... ...1'B UNIFORM CHARACTER INCR  */ 00274400
+       5 FNO_FIL2            CHAR(1),       /* RESERVED ('00'X)      */ 00274500
+       5 FNO_EM              FIXED BIN(15), /* EM-SPACE              */ 00274600
+       5 FNO_FIL3            CHAR(2),       /* RESERVED ('0000'X)    */ 00274700
+       5 FNO_FSP             FIXED BIN(15), /* FIGURE-SPACE          */ 00274800
+       5 FNO_FIL4            CHAR(2),       /* RESERVED ('0000'X)    */ 00274900
+       5 FNO_DBI             FIXED BIN(15), /* DEFAULT BASELINE INCR */ 00275000
+       5 FNO_ASP             FIXED BIN(15), /* A-SPACE               */ 00276000
+       5 FNO_NEXT            CHAR(0);       /* NEXT REPEATING GROUP  */ 00277000
+                                                                        00278000
+ /*-----------------------------------------*/                          00279000
+ /*    FONT POSITION - 'D3AC89'X            */                          00279100
+ /*-----------------------------------------*/                          00279200
+ DCL 1 FNP                   UNALIGNED BASED(SFP), /* FONT POSITION  */ 00279300
+       5 FNP_FIL1            CHAR(2),       /* RESERVED ('0000'X)    */ 00279400
+       5 FNP_LCH             FIXED BIN(15), /* LOWERCASE HEIGHT      */ 00279500
+       5 FNP_UCH             FIXED BIN(15), /* UPPERCASE HEIGHT      */ 00279600
+       5 FNP_MXA             FIXED BIN(15), /* MAXIMUM ASCENDER      */ 00279700
+       5 FNP_MXD             FIXED BIN(15), /* MAXIMUM DESCENDER     */ 00279800
+       5 FNP_FIL2            CHAR(5),       /* RESERVED (ALL '00'X)  */ 00279900
+       5 FNP_CON1            CHAR(1),       /* '01'X                 */ 00280000
+       5 FNP_FIL3            CHAR(1),       /* '00'X                 */ 00281000
+       5 FNP_USW             FIXED BIN(15), /* UNDERSCORE WIDTH (INT)*/ 00282000
+       5 FNP_FIL4            CHAR(1),       /* UNDERSCORE WIDTH (FRA)*/ 00283000
+       5 FNP_USP             FIXED BIN(15), /* UNDERSCORE POSITION   */ 00284000
+       5 FNP_NEXT            CHAR(0);       /* NEXT REPEATING GROUP  */ 00285000
+                                                                        00286000
+ /*-----------------------------------------*/                          00287000
+ /*    FONT INDEX - 'D38C89'X               */                          00287100
+ /*-----------------------------------------*/                          00287200
+ DCL 1 FNI                   UNALIGNED BASED(SFP), /* FONT INDEX     */ 00287300
+       5 FNI_GCID            CHAR(8),       /* GRAPHIC CHAR IDENT    */ 00287400
+       5 FNI_CHI             FIXED BIN(15), /* CHARACTER INCREMENT   */ 00287500
+       5 FNI_CHA             FIXED BIN(15), /* CHARACTER ASCENDER    */ 00287600
+       5 FNI_CHD             FIXED BIN(15), /* CHARACTER DESCENDER   */ 00287700
+       5 FNI_FIL1            CHAR(2),       /* RESERVED ('0000'X)    */ 00287800
+       5 FNI_IDX             FIXED BIN(15), /* FNM INDEX             */ 00287900
+       5 FNI_ASP             FIXED BIN(15), /* A-SPACE               */ 00288000
+       5 FNI_BSP             FIXED BIN(15), /* B-SPACE               */ 00289000
+       5 FNI_CSP             FIXED BIN(15), /* C-SPACE               */ 00289100
+       5 FNI_FIL2            CHAR(2),       /* RESERVED ('0000'X)    */ 00289200
+       5 FNI_BLO             FIXED BIN(15), /* BASELINE OFFSET       */ 00289300
+       5 FNI_NEXT            CHAR(0);       /* NEXT REPEATING GROUP  */ 00289400
+                                                                        00289500
+ /*-----------------------------------------*/                          00289600
+ /*    FONT PATTERNS - 'D3EE89'X            */                          00289700
+ /*-----------------------------------------*/                          00289800
+ DCL 1 FNG                   UNALIGNED BASED(SFP), /* FONT PATTERNS  */ 00289900
+       5 FNG_RASTER          CHAR(32759);   /* RASTER PATTERN DATA   */ 00290000
+                             /* 0-32759 BYTES OF RASTER PATTERNS     */ 00291000
+                             /* DEPENDING ON MAXIMUM RECORD LENGTH   */ 00292000
+                                                                        00293000
+ /*-----------------------------------------*/                          00294000
+ /*    MAP CODED FONT FMT-1 - 'D3B18A'X     */                          00295000
+ /*-----------------------------------------*/                          00296000
+ DCL 1 MCF1                  UNALIGNED BASED(SFP), /* MAP CODED FONT */ 00296100
+       5 MCF1_RGL            BIT(8),        /* RPTNG GROUP LENGTH    */ 00296200
+       5 MCF1_FIL1           CHAR(3),                                   00296300
+       5 MCF1_RG_DATA        CHAR(0);       /* BEGIN RPTNG GROUPS    */ 00296400
+ DCL 1 MCF1_RG               UNALIGNED BASED(SFP), /* RPTNG GRPS     */ 00296500
+       5 MCF1_FID            BIT(8),        /* CODED FONT LOCAL ID   */ 00296600
+       5 MCF1_FIL2           CHAR(1),                                   00296700
+       5 MCF1_SEC            BIT(8),        /* CODED FONT SECTION ID */ 00296800
+       5 MCF1_FIL3           CHAR(1),                                   00296900
+       5 MCF1_FNM            CHAR(8),       /* CODED FONT NAME       */ 00297000
+       5 MCF1_CPG            CHAR(8),       /* CODE PAGE NAME        */ 00297100
+       5 MCF1_CSN            CHAR(8),       /* CHARACTER SET NAME    */ 00297200
+       5 MCF1_ROT            CHAR(2),       /* ROTATION              */ 00297300
+       5 MCF1_NEXT           CHAR(0);       /* START OF NEXT GROUP   */ 00297400
+                                                                        00297500
+ /*-----------------------------------------*/                          00297600
+ /*    PAGE DESCRIPTOR - 'D3A6AF'X          */                          00297700
+ /*-----------------------------------------*/                          00297800
+ DCL 1 PGD                   UNALIGNED BASED(SFP), /* PAGE DESCRIPTOR*/ 00297900
+       5 PGD_XBASE           CHAR(1),       /* X-UNIT BASE           */ 00298000
+       5 PGD_YBASE           CHAR(1),       /* Y-UNIT BASE           */ 00299000
+       5 PGD_XUNITS          FIXED BIN(15), /* X-UNITS PER UNIT BASE */ 00300000
+       5 PGD_YUNITS          FIXED BIN(15), /* Y-UNITS PER UNIT BASE */ 00310000
+       5 PGD_XEXT            BIT(24),       /* X-EXTENT              */ 00320000
+       5 PGD_YEXT            BIT(24),       /* Y-EXTENT              */ 00330000
+       5 PGD_FIL1            CHAR(3),                                   00340000
+       5 PGD_END             CHAR(0);       /* END OF BASIC PGD      */ 00350000
+                                                                        00360000
+ /*-----------------------------------------*/                          00370000
+ /*    INCLUDE PAGE SEGMENT - 'D3AF5F'X     */                          00380000
+ /*-----------------------------------------*/                          00390000
+ DCL 1 IPS                   UNALIGNED BASED(SFP), /* INCL PAGE SEG  */ 00400000
+       5 IPS_SEGNAME         CHAR(8),       /* PAGE SEGMENT NAME     */ 00410000
+       5 IPS_XORG            CHAR(3),       /* X-COORDINATE          */ 00420000
+       5 IPS_YORG            CHAR(3),       /* Y-COORDINATE          */ 00430000
+       5 IPS_END             CHAR(0);       /* END OF IPS FIELD      */ 00440000

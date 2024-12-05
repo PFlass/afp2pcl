@@ -1,0 +1,598 @@
+//FLASSJ   JOB (),FONTLOAD,CLASS=J,MSGCLASS=Z,                          00010000
+//            REGION=2048K,NOTIFY=$                                     00020000
+//ASM      EXEC PGM=ASMA90,REGION=200K,                                 00030000
+//        PARM='OBJECT,NODECK,ALIGN,RENT'                               00040000
+//********************************************************************  00050000
+//**       ASSEMBLE PROGRAM                                          *  00060000
+//********************************************************************  00070000
+//SYSLIB   DD DSN=SYS1.MACLIB,DISP=SHR                                  00080000
+//         DD DSN=SYS1.MODGEN,DISP=SHR                                  00090000
+//         DD DSN=SYSTEMS.MACLIB,DISP=SHR                               00100000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     00101000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00102000
+//SYSUT2   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00103000
+//SYSUT3   DD UNIT=VIO,SPACE=(CYL,(1,1))                                00104000
+//SYSLIN   DD DSN=&&ASM,UNIT=VIO,DISP=(,PASS),                          00105000
+//            SPACE=(TRK,(3,3)),DCB=BLKSIZE=400                         00106000
+//SYSIN    DD *                                                         00107000
+ TITLE 'FONTLOAD   - LOAD FONT TO PCL PRINTER'                          00108003
+*********************************************************************** 00109000
+*                                                                     * 00109100
+*  MODULE: FONTLOAD                                                   * 00109200
+*          SEND FONT TO HEWLETT-PACKARD LASERJET 4 USING VTAM         * 00109307
+*                                                                     * 00109400
+*********************************************************************** 00109500
+         PRINT NOGEN                                                    00109700
+         REGS  ,                                                        00109800
+BUFP     EQU   R9                  TERMINAL BUFFER POINTER              00109900
+PARMPTR  EQU   R10                 A(FONTLOAD PARMS)                    00110004
+BASE1    EQU   R11                 FIRST BASE REGISTER                  00120000
+BASE2    EQU   R12                 SECOND BASE REGISTER                 00130000
+         EJECT                                                          00140000
+FONTLOAD CSECT                                                          00150000
+         B     BEGIN-*(,R15)       SKIP OVER COMMENT                    00160000
+FONTLOAD VERSION 1.0               ASSEMBLE COMMENT                     00170000
+BEGIN    DS    0H                  ENTRY POINT                          00180000
+         SAVE  (14,12)             SAVE CALLERS REGISTERS               00190000
+         L     R2,0(,R1)           SAVE PARAMETER ADDRESS               00200000
+         LR    BASE1,R15           SET UP BASE REGISTERS                00210000
+         LA    BASE2,4095(,BASE1)          .                            00220000
+         LA    BASE2,1(,BASE2)             .                            00230000
+         USING FONTLOAD,BASE1,BASE2        .                            00240000
+         STORAGE OBTAIN,LENGTH=DSALEN  ACQUIRE SAVE AREA                00250000
+         ST    R1,8(,R13)          CHAIN SAVEAREAS                      00260000
+         ST    R13,4(,R1)                  .                            00270000
+         LR    R13,R1                      .                            00280000
+         USING DSA,R13                     .                            00290000
+                                                                        00300003
+*--------------------------------------------------------------------*  00310000
+*        INITIALIZATION                                              *  00320000
+*--------------------------------------------------------------------*  00330000
+         MVC   BANNER,=C'FONTLOAD' MOVE EYECATCHER                      00340000
+         XC    TPBUF,TPBUF         INITIALIZE VARIABLES                 00350000
+         XC    RETCODE,RETCODE             .                            00360000
+         ZAP   RDCNT,=P'0'                 .                            00370000
+         ZAP   WTCNT,=P'0'                 .                            00380000
+         MVC   LUNAME,BLANKS       SPACE OUT LU NAME                    00381000
+         MVI   FONTNUM,C'0'        ZERO OUT FONT ID                     00382001
+         MVC   FONTNUM+1(L'FONTNUM-1),FONTNUM +                         00383001
+                                                                        00384003
+*--------------------------------------------------------------------*  00385003
+*        PROCESS PARM INFORMATION                                    *  00386003
+*--------------------------------------------------------------------*  00387003
+         LH    R1,0(,R2)           GET PARAMETER LENGTH                 00390000
+         LA    R2,2(,R2)           SKIP OVER LENGTH                     00391000
+         LTR   R1,R1               Q/ ANY PARAMETER?                    00400000
+         BNP   ERR1                .. NOPE                              00410003
+PARM001  EQU   *                   SKIP LEADING BLANKS                  00441003
+         CLI   0(R2),C' '          Q/ BLANK?                            00442000
+         BNE   PARM002             .. NO, START LU NAME                 00443003
+         LA    R2,1(,R2)           .. YES, SKIP                         00444000
+         BCT   R1,PARM001          +                                    00445003
+         B     ERR2                                                     00445103
+PARM002  EQU   *                                                        00447003
+         LR    R15,R2              SAVE A(START_OF_FIELD)               00448203
+PARM003  EQU   *                                                        00448403
+         LA    R2,1(,R2)           BUMP POINTER                         00448703
+         BCTR  R1,0                DECR. COUNT                          00448803
+         LTR   R1,R1               Q/ ANY DATA LEFT?                    00448903
+         BZ    ERR1                .. NOPE                              00449003
+         CLI   0(R2),C' '          Q/ DONE WITH LU NAME                 00449101
+         BE    PARM004             .. YUP                               00449203
+         B     PARM003             ELSE DO MORE SCANNING                00449503
+PARM004  EQU   *                   DONE WITH LU NAME                    00450503
+         LR    R14,R2              LAST CHAR+1                          00450603
+         SR    R14,R15             LENGTH                               00450703
+         LTR   R14,R14             Q/ ANY DATA TO MOVE                  00450803
+         BZ    ERR2                .. NO                                00450903
+         CH    R14,=AL2(L'LUNAME)  Q/ TOO MUCH DATA?                    00451003
+         BH    ERR4                .. YES                               00451103
+         BCTR  R14,0               MOVE LU NAME                         00451203
+         EX    R14,MVCP1           ** MVC LUNAME(*-*),0(R15)            00451303
+PARM005  EQU   *                   SKIP LEADING BLANKS                  00451503
+         CLI   0(R2),C' '          Q/ BLANK?                            00451603
+         BNE   PARM006             .. NO, START FONT ID                 00451703
+         LA    R2,1(,R2)           .. YES, SKIP                         00451803
+         BCT   R1,PARM005          +                                    00451903
+         B     ERR3                                                     00452003
+PARM006  EQU   *                                                        00452103
+         LR    R15,R2              SAVE A(START_OF_FIELD)               00452203
+PARM007  EQU   *                                                        00452303
+         LA    R2,1(,R2)           BUMP POINTER                         00452403
+         BCTR  R1,0                DECR. COUNT                          00452503
+         LTR   R1,R1               Q/ ANY DATA LEFT?                    00452603
+         BZ    PARM008             .. NOPE                              00452703
+         CLI   0(R2),C' '          Q/ DONE WITH FONT ID?                00452803
+         BE    PARM008             .. YUP                               00452903
+         CLI   0(R2),C'0'          TEST FOR NUMERIC                     00453003
+         BL    ERR6                +                                    00453103
+         CLI   0(R2),C'9'          +                                    00453203
+         BH    ERR6                +                                    00453303
+         B     PARM007             ELSE DO MORE SCANNING                00453403
+PARM008  EQU   *                   DONE WITH FONT ID                    00453503
+         LR    R14,R2              LAST CHAR+1                          00453603
+         SR    R14,R15             LENGTH                               00453703
+         LTR   R14,R14             Q/ ANY DATA TO MOVE                  00453803
+         BZ    ERR2                .. NO                                00453903
+         CH    R14,=AL2(L'FONTNUM) Q/ TOO MUCH DATA?                    00454003
+         BH    ERR5                .. YES                               00454103
+         LA    R2,FONTNUM+L'FONTNUM MOVE FONT ID                        00454203
+         SR    R2,R14               +                                   00454303
+         BCTR  R14,0               MOVE FONT ID                         00454403
+         EX    R14,MVCP2           ** MVC 0(*-*,R2),0(R15)              00454503
+         B     PARMDONE            DONE WITH PARMS                      00454603
+                                                                        00457603
+ERRX     EQU   *                   LU NAME MISSING                      00457703
+         LA    R0,C'X'                                                  00457803
+         B     ERROR03                                                  00457903
+ERR1     EQU   *                   LU NAME MISSING                      00458003
+         LA    R0,C'1'                                                  00458103
+         B     ERROR03                                                  00458203
+ERR2     EQU   *                   LU NAME MISSING                      00458303
+         LA    R0,C'2'                                                  00458403
+         B     ERROR03                                                  00458503
+ERR3     EQU   *                   FONT ID MISSING                      00458603
+         LA    R0,C'3'                                                  00458703
+         B     ERROR03                                                  00458803
+ERR4     EQU   *                   LU NAME TOO LONG                     00458903
+         LA    R0,C'4'                                                  00459003
+         B     ERROR03                                                  00459103
+ERR5     EQU   *                   FONT ID TOO LONG                     00459203
+         LA    R0,C'5'                                                  00459303
+         B     ERROR03                                                  00459403
+ERR6     EQU   *                   FONT ID NOT NUMERIC                  00459503
+         LA    R0,C'6'                                                  00459603
+         B     ERROR03                                                  00459703
+                                                                        00459803
+*        EXECUTED INSTRUCTIONS                                          00459903
+MVCP1    MVC   LUNAME(*-*),0(R15)                                       00460003
+MVCP2    MVC   0(*-*,R2),0(R15)                                         00460103
+                                                                        00461003
+PARMDONE EQU   *                   DONE WITH FONT ID                    00470003
+                                                                        00472000
+         EJECT                                                          00480000
+*--------------------------------------------------------------------*  00490000
+*        BUILD VTAM CONTROL BLOCKS                                   *  00500000
+*--------------------------------------------------------------------*  00510000
+         XC    VTAMECB,VTAMECB     INITIALIZE ECB                       00520000
+         LA    R1,VTAMECB          SAVE ECB ADDR IN WAITLIST            00530000
+         ST    R1,WAITLIST              .                               00540000
+         OI    WAITLIST,X'80'           .                               00550000
+         LA    R2,ACB                                                   00560000
+         GENCB AM=VTAM,BLK=ACB,                                        X00570000
+               WAREA=(R2),LENGTH=ACBLEN,                               X00580000
+               MF=(G,ACBLST,ACBLSTL)                                    00590000
+*                                                                       00600000
+         LA    R3,NIB                                                   00610000
+         GENCB AM=VTAM,BLK=NIB,MODE=RECORD,PROC=ORDRESP,               X00620000
+               WAREA=(R3),LENGTH=NIBLNIB,                              X00630000
+               LISTEND=YES,                                            X00640000
+               MF=(G,NIBLST,NIBLSTL)                                    00650000
+*                                                                       00660000
+         LA    R4,RPL                                                   00670000
+         LA    R5,VTAMECB                                               00680000
+         GENCB AM=VTAM,BLK=RPL,POST=RESP,ACB=(R2),NIB=(R3),            X00690000
+               WAREA=(R4),LENGTH=RPLLGH,ECB=(R5),                      X00700000
+               OPTCD=(Q,ASY),                                          X00710000
+               MF=(G,RPLLST,RPLLSTL)                                    00720000
+         MVC   ACB-4(4),=CL4'ACB ' MOVE MEMORY COMMENTS                 00730000
+         MVC   RPL-4(4),=CL4'RPL '         .                            00740000
+         MVC   NIB-4(4),=CL4'NIB '         .                            00750000
+         MVC   BINDAREA-4(4),=CL4'BIND'    .                            00760000
+         EJECT                                                          00770000
+*--------------------------------------------------------------------*  00780000
+*        ESTABLISH CONNECTION WITH PRINTER                           *  00790000
+*--------------------------------------------------------------------*  00800000
+         LA    R1,NIB              INITIALIZE NIB                       00810000
+         USING ISTDNIB,R1                  .                            00820000
+         MVC   NIBSYM,LUNAME       MODE PRINTER ID TO NIB               00830000
+         MVC   NIBLMODE,=CL8'SCS'  MOVE LOGMODE                         00840000
+         DROP  R1                                                       00850000
+         LA    R1,ACB              OPEN VTAM ACB                        00860000
+         ST    R1,OPENLIST                 .                            00870000
+         OI    OPENLIST,X'80'              .                            00880000
+         LA    R1,OPENLIST                 .                            00890000
+         OPEN  (,),MF=(E,(1))              .                            00900000
+         LTR   R15,R15             TEST FOR SUCCESSFUL OPEN             00910000
+         BNZ   ERROR12                     .                            00920000
+         OI    STATUS,STOPN3       INDICATE ACB OPENED                  00930000
+*                                                                       00940000
+         SIMLOGON RPL=RPL,RECLEN=0,                                    X00950000
+               OPTCD=(ASY,Q,RELRQ) ISSUE SIMLOGON FOR PRINTER           00960000
+         LA    R1,WAITLIST         WAIT FOR COMPLETION OR SHUTDOWN      00970000
+         WAIT  ECBLIST=(1)              .                               00980000
+         CHECK RPL=RPL             CHECK REQUEST STATUS                 00990000
+         CLI   RPLRTNCD-IFGRPL+RPL,X'00' TEST RETURN CODE               01000000
+         BNZ   ERROR                                                    01010000
+*                                                                       01020000
+         INQUIRE RPL=RPL,AREA=BINDAREA,AREALEN=BINDLEN,OPTCD=SESSPARM   01030000
+         LA    R1,WAITLIST         WAIT FOR COMPLETION OR SHUTDOWN      01040000
+         WAIT  ECBLIST=(1)                 .                            01050000
+         CHECK RPL=RPL             CHECK REQUEST STATUS                 01060000
+         SR    R2,R2               GET MAX PRIMARY RU SIZE              01070000
+         IC    R2,BINPRUSZ-ISTDBIND+BINDAREA                            01080000
+         N     R2,=X'0000000F'     ISOLATE EXPONENT                     01090000
+         LA    R1,1                LOAD 2**0                            01100000
+         SLL   R1,0(R2)            COMPUTE 2**E                         01110000
+         IC    R2,BINPRUSZ-ISTDBIND+BINDAREA                            01120000
+         SRL   R2,4                ISOLATE MANTISSA                     01130000
+         MR    R0,R2               MULT MANTISSA X 2**E                 01140000
+         ST    R1,RUSIZE           SAVE COMPUTED RU SIZE                01150000
+         LR    R0,R1                       .                            01160000
+         STORAGE OBTAIN,LENGTH=(0) ACQUIRE TERMINAL BUFFER              01170000
+         ST    R1,TPBUF                    .                            01180000
+*                                                                       01190000
+         OPNDST RPL=RPL,OPTCD=(ASY,ACCEPT,Q,SPEC,CS)                    01200000
+         LA    R1,WAITLIST         WAIT FOR COMPLETION OR SHUTDOWN      01210000
+         WAIT  ECBLIST=(1)                 .                            01220000
+         CHECK RPL=RPL             CHECK REQUEST STATUS                 01230000
+         LA    R2,NIB              Q/ WAS SESSION ESTABLISHED?          01240000
+         TESTCB AM=VTAM,NIB=(R2),CON=YES,  .                           X01250000
+               MF=(G,TSTLST,TSTLSTL)                                    01260000
+         BNZ   ERROR               .. NO                                01270000
+         OI    STATUS,STOPND       .. YES, INDICATE                     01280000
+         EJECT                                                          01290000
+*--------------------------------------------------------------------*  01300000
+*        RESET PRINTER                                               *  01310000
+*--------------------------------------------------------------------*  01320000
+         L     BUFP,TPBUF          SEND RESET TO PRINTER                01330000
+         MVC   0(XSTRL,BUFP),XSTRT         .                            01340001
+         MVC   XSTNUM-XSTRT(L'XSTNUM,BUFP),FONTNUM                      01341001
+         TR    XSTNUM-XSTRT(L'XSTNUM,BUFP),T1047819                     01342001
+         LA    R4,XSTRL                    .                            01350001
+         LA    R2,RPL                      .                            01360000
+         SEND  RPL=(R2),                   .                           X01370000
+               AREA=(BUFP),RECLEN=(R4),    .                           X01380000
+               BRACKET=(BB,NEB),           .                           X01390000
+               CHAIN=FIRST,                .                           X01400000
+               OPTCD=(ASY,CS),             .                           X01410000
+               RESPOND=(NEX,NFME,NRRN),    .                           X01420000
+               STYPE=REQ,POST=RESP,        .                           X01430000
+               RTYPE=(DFSYN,DFASY,NRESP)   .                            01440000
+         LA    R1,WAITLIST         WAIT FOR COMPLETION OR SHUTDOWN      01450000
+         WAIT  ECBLIST=(1)              .                               01460000
+         CHECK RPL=RPL             CHECK REQUEST STATUS                 01470000
+         CLI   RPLRTNCD-IFGRPL+RPL,X'00' TEST RETURN CODE               01480000
+         BNZ   ERROR                                                    01490000
+         OI    STATUS,STBB         INDICATE BEGIN BRACKET SENT          01500000
+         EJECT                                                          01510000
+*--------------------------------------------------------------------*  01520000
+*        SEND FORMATTED DATA TO PRINTER                              *  01530000
+*--------------------------------------------------------------------*  01540000
+         MVC   OUTPUN-4(4),=CL4'DCB' MOVE COMMENT                       01550000
+         MVC   OUTPUN,OUTCON       OPEN OUTPUN DCB                      01560000
+         LA    R1,OUTPUN                   .                            01570000
+         ST    R1,OPENLIST                 .                            01580000
+         OI    OPENLIST,X'80'              .                            01590000
+         LA    R1,OPENLIST                 .                            01600000
+         OPEN  (,(INPUT)),MF=(E,(1))       .                            01610000
+         TM    DCBOFLGS-IHADCB+OUTPUN,DCBOFOPN                          01620000
+         BNO   ERROR12             .. NO                                01630000
+         OI    STATUS,STOPN2       INDICATE OUTPUN OPENED               01640000
+*---------------------------------*                                     01670000
+*        READ A RECORD            *                                     01680000
+*---------------------------------*                                     01690000
+SEND     DS    0H                  WRITE THE DATA                       01700000
+         LA    R1,OUTPUN           READ A RECORD                        01710000
+         GET   (1)                         .                            01720000
+         LR    R8,R1               SAVE RECORD ADDRESS                  01730000
+         AP    RDCNT,=P'1'         BUMP RECORD COUNT                    01731004
+*                                                                       01740000
+SEND1    EQU   *                   COMPUTE LENGTH OF RECORD             01750000
+         LA    R1,OUTPUN           LOAD DCB ADDRESS                     01760004
+         USING IHADCB,R1           +                                    01770004
+         LH    R7,DCBLRECL         LOAD LRECL FOR RECFM U & F           01780004
+         TM    DCBRECFM,DCBRECU    Q/ RECFM U?                          01790004
+         BO    SEND2               .. YES                               01800004
+         TM    DCBRECFM,DCBRECF    Q/ RECFM F?                          01810004
+         BO    SEND2               .. YES                               01820004
+         LH    R7,0(,R8)           RECFM V - LOAD LRECL                 01830004
+         LA    R8,4(,R8)           + POINT TO DATA                      01840004
+         SH    R7,=H'4'            + ADJUST LENGTH                      01850004
+SEND2    EQU   *                                                        01870004
+* |      TM    DCBRECFM,DCBRECCC   Q/ CONTROL CHARACTERS?               01871002
+* |      BZ    SEND2A              .. NO                                01872002
+* |      BCTR  R7,0                .. YES, DECREMENT LENGTH             01873002
+* |      LA    R8,1(,R8)              AND SKIP OVER CARR CTRL           01874002
+         DROP  R1                                              PF072795 01874101
+SEND2A   EQU   *                                                        01875001
+         CH    R7,=H'256'          TEST FOR MAX LENGTH         PF072795 01880000
+         BH    ERROR04             .. TOO BIG TO PROCESS       PF072795 01890000
+         LA    R1,2(,R7)           ADD TWO FOR TRN             PF040296 01900000
+         C     R1,RUSIZE           Q/ IS RECORD TOO BIG?                01920000
+         BNL   ERROR04             .. YES, CAN'T PROCESS IT (SNO)       01930000
+         B     SEND3                                                    01940000
+*                                                                       01950000
+EOF      DS    0H                  END-OF-FILE ON INPUT                 01960000
+         OI    STATUS,STEOF        INDICATE EOF                         01970000
+         LA    R8,XEND             POINT TO MAKEPERM                    01980003
+         LA    R7,XENDL            GET LENGTH OF MAKEPERM               01990003
+*                                                                       02000000
+SEND3    EQU   *                   MOVE RECORD TO PRINTER BUFFER        02010000
+         L     R1,TPBUF            COMPUTE REMAINING SPACE IN BUFFER    02020000
+         A     R1,RUSIZE                   .                            02030000
+         SR    R1,BUFP                     .                            02040000
+         BZ    SEND5               WRITE OUT BUFFER IF NO SPACE         02050000
+         LA    R2,2(,R7)           COMPUTE SPACE REQUIRED               02060000
+         CR    R1,R2               COMPARE SPACE REM TO CURR LINE       02070000
+         BNH   SEND5               LINE WON'T FIT                       02080000
+         LTR   R7,R7               Q/ EMPTY LINE?                       02090000
+         BZ    SEND4               .. YES, SKIP MOVE                    02100000
+         MVI   0(BUFP),X'35'       MOVE SCS 'TRN' CHAR                  02130004
+         STC   R7,1(BUFP)          STORE LENGTH OF DATA                 02140004
+         LA    BUFP,2(,BUFP)       BUMP BUFFER POINTER                  02150000
+         BCTR  R7,0                MOVE LINE TO PRINTER BUFFER          02160004
+         EX    R7,MVC1                     .                            02170000
+*        MVC   0(*-*,BUFP),0(R8)   MOVE LINE TO PRINTER BUFFER          02180004
+         LA    BUFP,1(R7,BUFP)     ADVANCE BUFFER POINTER               02190004
+         TM    STATUS,STEOF        Q/ EOF SEQUENCE?                     02200001
+         BO    CLEANUP             .. YES, ALL DONE                     02210005
+SEND4    EQU   *                                                        02220000
+         AP    WTCNT,=P'1'         BUMP RECORD COUNT                    02230000
+         B     SEND                GO GET NEXT RECORD                   02240000
+*                                                                       02290000
+*        EXECUTED INSTRUCTIONS                                          02300000
+MVC1     MVC   0(*-*,BUFP),0(R8)   MOVE LINE TO TP BUFFER               02310000
+MVCPARM  MVC   LUNAME(*-*),2(R2)   SAVE LUNAME                          02320000
+*                                                                       02330000
+SEND5    EQU   *                   WRITE FULL TERMINAL BUFFER           02340000
+         LR    R4,BUFP             COMPUTE SIZE OF BUFFER               02350000
+         S     R4,TPBUF                    .                            02360000
+         LA    R2,RPL              SET UP FOR SEND                      02370000
+         L     BUFP,TPBUF          RESET BUFFER POINTER                 02380004
+         SEND  RPL=(R2),AREA=(BUFP),RECLEN=(R4),                       X02390000
+               BRACKET=(NBB,NEB),          .                           X02400000
+               CHAIN=MIDDLE,                                           X02410000
+               OPTCD=(ASY,CS),                                         X02420000
+               RESPOND=(NEX,NFME,NRRN),                                X02430000
+               STYPE=REQ,POST=RESP,                                    X02440000
+               RTYPE=(DFSYN,DFASY,NRESP)                                02450000
+         LA    R1,WAITLIST         WAIT FOR COMPLETION OR SHUTDOWN      02460000
+         WAIT  ECBLIST=(1)              .                               02470000
+         CHECK RPL=RPL             CHECK REQUEST STATUS                 02480000
+         CLI   RPLRTNCD-IFGRPL+RPL,X'00' TEST RETURN CODE               02490000
+         BNZ   ERROR                                                    02500000
+         B     SEND3               PROCESS CURRENT RECORD               02510000
+         EJECT                                                          02520000
+*--------------------------------------------------------------------*  02530000
+*        CLEANUP AND EXIT ROUTINES                                   *  02540000
+*--------------------------------------------------------------------*  02550000
+CLEANUP  DS    0H                  END-OF-FILE ON OUTPUN                02560000
+         LR    R4,BUFP             COMPUTE SIZE OF BUFFER               02570000
+         S     R4,TPBUF                    .                            02580000
+         LA    R2,RPL              SET UP FOR SEND                      02590000
+         L     BUFP,TPBUF                  .                            02600000
+         SEND  RPL=(R2),AREA=(BUFP),RECLEN=(R4),                       X02610000
+               BRACKET=(NBB,EB),           .                           X02620000
+               CHAIN=LAST,                                             X02630000
+               OPTCD=(ASY,CS),                                         X02640000
+               RESPOND=(NEX,FME,NRRN),                                 X02650000
+               STYPE=REQ,POST=RESP,                                    X02660000
+               RTYPE=(DFSYN,DFASY,NRESP)                                02670000
+         LA    R1,WAITLIST         WAIT FOR COMPLETION OR SHUTDOWN      02680000
+         WAIT  ECBLIST=(1)              .                               02690000
+         CHECK RPL=RPL             CHECK REQUEST STATUS                 02700000
+         CLI   RPLRTNCD-IFGRPL+RPL,X'00' TEST RETURN CODE               02710000
+         BNZ   ERROR                                                    02720000
+         NI    STATUS,255-STBB     INDICATE END BRACKET SENT            02730000
+*                                                                       02740000
+*--------------------------------------------------------------------*  02750000
+*        RETURN TO CALLER                                            *  02760000
+*--------------------------------------------------------------------*  02770000
+EXIT     DS    0H                  SUBTASK EXIT                         02780000
+         TM    STATUS,STOPND       Q/ NEED CLSDEST?                     02790000
+         BNO   EXIT1               .. NO                                02800000
+         NI    STATUS,255-STOPND   .. YES, INDICATE                     02810000
+         CLSDST RPL=RPL,ECB=VTAMECB,OPTCD=(RELEASE)                     02820000
+         LA    R1,WAITLIST         WAIT FOR COMPLETION OR SHUTDOWN      02830000
+         WAIT  ECBLIST=(1)              .                               02840000
+         XC    VTAMECB,VTAMECB     CLEAR ECB                            02850000
+EXIT1    EQU   *                                                        02860000
+         TM    STATUS,STOPN3       Q/ IS ACB OPEN?                      02870000
+         BNO   EXIT2               .. NO, SKIP CLOSE                    02880000
+         LA    R1,ACB              CLOSE VTAM ACB                       02890000
+         ST    R1,OPENLIST                 .                            02900000
+         OI    OPENLIST,X'80'              .                            02910000
+         LA    R1,OPENLIST                 .                            02920000
+         CLOSE (,),MF=(E,(1))              .                            02930000
+         NI    STATUS,255-STOPN3   INDICATE CLOSED                      02940000
+EXIT2    EQU   *                                                        02950000
+         TM    STATUS,STOPN2       Q/ IS OUTPUN OPEN?                   02960000
+         BNO   EXIT4               .. NO, SKIP CLOSE                    02970000
+         LA    R1,OUTPUN           CLOSE OUTPUN DCB                     02980000
+         ST    R1,OPENLIST                 .                            02990000
+         OI    OPENLIST,X'80'              .                            03000000
+         LA    R1,OPENLIST                 .                            03010000
+         CLOSE (,),MF=(E,(1))              .                            03020000
+         NI    STATUS,255-STOPN2   INDICATE CLOSED                      03030000
+EXIT4    EQU   *                                                        03040000
+         OC    TPBUF,TPBUF         Q/ TERMINAL BUFFER ALLOCATED?        03050000
+         BZ    EXIT5               .. NO                                03060000
+         L     R0,RUSIZE           FREE TERMINAL BUFFER                 03070000
+         L     R1,TPBUF                    .                            03080000
+         STORAGE RELEASE,LENGTH=(0),ADDR=(1)                            03090000
+EXIT5    EQU   *                                                        03100000
+         L     R15,RETCODE         LOAD RETURN CODE                     03110000
+         LR    R1,R13              LOAD SAVEAREA ADDRESS                03120000
+         L     R13,4(,R13)         LOAD CALLERS SAVEAREA ADDRESS        03130000
+         ST    R15,16(,R13)        STORE RETURN CODE                    03140000
+         STORAGE RELEASE,LENGTH=DSALEN,ADDR=(1) FREE ACQUIRED STORAGE   03150000
+         RETURN (14,12)            RETURN TO CALLER                     03160000
+*--------------------------------------------------------------------*  03170000
+*        ERROR ROUTINES                                              *  03180000
+*--------------------------------------------------------------------*  03190000
+ERROR03  DS    0H                  PARAMETER ERROR                      03191001
+         MVI   RETCODE+3,12        SET ERROR RETURN CODE                03192001
+         MVC   WRKMSG(ERR003L),ERR003 MOVE MESSAGE SKELETON             03193001
+         STC   R0,WRKMSG+PAR1-ERR003 STORE CODE                         03195001
+         B     ERRORALL                                                 03196001
+ERROR04  DS    0H                  OUTPUN OPEN ERROR                    03200000
+         MVI   RETCODE+3,12        SET ERROR RETURN CODE                03210000
+         MVC   WRKMSG(ERR004L),ERR004 MOVE MESSAGE SKELETON             03220000
+         B     ERRORALL                                                 03230000
+ERROR12  DS    0H                  OUTPUN OPEN ERROR                    03240000
+         MVI   RETCODE+3,12        SET ERROR RETURN CODE                03250000
+         MVC   WRKMSG(ERR002L),ERR002 MOVE MESSAGE SKELETON             03260000
+         B     ERRORALL                                                 03270000
+*                                                                       03280000
+ERROR    DS    0H                  VTAM ERROR                           03290000
+         MVI   RETCODE+3,12        SET ERROR RETURN CODE                03300000
+         MVC   WRKMSG(ERR999L),ERR999 MOVE MESSAGE SKELETON             03310000
+         UNPK  WORK(3),RPLREQ-IFGRPL+RPL(2)                             03320000
+         TR    WORK(2),HEXTAB-C'0'                                      03330000
+         MVC   WRKMSG+SEG1-ERR999(2),WORK                               03340000
+         UNPK  WORK(3),RPLRTNCD-IFGRPL+RPL(2)                           03350000
+         TR    WORK(2),HEXTAB-C'0'                                      03360000
+         MVC   WRKMSG+SEG2-ERR999(2),WORK                               03370000
+         UNPK  WORK(3),RPLFDB2-IFGRPL+RPL(2)                            03380000
+         TR    WORK(2),HEXTAB-C'0'                                      03390000
+         MVC   WRKMSG+SEG3-ERR999(2),WORK                               03400000
+*                                                                       03410000
+ERRORALL EQU   *                   COMMON ERROR LOGIC                   03420000
+         MVC   SYSPRINT,PRTCON     SET UP SYSPRINT DCB                  03421001
+         LA    R1,SYSPRINT         +                                    03422001
+         ST    R1,OPENLIST         +                                    03423001
+         OI    OPENLIST,X'80'      +                                    03424001
+         LA    R1,OPENLIST         PRINT THE MESSAGE                    03425001
+         OPEN  (,(OUTPUT)),MF=(E,(1))                                   03426001
+         LA    R1,SYSPRINT                                              03427001
+         LA    R0,WRKMSG                                                03428001
+         PUT   (1),(0)                                                  03429001
+         LA    R1,OPENLIST         PRINT THE MESSAGE                    03429101
+         CLOSE ,MF=(E,(1))                                              03429201
+         B     EXIT                 FINI                                03429401
+                                                                        03429501
+ TITLE 'FONTLOAD - CONSTANTS'                                           03440000
+*--------------------------------------------------------------------*  03450000
+*                                                                       03460000
+CONSTANT DS    0F                                                       03470000
+*                                                                       03480000
+BLANKS   DC    CL8' '                                                   03490000
+*                                                                       03501001
+XSTRT    EQU   *                       RESET - START OF JOB    PF072795 03510000
+         DC    X'35'                   SCS 'TRN'               PF072795 03520000
+         DC    AL1(XSTLX)              L'TRANSPARENT DATA      PF072795 03530000
+XSTX     EQU   *                                               PF072795 03540000
+         DC    X'1B2A63'               ASCII <ESC>*C                    03550001
+XSTNUM   DC    XL5'3F3F3F3F3F'         ASCII FONT ID                    03551001
+         DC    X'44'                   ASCII D                          03552001
+XSTLX    EQU   *-XSTX                                          PF072795 03560000
+XSTRL    EQU   *-XSTRT                                         PF072795 03570000
+*                                                                       03660000
+XEND     EQU   *                       EOJ - FORMFEED AND RESET         03670000
+         DC    X'1B2A633546'           <ESC>*C5F                        03710001
+XENDL    EQU   *-XEND                                                   03750000
+*                                                                       03760000
+*                                                              PF040296 03900000
+ERRTXT   EQU   *                       ERROR MESSAGE TEXT               03910000
+ERR002   DC    C'FONTLOAD: OUTPUN OPEN ERROR'                           03920000
+ERR002L  EQU   *-ERR002                LENGTH OF MESSAGE SKELETON       03930000
+ERR003   DC    C'FONTLOAD: ERROR '                                      03940003
+PAR1     DC    C'?'                                                     03940103
+         DC    C' IN PARM INFORMATION.'                                 03940203
+ERR003L  EQU   *-ERR003                LENGTH OF MESSAGE SKELETON       03950001
+ERR004   DC    C'FONTLOAD: PRINT LINE TO LONG'                          03951001
+ERR004L  EQU   *-ERR004                LENGTH OF MESSAGE SKELETON       03952001
+*                                                                       03960000
+ERR999   EQU   *                       VTAM ERROR MESSAGE               03970000
+         DC    C'FONTLOAD: VTAM ERROR. REQ='                            03980000
+SEG1     EQU   *                                                        03990000
+         DC    C'??, RTNCD='                                            04000000
+SEG2     EQU   *                                                        04010000
+         DC    C'??, FDBK2='                                            04020000
+SEG3     EQU   *                                                        04030000
+         DC    C'??.'                                                   04040000
+ERR999L  EQU   *-ERR999                LENGTH OF MESSAGE SKELETON       04050000
+*                                                                       04060000
+HEXTAB   DC    C'0123456789ABCDEF'                                      04070000
+*                                                                       04080000
+OUTCON   DCB   DDNAME=OUTPUN,DSORG=PS,MACRF=GL,EODAD=EOF                04090000
+OUTCONL  EQU   *-OUTCON                                                 04100000
+PRTCON   DCB   DDNAME=SYSPRINT,DSORG=PS,MACRF=PM,                      +04101002
+               RECFM=FB,LRECL=120,BLKSIZE=0                             04101102
+PRTCONL  EQU   *-PRTCON                                                 04102001
+*                                                              PF072795 04110000
+         COPY  T1047819                COPY TRANSLATE TABLE    PF072795 04120000
+*                                                                       04130000
+         LTORG *                                                        04140000
+*                                                                       04150000
+         EJECT                                                          04160000
+*--------------------------------------------------------------------*  04170000
+ TITLE 'FONTLOAD - DSECTS'                                              04180000
+*--------------------------------------------------------------------*  04190000
+*                                                                       04200000
+DSA      DSECT ,                       LOCAL DSA DSECT                  04210000
+SAVEAREA DS    9D                      OS SAVEAREA                      04220000
+BANNER   DS    CL8                     EYECATCHER FOR DUMP              04230000
+LUNAME   DS    CL8                     PRINTER DESTINATION LU NAME      04240000
+FONTNUM  DS    CL5                     FONT ID NUMBER TO USE            04241001
+VTAMECB  DS    F                       VTAM ECB                         04250000
+WAITLIST DS    A                       VTAM WAITLIST                    04260000
+OPENLIST DS    A                       OPEN/CLOSE LIST                  04270000
+RUSIZE   DS    F                       MAX RU SIZE                      04290000
+TPBUF    DS    A                       A(PRINTER BUFFER)                04300004
+RETCODE  DS    F                       RETURN CODE                      04310000
+WORK     DS    F                       FULLWORD WORKAREA                04320000
+STATUS   DS    XL1                     STATUS BYTES                     04330000
+STALC    EQU   X'80'                   1... .... ALLOCATION DONE        04340000
+STOPN1   EQU   X'40'                   .1.. .... INPRINT OPENED         04350000
+STOPN2   EQU   X'20'                   ..1. .... OUTPUN OPENED          04360000
+STOPN3   EQU   X'10'                   ...1 .... VTAM ACB OPENED        04370000
+STOPND   EQU   X'08'                   .... 1... OPNDST DONE            04380000
+STBB     EQU   X'04'                   .... .1.. IN CHAIN               04390000
+STEOF    EQU   X'01'                   .... ...1 END-OF-FILE            04400000
+RDCNT    DS    PL4                     INPUT RECORDS READ               04410000
+WTCNT    DS    PL4                     OUTPUT RECORDS WRITTEN           04420000
+         DS    0F                                                       04430000
+         DS    CL4                     COMMENT 'DCB'                    04440000
+OUTPUN   DS    XL(OUTCONL)             'OUTPUN' DCB                     04450000
+SYSPRINT DS    XL(PRTCONL)             'SYSPRINT' DCB                   04451001
+WRKMSG   DS    CL120                   ERROR MESSAGE AREA               04460001
+*                                                                       04470000
+         DS    0F                      ALIGNMENT                        04480000
+         DS    CL4                     COMMENT 'ACB '                   04490000
+ACB      DS    XL(ACBLEN)              ACB                              04500000
+         DS    CL4                     COMMENT 'RPL '                   04510000
+RPL      DS    XL(RPLLGH)              RPL                              04520000
+         DS    CL4                     COMMENT 'NIB '                   04530000
+NIB      DS    XL(NIBLNIB)             NIB                              04540000
+         DS    CL4                     COMMENT 'BIND'                   04550000
+BINDAREA DS    XL(BINDLEN)             BINDAREA - SESSION PARMS         04560000
+*                                                                       04570000
+VTAMLSTS DS    0F                      VTAM GENCB PARAMETER LISTS       04580000
+ACBLST   DS    XL(ACBLSTL)                                              04590000
+         ORG   VTAMLSTS                                                 04600000
+NIBLST   DS    XL(NIBLSTL)                                              04610000
+         ORG   VTAMLSTS                                                 04620000
+RPLLST   DS    XL(RPLLSTL)                                              04630000
+         ORG   VTAMLSTS                                                 04640000
+TSTLST   DS    XL(TSTLSTL)                                              04650000
+         ORG   ,                       RESET ORIGIN                     04660000
+ENDDSA   EQU   *                       END OF DSA                       04670000
+DSALEN   EQU   *-DSA                   LENGTH OF DSA                    04680000
+*                                                                       04690000
+         PRINT NOGEN                                                    04700000
+         IFGACB AM=VTAM                COPY ACB DEF                     04710000
+ACBLEN   EQU   *-IFGACB                LENGTH OF ACB                    04720000
+         ISTDNIB ,                     COPY NIB DEF                     04730000
+         IFGRPL AM=VTAM                COPY RPL DEF                     04740000
+RPLLGH   EQU   *-IFGRPL                LENGTH OF RPL                    04750000
+         ISTDBIND                      COPY BINDAREA DSECT              04760000
+BINDLEN  EQU   *-ISTDBIND              LENGTH OF BINDAREA               04770000
+         DCBD  DSORG=PS,DEVD=DA        COPY DCB DEF                     04780000
+         END                                                            04790000
+//* --------------------------------------------------------------- *** 04800000
+//LKED     EXEC PGM=IEWL,                                              X04810000
+//            PARM='XREF,LET,LIST,RENT,REUS,REFR',                     X04820000
+//            COND=(8,LT,ASM)                                           04830000
+//********************************************************************  04840000
+//**       LINKEDIT PROGRAM                                          *  04850000
+//********************************************************************  04860000
+//SYSPRINT DD SYSOUT=X,CHARS=(GT12)                                     04870000
+//SYSUT1   DD UNIT=VIO,SPACE=(CYL,(1,1))                                04880000
+//SYSLIB   DD DSN=FLASS.PF.LOAD,DISP=SHR                                04890000
+//SYSLMOD  DD DISP=SHR,DSN=FLASS.PCL.LINKLIB                            04900006
+//SYSLIN   DD DSN=&&ASM,DISP=(OLD,DELETE)                               04910000
+//         DD *                                                         04920000
+ NAME FONTLOAD(R)                                                       04930000
+//* --------------------------------------------------------------- *** 04940000

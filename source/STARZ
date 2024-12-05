@@ -1,0 +1,273 @@
+//FLASSS   JOB  (),'STARZ',CLASS=J,MSGCLASS=Z,                          00010001
+//         NOTIFY=$                                                     00020000
+//*                                                                     00030000
+//*                                                                     00040000
+//********************************************************************* 00050000
+//*                PL/I COMPILE AND LINK                              * 00060000
+//********************************************************************* 00070000
+// EXEC PLIXCL,                                                         00080000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00090000
+//   PARM.LKED='LIST,MAP,XREF'                                          00100000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120000
+//PLI.SYSIN    DD *                                                     00140000
+ /* STARZ - Test PCL Patterns                                        */ 00150001
+                                                                        00160000
+ /********************************************************************/ 00170000
+ /*                                                                  */ 00180000
+ /*    Module ID: STARZ                                              */ 00190001
+ /*                                                                  */ 00200000
+ /*    Author:    Peter Flass                                        */ 00210000
+ /*               NYS LBDC                                           */ 00220000
+ /*               Mar, 1998                                          */ 00230000
+ /*                                                                  */ 00240000
+ /*    Function:  Test PCL pattern printing.                         */ 00250001
+ /*                                                                  */ 00260000
+ /********************************************************************/ 00270000
+                                                                        00280000
+ STARZ: proc(parm) options(main);                                       00290001
+                                                                        00300000
+ dcl     parm                char(100)           varying;               00310000
+                                                                        00320000
+ dcl     sysprint            print;                                     00340000
+ dcl     punch               record output                              00350000
+                             env(f recsize(80) );                       00360000
+                                                                        00530000
+ dcl     pcl_rec             char(80);                                  00540000
+ dcl     pclo                fixed bin(15)                 init(-1);    00550000
+ dcl     pcl_work            char(200) varying;                         00560000
+ dcl     stat_cards          fixed bin(15)                 init(0);     00570000
+                                                                        00640000
+ dcl     comp_type           char(1)                       init(' ');   00640100
+                                                                        00641000
+ dcl     oneb                bit(8)              based,                 00650000
+         twob                bit(16)             based,                 00660000
+         threeb              bit(24)             based,                 00670000
+         fourb               bit(32)             based;                 00680000
+ dcl     zovl                char(32767)         based;                 00690000
+                                                                        00700000
+ dcl     ESC                 char(1) static      init( '27'x );         00810000
+ dcl     CRLF                char(2) static      init( '0D0A'x);        00820000
+                                                                        00830000
+ %include builtins;                                                     00840000
+ %include lowercas;                                                     00850000
+                                                                        00860000
+ %page;                                                                 00870000
+                                                                        00880000
+ call parse_parm;                                                       00890000
+                                                                        00900000
+ /*-----------------------------------*/                                00910000
+ /*  Printer Initialization           */                                00920000
+ /*-----------------------------------*/                                00930000
+ put string(pcl_work) edit( ESC||'E' )(a);       /* Reset            */ 00940000
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00950000
+ pcl_work = ESC || '*t300R';           /* Graphics resolution        */ 00960000
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00970000
+                                                                        00980000
+ pcl_work = ESC || '*c71W';                                             00980100
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00980200
+ pcl_work = '0000010000150018'x    ||                                   00980300
+            '001000001000003800'x  ||                                   00980400
+            '003800007C00007C00'x  ||                                   00980500
+            '00FE0000FE00FFFFFE'x  ||                                   00980600
+            '3FFFF81FFFF007FFC0'x  ||                                   00980700
+            '03FF8007FFC00FFFE0'x  ||                                   00980800
+            '1FC7F01F01F03C0078'x  ||                                   00980900
+            '38003860000C800002'x;                                      00981000
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), null() );          00981100
+ pcl_work = ESC || '*v0n1O';                                            00981200
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00981300
+ pcl_work = ESC || '*p0R';                                              00981400
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00981500
+ pcl_work = ESC || '*v4T';                                              00981600
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00981700
+ pcl_work = ESC || '(s1p180v0s3b4101T';                                 00981800
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00981900
+ pcl_work = ESC || '&a3500h6500V';                                      00982000
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00982100
+ pcl_work = ESC || '&a90P';                                             00982200
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00982300
+ pcl_work = 'STARS';                                                    00982400
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00982500
+ put string(pcl_work) edit( ESC||'E' )(a);       /* Reset            */ 00982600
+ call write_pcl( addr(pcl_work)+2, length(pcl_work), addr(ascii) );     00982700
+                                                                        00983000
+                                                                        01240000
+ call write_pcl( null(), -1, null() ); /* Flush out last records     */ 01250000
+                                                                        01260000
+ return;                                                                01270000
+                                                                        01280000
+ %page;                                                                 01290000
+ /********************************************************************/ 01300000
+ /*   Write data to pclout                                           */ 01310000
+ /********************************************************************/ 01320000
+ write_pcl: procedure(p,len,t) options( reentrant );                    01330000
+ dcl     p                   ptr;                                       01340000
+ dcl     len                 fixed bin(15);                             01350000
+ dcl     t                   ptr;                                       01360000
+                                                                        01370000
+ dcl     pcl_hdr             char(80)  static                           01380000
+              init( ('5A'x || 'JES328X' || '01DA'x || (70)'FF'x) );     01390000
+ dcl     buffer_init         char(3)   static                           01400000
+              init( '5A354D'x );                                        01410000
+ dcl     buffer_init_trnsp   char(3)   static                           01420000
+              init( '5A4A5B'x );                                        01430000
+                                                                        01440000
+ /*-------------------------*/                                          01450000
+ /* First time thru         */                                          01460000
+ /*-------------------------*/                                          01470000
+ if pclo<=0 then do;                                                    01480000
+   pcl_rec = buffer_init || (80)'00'x;                                  01490000
+   pclo=length(buffer_init)+1;                                          01500000
+   end; /* pclo=0 */                                                    01510000
+                                                                        01520000
+ /*-------------------------*/                                          01530000
+ /* Flush out last card(s)  */                                          01540000
+ /*-------------------------*/                                          01550000
+ if len<0 then do;                                                      01560000
+   if pclo>4 then call punch_one_card;                                  01570000
+   do while( mod(stat_cards,6)ª=0 );                                    01580000
+     call punch_one_card; /* punch empty cards */                       01590000
+     end; /* do while */                                                01600000
+   return;                                                              01610000
+   end; /* len<0 */                                                     01620000
+                                                                        01630000
+ /* All parameters called by value */                                   01640000
+ call move_data( (p), (len), (t) );                                     01650000
+                                                                        01660000
+ return;                                                                01670000
+                                                                        01680000
+ /*-------------------------*/                                          01690000
+ /* Data mover              */                                          01700000
+ /*-------------------------*/                                          01710000
+ move_data: procedure(atext,count,atab) options( reentrant );           01720000
+   dcl   atext               ptr,                                       01730000
+         text                char(32767)         based(atext);          01740000
+   dcl   count               fixed bin(15);                             01750000
+   dcl   atab                ptr,                                       01760000
+         ttab                char(256)           based(atab);           01770000
+   dcl  (char_in,char_out)   fixed bin(15);                             01780000
+   dcl   n                   fixed bin(15);                             01790000
+                                                                        01800000
+   char_in  = count;                                                    01810000
+   do while(char_in>0);                                                 01820000
+     char_out = 80-pclo+1;                                              01830000
+     n = min(char_in,char_out);                                         01840000
+     substr(pcl_rec,pclo,n) = substr(text,1,n);                         01850000
+     if atabª=null() then substr(pcl_rec,pclo,n) =                      01860000
+           translate( substr(pcl_rec,pclo,n), ttab );                   01870000
+     atext   = atext+n;                                                 01880000
+     char_in = char_in-n;                                               01890000
+     if n = char_out then call punch_one_card;                          01900000
+     else pclo=pclo+n;                                                  01910000
+     end; /* do while */                                                01920000
+                                                                        01930000
+   end move_data;                                                       01940000
+                                                                        01950000
+ punch_one_card: procedure options( reentrant );                        01960000
+   if mod(stat_cards,6) = 0                                             01970000
+   then write file(punch) from(pcl_hdr);                                01980000
+   stat_cards = stat_cards + 1;                                         01990000
+   write file(punch) from(pcl_rec);                                     02000000
+   pcl_rec = buffer_init || (80)'00'x;                                  02010000
+   pclo=length(buffer_init)+1;                                          02020000
+   end punch_one_card;                                                  02030000
+                                                                        02040000
+ end write_pcl;                                                         02050000
+                                                                        02060000
+ %page;                                                                 02070000
+ /********************************************************************/ 02080000
+ /*   Hexadecimal to character conversion                            */ 02090000
+ /********************************************************************/ 02100000
+                                                                        02110000
+ hex: proc(sp,n) returns( char(256) varying );                          02120000
+ dcl  sp                     ptr,                                       02130000
+      s                      char(4096) based(sp);                      02140000
+ dcl  n                      fixed bin(15);                             02150000
+ dcl  j                      fixed bin(15);                             02160000
+ dcl  ret                    char(256) varying   init('');              02170000
+ do j=1 to n;                                                           02180000
+   ret=ret||hexone( substr(s,j,1) );                                    02190000
+   end;                                                                 02200000
+ return(ret);                                                           02210000
+ end hex;                                                               02220000
+                                                                        02230000
+ hexone: proc(c) returns( char(2) );                                    02240000
+ dcl  c                      char;                                      02250000
+ dcl  hextabs                char(16) static     init                   02260000
+                       ('0123456789ABCDEF'),                            02270000
+      hextab           (0:15)char(1) defined hextabs;                   02280000
+ dcl  p                      ptr,                                       02290000
+      x                      bit(8) based(p);                           02300000
+ p = addr(c);                                                           02310000
+ return(                                                                02320000
+        hextab( substr(x,1,4) ) || hextab( substr(x,5,4) )              02330000
+       );                                                               02340000
+ end hexone;                                                            02350000
+                                                                        02360000
+ quothex: proc(s) returns( char(256) varying );                         02370000
+ dcl  s                      char(*) varying;                           02380000
+ return( 'X''' || s || '''' );                                          02390000
+ end quothex;                                                           02400000
+                                                                        02410000
+ %include word;                                                         02420000
+ %page;                                                                 02430000
+                                                                        02440000
+ /*-----------------------------------*/                                02450000
+ /*    Parse Parm information         */                                02460000
+ /*-----------------------------------*/                                02470000
+ parse_parm: procedure;                                                 02480000
+ dcl     w                   char(80)       varying;                    02490000
+ dcl     i                   fixed bin(15);                             02500000
+                                                                        02510000
+ i = index( parm, 'COMP(' );                                            02520000
+ if i>0 then do;                                                        02530000
+   w = substr(parm,i+5);                                                02540000
+   i = index(w,')');                                                    02550000
+   if i>0 then w=substr(w,1,i-1);                                       02560000
+   comp_type = w;                                                       02570000
+   end; /* COMP */                                                      02580000
+                                                                        02590000
+ end parse_parm;                                                        02600000
+                                                                        02610000
+ /********************************************************************/ 02620000
+ /*    Convert Number to Varying Character String                    */ 02630000
+ /*         (positive integers only)                                 */ 02640000
+ /********************************************************************/ 02650000
+ toc: procedure(w) options( reentrant )                                 02660000
+                   returns( char(10) varying );                         02670000
+ dcl     w                   fixed bin(31);                             02680000
+ dcl     c                   char(10) varying;                          02690000
+                                                                        02700000
+ select;                                                                02710000
+   when( w>999999999 ) put string(c) edit(w)(p'(10)9');                 02720000
+   when( w>99999999  ) put string(c) edit(w)(p'(9)9');                  02730000
+   when( w>9999999   ) put string(c) edit(w)(p'(8)9');                  02740000
+   when( w>999999    ) put string(c) edit(w)(p'(7)9');                  02750000
+   when( w>99999     ) put string(c) edit(w)(p'(6)9');                  02760000
+   when( w>9999      ) put string(c) edit(w)(p'(5)9');                  02770000
+   when( w>999       ) put string(c) edit(w)(p'(4)9');                  02780000
+   when( w>99        ) put string(c) edit(w)(p'(3)9');                  02790000
+   when( w>9         ) put string(c) edit(w)(p'(2)9');                  02800000
+   otherwise           put string(c) edit(w)(p'(1)9');                  02810000
+   end; /* select */                                                    02820000
+                                                                        02830000
+ return(c);                                                             02840000
+                                                                        02850000
+ end toc;                                                               02860000
+                                                                        02870000
+ %include ebcasc;                                                       02880000
+                                                                        02890000
+ end STARZ;                                                             02900001
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 02910000
+//LKED.SYSLIB DD                                                        02920000
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    02930000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        02940000
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      02950000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       02960000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  02970000
+//LKED.SYSIN DD *                                                       02980000
+ MODE AMODE(31)                                                         02990000
+ MODE RMODE(ANY)                                                        03000000
+ NAME STARZ(R)                                                          03010001
+//* -------------- END OF LINKEDIT STEP ------------------------------* 03020000

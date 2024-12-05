@@ -1,0 +1,131 @@
+//FLASS0   JOB  (),'PRTTOK',CLASS=J,MSGCLASS=Z,                         00010000
+//         NOTIFY=$                                                     00020000
+//*                                                                     00030000
+//*                                                                     00040000
+//********************************************************************* 00050000
+//*                PL/I COMPILE AND LINK                              * 00060000
+//********************************************************************* 00070000
+// EXEC OPLIXCL,                                                        00080000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00090000
+//   PARM.LKED='LIST,MAP,XREF'                                          00100000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120000
+//PLI.SYSIN    DD *                                                     00130000
+ /* PRTTOK - Display pcl printer token                               */ 00140000
+                                                                        00150000
+ /********************************************************************/ 00160000
+ /*                                                                  */ 00170000
+ /*    Module ID: PRTTOK                                             */ 00180000
+ /*                                                                  */ 00190000
+ /*    Author:    Peter Flass                                        */ 00200000
+ /*               NYS LBDC                                           */ 00210000
+ /*               Jan, 2005                                          */ 00220000
+ /*                                                                  */ 00230000
+ /*    Function:  Display token information                          */ 00240000
+ /*                                                                  */ 00260000
+ /*    Modifications:                                                */ 00260100
+ /*                                                                  */ 00260800
+ /********************************************************************/ 00260900
+                                                                        00261800
+ PRTTOK: proc(parm) options( main reentrant );                          00261900
+                                                                        00262000
+ dcl     parm                char(100)           varying;               00263000
+                                                                        00264000
+ dcl     SYSPRINT            print;                                     00265000
+                                                                        00283000
+ dcl     rc                  fixed bin(31);                             00284000
+ dcl     printer_name        char(8);                                   00451000
+ dcl     b                   bit(8);                                    00451100
+ dcl     i                   fixed bin(15);                             00451200
+ dcl     l                   char(80)            varying;               00451300
+ dcl     bits             (8)bit(8)    static    init(                  00451400
+              '80'bx, '40'bx, '20'bx, '10'bx,                           00451500
+              '08'bx, '04'bx, '02'bx, '01'bx );                         00451600
+ dcl     devd             (8)char(16)  static var init(                 00451700
+    'Xerox',       'HP',               '''20''bx',    '''10''bx',       00451800
+    '''08''bx',    'Reset=Printer',    'Xlate=Null',  'ASCII' );        00451900
+ dcl     flgd             (8)char(16)  static var init(                 00452300
+    '''80''bx',    'Duplex=Yes',       'MCK=Yes',     'Warmup=Yes',     00452400
+    'PCL=Yes',     '''04''bx',         '''02''bx',    'Landscape' );    00452500
+                                                                        00452600
+ dcl     TOKEN               entry( char(8), ptr )                      00452700
+                             returns( fixed bin(31) );                  00452800
+                                                                        00460000
+ %include prtoken;                                                      00480000
+                                                                        00692000
+ %include builtins;                                                     00693000
+                                                                        00694000
+ %page;                                                                 00695000
+                                                                        00695100
+ allocate prtoken  set(token_addr);                                     00695200
+ printer_name = parm;                                                   00696000
+ rc = token( printer_name, token_addr );                                00795000
+ if rcª=0 then do;                                                      00796000
+   put skip edit('Token not found for ', printer_name )(a);             00797000
+   call pliretc(12);                                                    00799000
+   return;                                                              00800000
+   end; /* rc */                                                        00810000
+                                                                        00820000
+ /*-----------------------------------*/                                00830000
+ /* Print the token                   */                                00840000
+ /*-----------------------------------*/                                00850000
+ put skip edit( 'Printer information for ', printer_name, ':' )(a);     00851000
+ put skip edit( 'Token name: ', pr_tokname )(a);                        00851100
+ l = '';                                                                00851200
+ do i=1 to 8;                                                           00851300
+   b = pr_devt & bits(i);                                               00851400
+   if bª='00'bx then l = l || devd(i) || ' ';                           00851500
+   end; /* do i */                                                      00851600
+ if pr_devt='00'bx then put skip edit( 'Devt: ''00''bx' )(a);           00851700
+ else                   put skip edit( 'Devt: ', l )(a);                00851800
+ put skip edit( 'Model:', pr_model )(a);                                00851900
+ l = '';                                                                00852000
+ do i=1 to 8;                                                           00852100
+   b = pr_flags & bits(i);                                              00852200
+   if bª='00'bx then l = l || flgd(i) || ' ';                           00852300
+   end; /* do i */                                                      00852400
+ if pr_flags='00'bx then put skip edit( 'Flag: ''00''bx' )(a);          00852500
+ else                    put skip edit( 'Flag: ', l )(a);               00852600
+                                                                        00860000
+ return;                                                                01360000
+                                                                        01600000
+ %page;                                                                 01610000
+ /********************************************************************/ 01620000
+ /*             Conversion Routines                                  */ 01630000
+ /********************************************************************/ 01640000
+                                                                        01650000
+ /********************************************************************/ 01660000
+ /*    Convert Number to Varying Character String                    */ 01670000
+ /********************************************************************/ 01680000
+ toc: procedure(n) options( reentrant )                                 01690000
+                   returns( char(5) varying );                          01700000
+ dcl     n                   fixed bin(15);                             01710000
+ dcl     c                   char(5) varying;                           01720000
+                                                                        01730000
+ select;                                                                01740000
+   when( n>9999 ) put string(c) edit(n)(p'(5)9');                       01750000
+   when( n>999  ) put string(c) edit(n)(p'(4)9');                       01760000
+   when( n>99   ) put string(c) edit(n)(p'(3)9');                       01770000
+   when( n>9    ) put string(c) edit(n)(p'(2)9');                       01780000
+   otherwise      put string(c) edit(n)(p'(1)9');                       01790000
+   end; /* select */                                                    01800000
+                                                                        01810000
+ return(c);                                                             01820000
+                                                                        01830000
+ end toc;                                                               01840000
+                                                                        03443800
+ %include HEX;                                                          03443900
+                                                                        03444000
+ end PRTTOK;                                                            03444100
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 03444200
+//LKED.SYSLIB DD                                                        03444300
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    03444400
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        03444500
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      03444600
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       03444700
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  03444800
+//LKED.SYSIN DD *                                                       03444900
+ MODE AMODE(31)                                                         03445000
+ MODE RMODE(24)                                                         03445100
+ NAME PRTTOK(R)                                                         03446000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 03447000

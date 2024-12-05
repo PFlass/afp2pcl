@@ -1,0 +1,93 @@
+ /********************************************************************/ 00010000
+ /*                                                                  */ 00020000
+ /*      A D V A N C E D   F U N C T I O N   P R I N T I N G         */ 00021000
+ /*    S T R U C T U R E D   F I E L D   D E F I N I T I O N S       */ 00022000
+ /*     I M A G E   S T R U C T U R E D   F I E L D S                */ 00023000
+ /*                                                                  */ 00023100
+ /*    P.FLASS - NYS LBDC.                                           */ 00023200
+ /*    VERSION 1.0 - FEB, 1998                                       */ 00023300
+ /*                                                                  */ 00023400
+ /********************************************************************/ 00023500
+                                                                        00023600
+ DCL   IFP                   PTR;                                       00023700
+                                                                        00023800
+ /*-----------------------------------------*/                          00023900
+ /*    BEGIN PAGE SEGMENT - 'D3A85F'X       */                          00024000
+ /*    END PAGE SEGMENT   - 'D3A95F'X       */                          00025000
+ /*    BEGIN IMAGE        - 'D3A8FB'X       */                          00026000
+ /*    END IMAGE          - 'D3A9FB'X       */                          00027000
+ /*-----------------------------------------*/                          00028000
+ DCL 1 BPS                   UNALIGNED BASED(IFP), /* BEGIN/END XXX  */ 00029000
+       5 BPS_NAME            CHAR(8),       /* TOKEN NAME            */ 00030000
+       5 BPS_END             CHAR(0);       /*                       */ 00040000
+                                                                        00050000
+ /*-----------------------------------------*/                          00060000
+ /*    IMAGE CELL POSTTION - 'D3AC7B'X      */                          00070000
+ /*-----------------------------------------*/                          00080000
+ DCL 1 ICP                   UNALIGNED BASED(IFP), /* IMG CELL POS   */ 00090000
+       5 ICP_XOFF            FIXED BIN(15), /* X-OFFSET              */ 00100000
+       5 ICP_YOFF            FIXED BIN(15), /* Y-OFFSET              */ 00110000
+       5 ICP_XSIZ            FIXED BIN(15), /* X-SIZE (PELS)         */ 00120000
+       5 ICP_YSIZ            FIXED BIN(15), /* Y-SIZE (PELS)         */ 00130000
+       5 ICP_XFILL           FIXED BIN(15), /* FILL RECT X-SIZE      */ 00140000
+       5 ICP_YFILL           FIXED BIN(15), /* FILL RECT Y-SIZE      */ 00150000
+       5 ICP_END             CHAR(0);       /* END OF ICP            */ 00160000
+                                                                        00170000
+ /*-----------------------------------------*/                          00180000
+ /*    IMAGE INPUT DESCRIPTOR - 'D3A67B'X   */                          00190000
+ /*-----------------------------------------*/                          00200000
+ DCL 1 IID                   UNALIGNED BASED(IFP), /* IMG CELL POS   */ 00210000
+       5 IID_FIL1            CHAR(12),      /* (CONSTANT)            */ 00220000
+       5 IID_UBASE           CHAR(2),       /* '0000'X = IN/10       */ 00230000
+       5 IID_PPUBX           FIXED BIN(15), /* PELS PER UNIT BASE-X  */ 00240000
+       5 IID_PPUBY           FIXED BIN(15), /* PELS PER UNIT BASE-Y  */ 00250000
+       5 IID_ISZX            FIXED BIN(15), /* IMAGE SIZE-X          */ 00260000
+       5 IID_ISZY            FIXED BIN(15), /* IMAGE SIZE-Y          */ 00261000
+       5 IID_FIL2            CHAR(6),       /* (CONSTANT)            */ 00262000
+       5 IID_DSZX            FIXED BIN(15), /* DEFAULT CELL SIZE-X   */ 00263000
+       5 IID_DSZY            FIXED BIN(15), /* DEFAULT CELL SIZE-Y   */ 00264000
+       5 IID_FIL3            CHAR(2),       /* (CONSTANT - '0001'X)  */ 00265000
+       5 IID_COL             FIXED BIN(15), /* IMAGE COLOR           */ 00266000
+         /* '0000'X OR 'FF00'X - DEFAULT COLOR                       */ 00266100
+         /* '0001'X OR 'FF01'X - BLUE                                */ 00266200
+         /* '0002'X OR 'FF02'X - RED                                 */ 00266300
+         /* '0003'X OR 'FF03'X - MAGENTA                             */ 00266400
+         /* '0004'X OR 'FF04'X - GREEN                               */ 00266500
+         /* '0005'X OR 'FF05'X - CYAN                                */ 00266600
+         /* '0006'X OR 'FF06'X - YELLOW                              */ 00266700
+         /* '0007'X            - (RESERVED)                          */ 00266800
+         /* '0008'X            - BLACK                               */ 00266900
+         /* '0009'X - '000F'X  - (RESERVED)                          */ 00267000
+         /* '0010'X            - BROWN                               */ 00267100
+         /* 'FF07'X            - DEFAULT                             */ 00267200
+         /* 'FF08'X            - COLOR OF MEDIUM                     */ 00267300
+         /* 'FFFF'X            - DEFAULT (MIGRATION ONLY)            */ 00267400
+       5 IID_END             CHAR(0);       /* END OF IID            */ 00267500
+                                                                        00267600
+ /*-----------------------------------------*/                          00267700
+ /*    IMAGE OUTPUT CONTROL   - 'D3A77B'X   */                          00267800
+ /*-----------------------------------------*/                          00267900
+ DCL 1 IOC                   UNALIGNED BASED(IFP), /* IMG OUTPUT CTL */ 00268000
+       5 IOC_IBOX            FIXED BIN(15), /* IMG BLK ORIG-X        */ 00268100
+       5 IOC_IBOY            FIXED BIN(15), /* IMG BLK ORIG-Y        */ 00268200
+       5 IOC_ORIEN           CHAR(4),       /* ORIENTATION           */ 00268300
+         /* '0000 2D00'X - 0,90                                      */ 00268400
+         /* '2D00 5A00'X - 90,180                                    */ 00268500
+         /* '5A00 8700'X - 180,270                                   */ 00268600
+         /* '8700 0000'X - 270,0                                     */ 00268700
+       5 IOC_FIL1            CHAR(8),       /* (RESERVED)            */ 00268800
+       5 IOC_SFX             CHAR(2),       /* SCALE FACTOR-X        */ 00268900
+         /* '03E8'X - PRINT AS-IS                                    */ 00269000
+         /* '07D0'X - ENLARGE DOUBLE-DOT                             */ 00270000
+       5 IOC_SFY             CHAR(2),       /* SCALE FACTOR-Y        */ 00270100
+       5 IOC_FIL2            CHAR(2),       /* (CONSTANT - 'FFFF'X)  */ 00270200
+       5 IOC_END             CHAR(0);       /* END OF IOC            */ 00270300
+                                                                        00270400
+ /*-----------------------------------------*/                          00270500
+ /*    IMAGE RASTER DATA - 'D3EE7B'X        */                          00270600
+ /*-----------------------------------------*/                          00270700
+ DCL 1 IRD                   UNALIGNED BASED(IFP), /* IMAGE RASTER   */ 00270800
+       5 IRG_RASTER          CHAR(32759);   /* RASTER PATTERN DATA   */ 00270900
+                             /* 0-32759 BYTES OF RASTER PATTERNS     */ 00271000
+                             /* DEPENDING ON MAXIMUM RECORD LENGTH   */ 00272000
+                                                                        00273000

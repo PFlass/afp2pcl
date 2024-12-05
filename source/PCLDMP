@@ -1,0 +1,274 @@
+//FLASSD   JOB  (),'PCLDMP',CLASS=J,MSGCLASS=X,                         00001000
+//         NOTIFY=$                                                     00002000
+//********************************************************************* 00003000
+//*                PL/I COMPILE AND LINK                              * 00004000
+//********************************************************************* 00005000
+// EXEC PLIXCL,                                                         00006000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG',                                  00007000
+//   PARM.LKED='LIST,MAP,XREF'                                          00008000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00009000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00009102
+//PLI.SYSIN    DD *                                                     00009300
+ /********************************************************************/ 00011000
+ /*                                                                  */ 00020000
+ /* Module:        PCLDMP                                            */ 00021000
+ /*                                                                  */ 00022000
+ /* Author:        Peter Flass, NYS LBDC                             */ 00023000
+ /*                Oct, 1997                                         */ 00024000
+ /*                                                                  */ 00025000
+ /* Function:      Printable dump of a PCL datastream.               */ 00026000
+ /*                                                                  */ 00027000
+ /* Modifications:                                                   */ 00028000
+ /*                                                                  */ 00029000
+ /*                                                                  */ 00029100
+ /********************************************************************/ 00030000
+                                                                        00040000
+ PCLDMP: Proc options(main);                                            00050000
+                                                                        00051000
+ dcl     pclin               input record env(fb recsize(80));          00052000
+ dcl     sysprint            print;                                     00052100
+ dcl     eof                 bit(1)              init('0'b);            00054000
+ dcl     c                   char(1);                                   00054100
+ dcl     card                char(80);                                  00055000
+ dcl     cx              (80)char(1)   based( addr(card) );             00055100
+ dcl     line                char(120);                                 00055200
+ dcl     lx             (120)char(1)   based( addr(line) );             00055300
+ dcl     esc_seq             char(120);                                 00055400
+ dcl     ex             (120)char(1)   based( addr(esc_seq) );          00055500
+ dcl     font_hdr            char(64);                                  00055601
+ dcl     fx              (64)char(1)   based( addr(font_hdr) );         00055701
+ dcl     ip                  fixed bin(15);                             00055800
+ dcl     op                  fixed bin(15);                             00055900
+ dcl     ep                  fixed bin(15);                             00056000
+ dcl     hp                  fixed bin(15);                             00056101
+ dcl     state               fixed bin(15)       init(0);               00056200
+ dcl     skip_cnt            fixed bin(15)       init(0);               00056300
+ dcl     fnt_cnt             fixed bin(15)       init(0);               00056401
+ dcl     skip_char           bit(1)              init( '1'b );          00056501
+                                                                        00056600
+ dcl     ESC                 char(1)   static    init( '1B'x );         00056701
+ dcl     pcl_hdr             char(80)  static                           00056800
+              init( ('5A'x || 'JES328X' || '01DA'x || (70)'FF'x) );     00056900
+                                                                        00057000
+ %include pclfdesc;                                                     00057101
+                                                                        00057201
+ %include builtins;                                                     00057300
+                                                                        00058000
+ %page;                                                                 00058100
+ on endfile(pclin) eof='1'b;                                            00059000
+                                                                        00059100
+ open file(pclin) input;                                                00059200
+ read file(pclin) into(card);                                           00059300
+                                                                        00059500
+ do while(eof='0'b);                                                    00059600
+                                                                        00059700
+ dummy: do;                                                             00059800
+   if card = pcl_hdr then leave dummy; /* Ignore JES/328x headers    */ 00059900
+                                                                        00060000
+   do ip = 4 to 80;                                                     00060100
+     c = cx(ip);                                                        00060200
+                                                                        00060301
+     select(state);                                                     00060600
+                                                                        00060801
+       when(0) do;                     /* Text                       */ 00060900
+         if c=ESC then do;                                              00061000
+           state = 2;                                                   00061100
+           ep    = 0;                                                   00061200
+           end;                                                         00061300
+         else do;                                                       00061400
+           state = 1;                                                   00061500
+           line  = 'Text: ';                                            00061600
+           op    = 6;                                                   00061700
+           call prt_txt;                                                00061800
+           end;                                                         00061900
+         end; /* text */                                                00062000
+                                                                        00062100
+       when(1) do;                     /* More text                  */ 00062200
+         if c=ESC then do;                                              00062300
+           state = 2;                                                   00062400
+           ep    = 0;                                                   00062500
+           end;                                                         00062600
+         else do;                                                       00062700
+           call prt_txt;                                                00062900
+           end;                                                         00063000
+         end; /* more text */                                           00063100
+                                                                        00063200
+       when(2) do;                     /* Escape sequence            */ 00063300
+         if op>0 then do;                                               00063401
+           put skip edit(line)(a);                                      00063501
+           op=0;                                                        00063601
+           end;                                                         00063701
+         if ep>55 then do;                                              00063801
+           put skip edit('Inv len.')(a);                                00063900
+           put skip edit(hex(addr(esc_seq),ep))(a);                     00064000
+           stop;                                                        00064100
+           end;                                                         00064200
+         ep = ep + 1;                                                   00064300
+         ex(ep) = c;                                                    00064400
+         if (c>='41'x) & (c<='5A'x) | c='45'x then do;                  00064501
+           call prt_esc;                                                00064600
+           end;                                                         00064800
+         end; /* escape seq */                                          00064900
+                                                                        00065000
+       when(3) do;                     /* Skipping                   */ 00065100
+         skip_cnt = skip_cnt-1;                                         00065300
+         if skip_cnt<=0 then state=0;                                   00065400
+         end; /* skipping */                                            00065500
+                                                                        00065601
+       when(4) do;                     /* Font header                */ 00065701
+         hp = hp + 1;                                                   00066904
+         fx(hp) = c;                                                    00067005
+         if hp>=font_cnt then do;                                       00067101
+           call prt_font_hdr;                                           00067201
+           font_cnt=0;                                                  00067301
+           if skip_cnt>0 then state=3;                                  00067401
+           else state=0;                                                00067501
+           hp=0;                                                        00067601
+           op=0;                                                        00067701
+           end; /* hp>=font_cnt */                                      00067801
+         end; /* font header */                                         00067905
+                                                                        00068000
+       end; /* select */                                                00068100
+                                                                        00068200
+     end; /* do ip */                                                   00068300
+                                                                        00068400
+   end; /* dummy */                                                     00068500
+                                                                        00068600
+   read file(pclin) into(card);                                         00068700
+                                                                        00068800
+   end; /* do while */                                                  00068900
+                                                                        00069000
+ if op>0 then put skip edit(line)(a);                                   00069100
+ close file(pclin), file(sysprint);                                     00069200
+                                                                        00069300
+ %page;                                                                 00069400
+ prt_font_hdr: procedure;                                               00069501
+   fp = addr(font_hdr);                                                 00069601
+   put skip edit('      Font header ',                                  00069701
+                 translate(font_name,ebcdic))(a);                       00069801
+   end prt_font_hdr;                                                    00070001
+                                                                        00070101
+ prt_txt: procedure;                                                    00070200
+   if c<'20'x then call prt_hex(c);                                     00071007
+   else do;                                                             00071107
+     c = translate(c, ebcdic );                                         00071207
+     op = op+1;                                                         00071307
+     if op>120 then do;                                                 00071407
+       put skip edit(line)(a);                                          00071507
+       op=1;                                                            00071607
+       line=' ';                                                        00071707
+       end;                                                             00071807
+     lx(op)=c;                                                          00071907
+     end;                                                               00072007
+   end prt_txt;                                                         00072100
+                                                                        00072200
+ prt_esc: procedure;                                                    00072300
+   dcl    n                 char(5),                                    00072401
+          nx                pic '99999' defined n;                      00072501
+   dcl    l                 fixed bin(15);                              00072601
+                                                                        00072701
+   state = 0;                          /* reset to 'text'            */ 00072801
+   op=0;                                                                00072901
+   line = 'ESC:  ' || '1B' || hex(addr(esc_seq),ep);                    00073001
+   esc_seq = translate(esc_seq, ebcdic );                               00073101
+                                                                        00073201
+   if skip_char='1'b then do;                                           00073301
+     if substr(esc_seq,1,2) = '*c' & substr(esc_seq,ep,1) = 'E'         00073401
+     then return;                                                       00073501
+     if substr(esc_seq,1,2) = '(s' & substr(esc_seq,ep,1) = 'W'         00073601
+     then do;                                                           00073701
+       l = ep-3;                                                        00073801
+       if (l<=0) | (l>5) then do;                                       00073901
+         put skip edit('err,L=',l)(a,p'zzz9');                          00074001
+         stop;                                                          00074101
+         end;                                                           00074201
+       n = '00000';                                                     00074301
+       substr(n,5-l+1,l) = substr(esc_seq,3,l);                         00074401
+       skip_cnt = nx;                                                   00074501
+       hp=0;                                                            00074601
+       state = 3;                                                       00074701
+       return;                                                          00074801
+       end; /* '<esc>(s#W' */                                           00074901
+     end; /* skip char */                                               00075001
+                                                                        00075101
+   op   = max(17 + ep*2,51);                                            00075201
+   substr(line,op,5) = '<ESC>';                                         00075301
+   substr(line,op+5,ep) = substr(esc_seq,1,ep);                         00075401
+   put skip edit(line)(a);                                              00075500
+   op=0;                                                                00075601
+                                                                        00075700
+   if substr(esc_seq,1,2) = ')s' & substr(esc_seq,ep,1) = 'W'           00075800
+   then do;                                                             00075900
+     l = ep-3;                                                          00076001
+     if (l<=0) | (l>5) then do;                                         00076101
+       put skip edit('err,L=',l)(a,p'zzz9');                            00076201
+       stop;                                                            00076301
+       end;                                                             00076401
+     n = '00000';                                                       00076500
+     substr(n,5-l+1,l) = substr(esc_seq,3,l);                           00076601
+     font_cnt = nx;                                                     00076701
+     if font_cnt>64                                                     00076801
+     then do;                                                           00076901
+       skip_cnt = font_cnt-64;                                          00077001
+       font_cnt=64;                                                     00077101
+       end;                                                             00077201
+     else skip_cnt=0;                                                   00077301
+     hp=0;                                                              00077401
+     state = 4;                                                         00077501
+     end; /* '<esc>)s#W' */                                             00077600
+                                                                        00077700
+   if substr(esc_seq,1,2) = '(s' & substr(esc_seq,ep,1) = 'W'           00077800
+   then do;                                                             00077900
+     l = ep-3;                                                          00078001
+     if (l<=0) | (l>5) then do;                                         00078101
+       put skip edit('err,L=',l)(a,p'zzz9');                            00078201
+       stop;                                                            00078301
+       end;                                                             00078401
+     n = '00000';                                                       00078500
+     substr(n,5-l+1,l) = substr(esc_seq,3,l);                           00078601
+     skip_cnt = nx;                                                     00078701
+     state = 3;                                                         00078801
+     end; /* '<esc>(s#W' */                                             00078900
+                                                                        00079000
+   ep=0;                                                                00079101
+                                                                        00079201
+   end prt_esc;                                                         00079300
+                                                                        00079407
+ prt_hex: procedure(c);                /* Print a hex control charact*/ 00079507
+   dcl   c                   char(1);                                   00079607
+   dcl   t                   char(16)  varying   init('<');             00079707
+   dcl   i                   fixed bin(15);                             00079807
+   select(c);                                                           00079907
+     when('00'x) t = t || 'NULL';                                       00080007
+     when('0A'x) t = t || 'LF';                                         00080107
+     when('0C'x) t = t || 'FF';                                         00080207
+     when('0D'x) t = t || 'CR';                                         00080307
+     otherwise   t = t || hex(addr(c),1);                               00080407
+     end; /* select */                                                  00080507
+   t = t || '>';                                                        00080607
+   if op+length(t)>120 then do;                                         00080707
+     put skip edit(line)(a);                                            00081007
+     op=0;                                                              00081107
+     line=' ';                                                          00081207
+     end;                                                               00081307
+   do i=1 to length(t);                                                 00081407
+     op = op+1;                                                         00081507
+     lx(op)=substr(t,i,1);                                              00081607
+     end;                                                               00081707
+   end prt_hex;                                                         00081807
+                                                                        00081907
+ %include ascebc;                                                       00082007
+ %include ebcasc;                                                       00082107
+ %include hex;                                                          00082207
+                                                                        00082307
+ end PCLDMP;                                                            00082407
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00083000
+//LKED.SYSLIB DD                                                        00090000
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    00100002
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        00101002
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      00110000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       00120002
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00130000
+//LKED.SYSIN DD *                                                       00140000
+ NAME PCLDMP(R)                                                         00150000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00160000

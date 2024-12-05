@@ -1,0 +1,1858 @@
+//FLASS2   JOB  (),'AFP2PCL2',CLASS=J,MSGCLASS=Z,                       00010041
+//         NOTIFY=$                                                     00020022
+//*                                                                     00030022
+//*                                                                     00040022
+//********************************************************************* 00050022
+//*                PL/I COMPILE AND LINK                              * 00060022
+//********************************************************************* 00070022
+// EXEC OPLIXCL,                                                        00080070
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)', ,LIST,MAP',       00090050
+//   PARM.LKED='LIST,MAP,XREF,RENT'                                     00100022
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110022
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120022
+//PLI.SYSIN    DD *                                                     00130022
+ /* AFP2PCL2 - Convert AFP data stream to PCL                        */ 00140022
+                                                                        00150022
+ /********************************************************************/ 00160022
+ /*                                                                  */ 00170022
+ /*    Module ID: AFP2PCL2                                           */ 00180022
+ /*                                                                  */ 00190022
+ /*    Author:    Peter Flass                                        */ 00200022
+ /*               NYS LBDC                                           */ 00210022
+ /*               Sep, 1996                                          */ 00220022
+ /*                                                                  */ 00230022
+ /*    Function:  Convert AFP datastream to PCL.                     */ 00240022
+ /*                                                                  */ 00250022
+ /*    Modifications:                                                */ 00260022
+ /*               2005-06-21 - Punch  option.                        */ 00270189
+ /*               2005-01-27 - Staple option.                        */ 00270289
+ /*               2003-03-25 - Savin code                            */ 00270389
+ /*               2001-03-15 - Duplex passed in parmarea (from AFP2PC*/ 00270489
+ /*               2001-01-23 - No graphics support for meta (msg027) */ 00270589
+ /*               2000-12-18 - Meta- eject blank pages               */ 00270689
+ /*               2000-06-07 - Inline images (BII structured field)  */ 00270789
+ /*               2000-05-22 - Add SYSOUT class parameter.           */ 00270889
+ /*               2000-02-02 - Pass RMI parameter in AFP units.      */ 00271038
+ /*               1999-06-16 - Copies, Duplex.                       */ 00280034
+ /*               1999-06-14 - Fix 'repeat string' problem.          */ 00290034
+ /*               1997-12-11 - Xerox metacode conversion.            */ 00300034
+ /*               1997-10-23 - remove pcl-dependent code.            */ 00310034
+ /*                                                                  */ 00320022
+ /********************************************************************/ 00330022
+                                                                        00340022
+ %DCL    COMPILETIME         BUILTIN;                                   00350022
+ %DCL    COMPTIME            CHAR;                                      00360022
+ %COMPTIME = '''' || COMPILETIME || '''';                               00370022
+ %DCL    DEBUG               CHAR;     /* Generate debug code        */ 00380022
+ %DEBUG = 'N';                                                          00390022
+ %DCL   (TRUE,FALSE)         CHAR;                                      00400022
+ %TRUE  = '''1''b';                                                     00410022
+ %FALSE = '''0''b';                                                     00420022
+ %DCL    MCK                 CHAR;     /* Definition of MCK=YES      */ 00430022
+ %DCL    PCL                 CHAR;     /* Definition of PCL=YES      */ 00440022
+ %MCK   = 'SUBSTR(PRT_FLAGS,3,1)';                                      00450022
+ %PCL   = 'SUBSTR(PRT_FLAGS,5,1)';                                      00460022
+                                                                        00470022
+ AFP2PCL2: proc( aparm ) options( fetchable reentrant );                00480022
+                                                                        00490022
+ /*******************************************************************/  00500022
+ /*            *** Compile date and time ***                        */  00510022
+ /*******************************************************************/  00520022
+ dcl     afp2pcv             char(18) static external init(COMPTIME);   00530022
+                                                                        00540022
+                                                                        00550022
+ %include pclincl;                                                      00560022
+ %page;                                                                 00570022
+                                                                        00580022
+ dcl     pcl_rec             char(80);                                  00590022
+ dcl     pclo                fixed bin(15)       init(-1);              00600022
+ dcl     pcl_work            char(80) varying;                          00610022
+ dcl     err_msg             char(120) varying;                         00620022
+ dcl   1 err_msg_table       unaligned,                                 00630022
+         5 err_msg_count     fixed bin(15)       init(0),               00640022
+         5 err_msg_tbl   (10)char(120) varying;                         00650022
+                                                                        00660022
+ dcl    (has_ext,has_pad)    bit(1);                                    00670022
+                                                                        00680022
+ dcl     rec_length          fixed bin(31);                             00690022
+ dcl     save_sf_len         fixed bin(15);                             00700022
+ dcl     j                   fixed bin(15);                             00710022
+ dcl    (xs,xe,xc)           ptr;                                       00720022
+ dcl     re                  ptr;                                       00730022
+ dcl     devdep_parm         fixed bin(31);                             00740022
+ dcl     rc                  fixed bin(15);                             00750022
+                                                                        00760022
+ dcl     oneb                bit(8)              based,                 00770022
+         twob                bit(16)             based,                 00780022
+         threeb              bit(24)             based,                 00790022
+         fourb               bit(32)             based;                 00800022
+ dcl     hword               fixed bin(15)       based;                 00810022
+ dcl     zovl                char(32767)         based;                 00820022
+                                                                        00830022
+ /* --------------------------------- */                                00840022
+ /*  Structured field identification  */                                00850022
+ /* --------------------------------- */                                00860022
+ dcl   sfid                  char(3);                                   00870022
+ dcl 1 save_sf_desc_info     char(48),                                  00880022
+     1 fil                   defined save_sf_desc_info,                 00890022
+       5 save_sf_id          char(5),                                   00900022
+       5 fil                 char(1),                                   00910022
+       5 save_sf_desc        char(42);                                  00920022
+                                                                        00930022
+ dcl     AFPTRACE            entry( char(3) ) returns( char(48) );      00940022
+ dcl     LF                  entry(                                     00950022
+                                    entry variable,                     00960022
+                                    entry variable,                     00970022
+                                    char(1),                            00980022
+                                    char(8),                            00990022
+                                    fixed bin(15)                       01000022
+                                  )                                     01010022
+                             returns( fixed bin(15) );                  01020022
+ dcl     ABEND               entry;                                     01030022
+ dcl     INCR                entry( ptr, fixed bin(31) );               01040022
+ dcl     DEVDEP              entry( ptr,                                01050022
+                                    char(8),                            01060022
+                                    ptr,                                01070022
+                                    fixed bin(15),                      01080022
+                                    ptr                                 01090022
+                                  );                                    01100022
+ dcl     WIDTAB              entry( ptr, char(8) )                      01110022
+                             returns( ptr );                            01120022
+ dcl     IMAGE               entry( ptr, char(8) )                      01130022
+                             returns( fixed bin(15) );                  01140022
+                                                                        01150022
+ %page;                                                                 01160022
+                                                                        01170022
+ /********************************************************************/ 01180022
+ /*      Global Formatting Environment                               */ 01190022
+ /********************************************************************/ 01200022
+                                                                        01210022
+ dcl     G_ppub    fixed bin(31)  init(14400);   /* Pels/unit base   */ 01220022
+ dcl     G_vsi     fixed bin(31)  init(0);       /* Var space incr   */ 01230022
+ dcl     G_orien   fixed bin(31)  init(0);       /* Page orientation */ 01240022
+ dcl     G_page    fixed bin(31)  init(0);       /* Current page num */ 01250022
+ dcl     G_copies  fixed bin(15)  init(0);       /* Copy counPF990615*/ 01260026
+ dcl     G_vsc     char(1)        init(' ');     /* Var space char   */ 01270022
+ dcl     G_dwnld   char(1)        init('');      /* Download flag    */ 01280022
+ dcl     G_tray    char(1)        init('');      /* Default tray     */ 01290022
+ dcl     G_duplex  char(1)        init('');      /* Duplex opPF990615*/ 01300026
+ dcl     G_stapl   char(1)        init('');      /* Staple opPF990615*/ 01301073
+ dcl     G_punch   char(1)        init('');      /* Punch opt  060621*/ 01302089
+ dcl     G_us      bit(8)         init('0'b);    /* See 'USC' doc.   */ 01310022
+ dcl     G_os      bit(1)         init('0'b);    /* '1'b=Overstrike  */ 01320022
+ dcl     G_su      bit(1)         init('0'b);    /* '1'b=Suppression */ 01330022
+ dcl     G_trtab   char(256);     /* EBCDIC->ASCII translate table   */ 01340022
+                                                                        01350022
+ /* --------------------------------- */                                01360022
+ /*  Local Document attributes        */                                01370022
+ /*  (from $PRINT .oc commands)       */                                01380022
+ /* --------------------------------- */                                01390022
+ dcl   1 Document_parms           unaligned,                            01400022
+         5 D_dest  char(8)        init(' '),     /* Destination id   */ 01410022
+         5 D_tray  char(1)        init(' '),     /* Initial tray     */ 01420022
+         5 D_cpys  char(2)        init(' '),     /* Number of copies */ 01430022
+         5 D_dupl  char(1)        init(' '),     /* Duplex option    */ 01440022
+         5 D_dwnld char(1)        init(' '),     /* Font download    */ 01450038
+         5 D_class char(1)        init(' '),     /* SYSOUT class 0522*/ 01451073
+         5 D_stapl char(1)        init(' '),     /* Staple option0127*/ 01451189
+         5 D_punch char(1)        init(' ');     /* Punch opt  050621*/ 01451289
+                                                         /*PF20050127*/ 01452073
+                                                                        01460022
+ /* --------------------------------- */                                01470022
+ /*  Document Font Table              */                                01480022
+ /*  (fonts used in this document)    */                                01490022
+ /* --------------------------------- */                                01500022
+ dcl     D_font_count        fixed bin(15)       init(0);               01510022
+ dcl     D_pclid         (50)fixed bin(15);      /* Assigned PCL ID  */ 01520022
+                                                                        01530022
+ /* --------------------------------- */                                01540022
+ /*  Local Font Table                 */                                01550022
+ /*  (fonts used on this page)        */                                01560022
+ /*  local font id is table position  */                                01570022
+ /* --------------------------------- */                                01580022
+ dcl     L_font_count        fixed bin(15)       init(0); /*PF111297*/  01590022
+ dcl     L_pclid         (30)fixed bin(15);      /* Assigned PCL ID  */ 01600022
+ dcl     L_cenid         (30)char(8);            /* Xerox cenPF111297*/ 01610022
+ dcl     L_widthtab      (30)ptr;                /* Font width tables*/ 01620022
+ dcl     text_on_page        bit(1)              init( '0'b );          01630022
+ dcl     BLANK               char(1)             init( ' ' );/*001218*/ 01631043
+                                                                        01640022
+ %include builtins;                                                     01650022
+ %include ecb;                                                          01660022
+                                                                        01670022
+ %page;                                                                 01680022
+ %include(afpsf);                                                       01690022
+ %page;                                                                 01700022
+                                                                        01710022
+ /* --------------------------------- */                                01720022
+ /* Customize EBCDIC-ASCII table      */                                01730022
+ /* --------------------------------- */                                01740022
+ G_trtab = ascii;                                                       01750022
+                                                                        01760022
+ /* ------- *** Temporary Code *** ----------------------- +         */ 01770022
+ /* Move ASCII equivalents to corresponding codepoints     |         */ 01780022
+ /*   in EBCDIC table.                                     |         */ 01790022
+ /* There should be one translate table per codepage.      |         */ 01800022
+ /* This table corresponds to EBCDIC codepage 1047         |         */ 01810022
+ /* with LBDC modifications as indicated.                  |         */ 01820022
+ /* Output is always ASCII codepage 850.                   |         */ 01830022
+ /* ------------------------------------*                  |         */ 01840022
+ substr(G_trtab,'0C'bx+1,1)='00'X;     /* FormFeed         |         */ 01850022
+ /*substr(G_trtab,'B0'bx+1,1)='5B'X;   /* [                |         */ 01860039
+ /*substr(G_trtab,'6A'bx+1,1)='5D'X;   /* ]                |         */ 01870039
+ /*substr(G_trtab,'BF'bx+1,1)='A9'X;   /* copyright        |         */ 01880039
+ /*substr(G_trtab,'DC'bx+1,1)='A7'X;   /* section sign     |         */ 01890039
+ /* - *** End Temporary Code *** ------------------------- +         */ 01900022
+                                                                        01910022
+ G_dwnld  = P_dwnld;         /* Initialize font download flag        */ 01920056
+ G_tray   = P_tray;          /* Initialize default tray              */ 01930056
+ if P_duplex = '1'b then G_duplex='Y';                       /*010315*/ 01931056
+                                                                        01940022
+ /* --------------------------------- */                                01950022
+ /* Initialize 'DEVDEP'               */                                01960022
+ /* --------------------------------- */                                01970022
+ call DEVDEP( aparm, 'INIT', null(), 0, null() );                       01980022
+                                                                        01990022
+ /* --------------------------------- */                                02000022
+ /* Initialize Printer                */                                02010022
+ /* --------------------------------- */                                02020022
+ call DEVDEP( aparm, 'RESET', null(), 0, null() );                      02030022
+                                                                        02040022
+ /* --------------------------------- */                                02050022
+ /* Initial Font load                 */                                02060022
+ /* --------------------------------- */                                02070022
+ if substr(prt_flgf,1,1)=TRUE then call load_initial_fonts;             02080022
+                                                                        02080167
+ /* Savin printers -- initial (no-op) page-eject             20030425*/ 02080267
+ if substr(prt_device,3,1)='1'b then begin; /* Savin printer 20030425*/ 02081067
+   dcl ps                like PageSetup;                   /*20030425*/ 02081167
+   G_tray = '7';             /* Tray(7)='AUTO'              200500207*/ 02081276
+   ps.S_page     = G_page;                                 /*20030425*/ 02081367
+   ps.S_copies   = G_copies;                               /*20030425*/ 02081467
+   ps.S_tray     = G_tray;                                 /*20030425*/ 02081567
+   ps.S_duplex   = G_duplex;                               /*20030425*/ 02081667
+ /*                                                                     02081781
+  .call DEVDEP( aparm, 'BEGPAGE ', addr(ps), 0, null() );               02081881
+  .call DEVDEP( aparm, 'ENDPAGE ', addr(G_tray), 0, null() );           02081981
+  */                                                                    02082081
+   end; /* Savin */                                        /*20030425*/ 02084067
+                                                                        02090022
+ %page;                                                                 02100022
+ /********************************************************************/ 02110022
+ /*      Process AFP Data                                            */ 02120022
+ /********************************************************************/ 02130022
+ call read_afpin;                           /* Read first afpin rec  */ 02140022
+                                                                        02150022
+ loop: do while(rec_length>0);                                          02160022
+                                                                        02170022
+   /*----------------------------*/                                     02180022
+   /* Check for 'STOP' requested */                                     02190022
+   /*  Bit 29 = 'DRAIN' (ignored)*/                                     02200022
+   /*  Bit 30 = 'STOP'           */                                     02210022
+   /*----------------------------*/                                     02220022
+   if ecb_addr->ecb.ecbpost='1'b then do;                               02230022
+     if substr(ecb_addr->ecb.ecbcc,30,1)='1'b then do;                  02240022
+       put string(err_msg) edit( 'AFP018E Job interrupted by ',         02250022
+                       'operator STOP command')(a);                     02260022
+       call write_error_message;                                        02270022
+       a2p_return_code = 8;                                             02280022
+       leave loop;                                                      02290022
+       end; /* ecbcc */                                                 02300022
+     end; /* ecb_post */                                                02310022
+                                                                        02320022
+   if sfp > ( re-cstg(sff) ) then do;                                   02330022
+     put string(err_msg) edit('AFP019S Page ',toc( (G_page) ),          02340022
+                    ', Data not in valid AFP format.')(a);              02350022
+     call write_error_message;                                          02360022
+     a2p_return_code = 12;                                              02370022
+     leave loop;                                                        02380022
+     end; /* sfp */                                                     02390022
+                                                                        02400022
+   save_sf_len = sff.sf_len;                                            02410022
+   if ( save_sf_len<cstg(sff) ) |                                       02420022
+      ( save_sf_len+sfp-1>re ) then do;                                 02430022
+     put string(err_msg) edit('AFP019S Page ',toc( (G_page) ),          02440022
+                    ', Data not in valid AFP format')(a);               02450022
+     call write_error_message;                                          02460022
+     a2p_return_code = 12;                                              02470022
+     leave loop;                                                        02480022
+     end; /* save_sf_len */                                             02490022
+                                                                        02500022
+   sfid        = sff.sf_id;                                             02510022
+   save_sf_desc_info = afptrace(sfid);                                  02520022
+   has_ext = substr(sf_flag,1,1);                                       02530022
+   has_pad = substr(sf_flag,5,1);                                       02540022
+                                                                        02550022
+   /*---------------------------------*/                                02560022
+   /*    Point to data start and end  */                                02570022
+   /*---------------------------------*/                                02580022
+   xe = sfp + save_sf_len - 1;         /* End of this structured fld */ 02590022
+   sfp = addr(sff_end);                /* Point past header          */ 02600022
+   if has_ext then sfp = sfp + sfel;   /* Add extension length if any*/ 02610022
+   if has_pad then do;                 /* Add padding bytes if any   */ 02620022
+     if xe->onebª='00'X then xe = xe - xe->oneb;                        02630022
+     else do;                                                           02640022
+       xe = xe - 1;                                                     02650022
+       xe = xe - xe->twob;                                              02660022
+       end; /* else */                                                  02670022
+     end; /* has_pad */                                                 02680022
+                                                                        02690022
+   /*---------------------------------*/                                02700022
+   /*  Select structured field type   */                                02710022
+   /*---------------------------------*/                                02720022
+   select( save_sf_id );                                                02730022
+                                                                        02740022
+                                                           /*PF990616*/ 02750027
+     when( 'BPG  ' ) begin;                                /*PF990616*/ 02760027
+       dcl ps                like PageSetup;               /*PF990616*/ 02770027
+       /*-------------------------------------*/                        02780022
+       /*    Process 'BPG' structured field   */                        02790022
+       /*-------------------------------------*/                        02800022
+       G_page = G_page + 1;            /* Increment page number      */ 02810022
+       ps.S_page     = G_page;                             /*PF990616*/ 02820027
+       ps.S_copies   = G_copies;                           /*PF990616*/ 02830027
+       ps.S_tray     = G_tray;                             /*PF990616*/ 02840027
+       ps.S_duplex   = G_duplex;                           /*PF990616*/ 02850027
+       text_on_page = '0'b;            /* No text yet on this page   */ 02860022
+       if G_stapl ='Y' then P_staple='1'b;/* Set staple option 050127*/ 02861086
+       if G_punch ='Y' then P_punch ='1'b;/* Set punch  option 050621*/ 02861189
+       if G_duplex='Y' then P_duplex='1'b;/* Set duplex option 050302*/ 02862082
+       call DEVDEP( aparm, 'BEGPAGE ', addr(ps), 0, null() );  /*0616*/ 02870027
+       end; /* BPG */                                                   02880022
+                                                                        02890022
+     when( 'BPT  ' ) do;                                                02900022
+       /*-------------------------------------*/                        02910022
+       /*    Process 'BPT' structured field   */                        02920022
+       /*-------------------------------------*/                        02930022
+       call DEVDEP( aparm, 'BEGTEXT ', null(), G_page, null() );        02940022
+       end; /* BPT */                                                   02950022
+                                                                        02960022
+     when( 'EAG  ' ) do;                                                02970022
+       /*-------------------------------------*/                        02980022
+       /*    Process 'EAG' structured field   */                        02990022
+       /*-------------------------------------*/                        03000022
+       call DEVDEP( aparm, 'ENVGRP  ', addr(L_cenid(1)), L_font_count,  03010022
+                    addr(L_widthtab(1)) );                              03020022
+       end; /* EAG */                                                   03030022
+                                                                        03040022
+     when( 'EPG  ' ) do;                                                03050022
+       /*-------------------------------------*/                        03060022
+       /*    Process 'EPG' structured field   */                        03070022
+       /*-------------------------------------*/                        03080022
+                                                                        03081078
+       /* The following re-added 2005-02-11.  Why was it removed?    */ 03081178
+ /*    if prt_id='LOCAL   ' & ªtext_on_page then do;       /*PF001218*/ 03081379
+       /* Force blank pages to be printed 2005-02-22                 */ 03081479
+       if  ªtext_on_page then do;                          /*PF050222*/ 03081579
+         call DEVDEP( aparm, 'BEGTEXT ', null(), G_page, null() );      03081679
+         call DEVDEP( aparm, 'WRITE/TX', addr(BLANK),      /*PF001218*/ 03081779
+                                         length(BLANK),    /*PF001218*/ 03081879
+                                         addr(G_trtab) );  /*PF001218*/ 03081979
+         text_on_page = '1'b;                              /*PF001218*/ 03082178
+         end; /* ªtext_on_page */                          /*PF001218*/ 03083079
+                                                                        03084078
+       if text_on_page then do;                                         03090042
+         call DEVDEP( aparm, 'ENDPAGE ', addr(G_tray), 0, null() );     03100022
+         stat_pages = stat_pages + 1;                      /*PF990224*/ 03110024
+         end; /* text on page */                                        03120022
+       text_on_page = '0'b;            /* No text yet on this page   */ 03130022
+       end; /* EPG */                                                   03140022
+                                                                        03150022
+     when( 'IPS  ' ) do;                                                03160022
+       /*-------------------------------------*/                        03170022
+       /*    Process 'IPS' structured field   */                        03180022
+       /*-------------------------------------*/                        03190022
+       devdep_parm = adjl( decipoint(addr(ips_xorg)->threeb) );         03200022
+       call DEVDEP( aparm, 'AMI     ',                                  03210022
+                addr(devdep_parm),                                      03220022
+                0, null() );                                            03230022
+       devdep_parm = adjt( decipoint(addr(ips_yorg)->threeb) );         03240022
+       call DEVDEP( aparm, 'AMB     ',                                  03250022
+                addr(devdep_parm),                                      03260022
+                0, null() );                                            03270022
+       if prt_idª='LOCAL   ' then do;                      /*20010123*/ 03271047
+         rc = IMAGE( aparm, sfp->ips_segname);                          03280047
+         if rcª=0 then do;                                              03290047
+           put string(err_msg) edit( 'AFP025E Page ', toc( (G_page) ),  03300047
+                          ', Unable to process segment ',               03310047
+                          sfp->ips_segname)(a);                         03320047
+           call write_error_message;                                    03330047
+           a2p_return_code = 8;                                         03340047
+           leave loop;                                                  03350047
+           end;                                                         03360047
+         end; /* ªLOCAL */                                 /*20010123*/ 03361047
+       else do;                                            /*20010123*/ 03362047
+         put string(err_msg) edit( 'AFP027E Page ', toc( (G_page) ),    03362247
+                        ', Graphics not supported for LOCAL' )(a);      03362347
+         call write_error_message;                         /*20010123*/ 03362547
+         a2p_return_code = 8;                              /*20010123*/ 03362647
+         leave loop;                                       /*20010123*/ 03362747
+         end;                                              /*20010123*/ 03363047
+       text_on_page = '1'b;            /* Something on this page     */ 03370022
+       end; /* IPS */                                                   03380022
+                                                                        03381040
+     when( 'BII  ' ) do;               /* Inline Image       PF000607*/ 03382040
+       /*-------------------------------------*/           /*PF000607*/ 03383040
+       /*    Process 'BII' structured field   */           /*PF000607*/ 03384040
+       /*-------------------------------------*/           /*PF000607*/ 03385040
+       rc = IMAGE( aparm, '_INLINE_' );                    /*PF000607*/ 03389540
+       if rcª=0 then do;                                   /*PF000607*/ 03389640
+         put string(err_msg) edit( 'AFP026E Page ', toc( (G_page) ),    03389740
+                        ', Unable to process inline image ')(a);        03389840
+         call write_error_message;                         /*PF000607*/ 03390040
+         a2p_return_code = 8;                              /*PF000607*/ 03390140
+         leave loop;                                       /*PF000607*/ 03390240
+         end;                                              /*PF000607*/ 03390340
+       text_on_page = '1'b;            /* Something on this page     */ 03390440
+       end; /* BII */                                      /*PF000607*/ 03390540
+                                                                        03391040
+     when( 'MCF-1' ) do;                                                03400022
+       /*-------------------------------------*/                        03410022
+       /*    Process 'MCF-1' structured field */                        03420022
+       /*-------------------------------------*/                        03430022
+       call process_mcf1;                                               03440022
+       end; /* MCF-1 */                                                 03450022
+                                                                        03460022
+     when( 'NOP  ' ) do;                                                03470022
+       /*-------------------------------------*/                        03480022
+       /*    Process 'NOP'   structured field */                        03490022
+       /*       (may be $PRINT comment)       */                        03500022
+       /*-------------------------------------*/                        03510022
+       call process_nop;                                                03520022
+       if D_dwnld = 'Y' then G_dwnld = 'P';                             03530022
+       if D_dwnld = 'A' then G_dwnld = 'T';                             03540022
+       if D_dwnld = 'N' then G_dwnld = 'N';                             03550022
+       if D_dupl  = 'Y' then G_duplex= 'Y';                /*PF990615*/ 03560026
+       if D_stapl = 'Y' then G_stapl = 'Y';                /*PF050127*/ 03561073
+       if D_punch = 'Y' then G_punch = 'Y';                /*PF050621*/ 03562089
+       if D_cpys ª='  ' then G_copies= D_cpys;             /*PF990615*/ 03570026
+       if D_tray ª= ' ' then G_tray= D_tray;               /*PF990927*/ 03580031
+       end; /* NOP   */                                                 03590022
+                                                                        03600022
+     when( 'PGD  ' ) do;                                                03610022
+       /*-------------------------------------*/                        03620022
+       /*    Process 'PGD' structured field   */                        03630022
+       /*-------------------------------------*/                        03640022
+       call process_pgd;                                                03650022
+       end; /* PGD */                                                   03660022
+                                                                        03670022
+     when( 'PTX  ' ) do;                                                03680022
+       /*-------------------------------------*/                        03690022
+       /*    Process 'PTX' structured field   */                        03700022
+       /*-------------------------------------*/                        03710022
+       call process_ptx;                                                03720022
+       end; /* PTX */                                                   03730022
+                                                                        03740022
+     when( '???  ' ) do;                                                03750022
+       /*-------------------------------------*/                        03760022
+       /* Unrecognized  structured field      */                        03770022
+       /*-------------------------------------*/                        03780022
+       put string(err_msg) edit('AFP017S Page ',toc( (G_page) ),        03790022
+                      ', Unrecognized structured field ',               03800022
+                      hex( addr(sfid), 3 ) )(a);                        03810022
+       call write_error_message;                                        03820022
+       a2p_return_code = 12;                                            03830022
+       leave loop;                                                      03840022
+       end; /* ??? */                                                   03850022
+                                                                        03860022
+     otherwise do;                                                      03870022
+       /*-------------------------------------*/                        03880022
+       /* Ignore unused structured fields     */                        03890022
+       /*-------------------------------------*/                        03900022
+       end; /* otherwise */                                             03910022
+                                                                        03920022
+     end; /* select */                                                  03930022
+                                                                        03940022
+   /*-------------------------------------*/                            03950022
+   /*    Point to next structured field   */                            03960022
+   /*-------------------------------------*/                            03970022
+   xc = xc + save_sf_len;                                               03980022
+   sfp = xc;                                                            03990022
+   if xc>=re then call read_afpin;                                      04000022
+                                                                        04010022
+   end; /* loop */                                                      04020022
+                                                                        04030022
+ /********************************************************************/ 04040022
+ /*      Reset Printer at end of document                            */ 04050022
+ /********************************************************************/ 04060022
+ call DEVDEP( aparm, 'END     ', null(), 0, null() );                   04070022
+                                                                        04080022
+ /*---------------------------------------------*/                      04090022
+ /*      Print any accumulated error messages   */                      04100022
+ /*---------------------------------------------*/                      04110022
+ if err_msg_count > 0 then do;                                          04120022
+   put string(err_msg) skip edit( 'AFP099I Messages for job ',          04130022
+                   stat_jobname, ' (', stat_jobid, '):' )(a);           04140022
+   /* (length not used for 'WRITE/LN' function)                  */     04150022
+   call DEVDEP( aparm, 'WRITE/LN', addr(err_msg), 0, addr(ascii) );     04160022
+   do j=1 to min( err_msg_count, hbound(err_msg_tbl,1) );               04170022
+     err_msg = err_msg_tbl(j);                                          04180022
+     call DEVDEP( aparm, 'WRITE/LN', addr(err_msg), 0, addr(ascii) );   04190022
+     end; /* do j */                                                    04200022
+   j = err_msg_count - hbound(err_msg_tbl,1);                           04210022
+   if j>0 then do;                                                      04220022
+     put string(err_msg) edit('AFP099I ', toc(j),                       04230022
+                     ' messages suppressed...')(a);                     04240022
+     call DEVDEP( aparm, 'WRITE/LN', addr(err_msg), 0, addr(ascii) );   04250022
+     end; /* j>0 */                                                     04260022
+   call DEVDEP( aparm, 'END     ', null(), 0, null() );                 04270022
+   end; /* err_msg_count */                                             04280022
+                                                                        04290022
+ /*-------------------------*/                                          04300022
+ /* End of AFP2PCL Mainline */                                          04310022
+ /*-------------------------*/                                          04320022
+                                                                        04330022
+ call DEVDEP( aparm, 'EOF     ', null(), 0, null() );                   04340022
+                                                                        04350022
+ return;                                                                04360022
+                                                                        04370022
+ %page;                                                                 04380022
+ /********************************************************************/ 04390022
+ /*   Process Presentation Text (PTX) Data                           */ 04400022
+ /********************************************************************/ 04410022
+                                                                        04420022
+ process_ptx: procedure options( reentrant );                           04430022
+                                                                        04440022
+ dcl     text_len            fixed bin(15);                             04450022
+ dcl     i                   fixed bin(15);                             04460022
+ dcl     p                   ptr,                                       04470022
+         b                   char(32767)         based(p);              04480022
+                                                                        04490022
+ text_len = save_sf_len - 8;                                            04500022
+ p = sfp;                                                               04510022
+                                                                        04520022
+ /*---------------------------------------*/                            04530022
+ /*  Process Contents of PTX              */                            04540022
+ /*---------------------------------------*/                            04550022
+ do while( text_len>0 );                                                04560022
+   if text_len<4 then do;              /* No room for CSI            */ 04570022
+   %IF DEBUG='Y' %THEN %DO;                                             04580022
+     if P_text then do;                                                 04590022
+        put string(err_msg) edit('  Text: ',substr(b,1,text_len))(a);   04600022
+        call write_error_message;                                       04610022
+       end; /* P_text */                                                04620022
+   %END;                                                                04630022
+     call process_text(p,text_len);                                     04640022
+     text_len=0;                                                        04650022
+     end;                                                               04660022
+   if substr(b,1,2)='2BD3'x then do;                                    04670022
+     call text_control;                                                 04680022
+     end;                                                               04690022
+   else do;                                                             04700022
+     i = index( substr(b,1,text_len), '2BD3'x );                        04710022
+     if i=0 then do;                   /* No CSI found               */ 04720022
+   %IF DEBUG='Y' %THEN %DO;                                             04730022
+       if P_text then do;                                               04740022
+          put string(err_msg) edit(                                     04750022
+              '  Text: ',substr(b,1,text_len))(a);                      04760022
+          call write_error_message;                                     04770022
+         end; /* P_text */                                              04780022
+   %END;                                                                04790022
+       call process_text(p,text_len);                                   04800022
+       text_len=0;                                                      04810022
+       text_on_page = '1'b;            /* Text on this page          */ 04820022
+       end;                                                             04830022
+     else do;                          /* CSI found                  */ 04840022
+       i=i-1;                                                           04850022
+   %IF DEBUG='Y' %THEN %DO;                                             04860022
+     if P_text then do;                                                 04870022
+        put string(err_msg) edit('  Text: ',substr(b,1,i))(a);          04880022
+        call write_error_message;                                       04890022
+       end; /* P_text */                                                04900022
+   %END;                                                                04910022
+       call process_text(p,i);                                          04920022
+       text_len = text_len - i;                                         04930022
+       p = p + i;                                                       04940022
+       end;                                                             04950022
+     end; /* else */                                                    04960022
+   end; /* do while */                                                  04970022
+                                                                        04980022
+ /*-----------------------------------*/                                04990022
+ /*    Process one text control       */                                05000022
+ /*-----------------------------------*/                                05010022
+ text_control: procedure options( reentrant );;                         05020022
+                                                                        05030022
+ dcl     j                   fixed bin(15);                             05040022
+ dcl     csip                ptr;                                       05050022
+ dcl     even_ft             char(1);                                   05060022
+ /* ----------------------- */                                          05070022
+ /* Control Sequence Intro  */                                          05080022
+ /*   (without '2BD3'x)     */                                          05090022
+ /* ----------------------- */                                          05100022
+ dcl   1 csi                 unaligned based(csip),                     05110022
+         5 csi_len           bit(8),                                    05120022
+         5 csi_ft            char(1),                                   05130022
+         5 csi_data          char(0);                                   05140022
+                                                                        05150022
+ dcl     chained_cs          char(1);                                   05160022
+ dcl     sf_code             char(4);                                   05170022
+ dcl     devdep_parm         fixed bin(31);                             05180022
+                                                                        05190022
+ dcl     cs_desc         (24)char(5) static      init                   05200022
+          (                                                             05210022
+           ('D2'x||'AMB '),  ('C6'x||'AMI '),  ('D8'x||'BLN '),         05220022
+           ('F2'x||'BSU '),  ('E6'x||'DBR '),  ('E4'x||'DIR '),         05230022
+           ('F4'x||'ESU '),  ('F8'x||'NOP '),  ('72'x||'OVS '),         05240022
+           ('D4'x||'RMB '),  ('C8'x||'RMI '),  ('EE'x||'RPS '),         05250022
+           ('D0'x||'SBI '),  ('F0'x||'SCFL'),  ('C0'x||'SIM '),         05260022
+           ('C2'x||'SIA '),  ('74'x||'STC '),  ('F6'x||'STO '),         05270022
+           ('C4'x||'SVI '),  ('78'x||'TBM '),  ('DA'x||'TRN '),         05280022
+           ('76'x||'USC '),  ('FF'x||'????')                            05290022
+          );                                                            05300022
+                                                                        05310022
+ sfp = sfp + 2;              /* skip over '2BD3'x                    */ 05320022
+ text_len = text_len - 2;    /*   ditto                              */ 05330022
+                                                                        05340022
+ do until(chained_cs='00'x); /* Process all chained control seq-s    */ 05350022
+   csip = sfp;                                                          05360022
+   sfp = sfp + csi_len;      /* Bump pointer past this control seq   */ 05370022
+   text_len = text_len - csi_len;                                       05380022
+                                                                        05390022
+   /* ------------------------------- */                                05400022
+   /* Isolate function and            */                                05410022
+   /* continuation bits               */                                05420022
+   /* ------------------------------- */                                05430022
+   unspec(even_ft)    = bool( unspec(csi_ft), 'FE'bx, '0001'b );        05440022
+   unspec(chained_cs) = bool( unspec(csi_ft), '01'bx, '0001'b );        05450022
+   do j=1 by 1 while( substr(cs_desc(j),1,1)ª='FF'x );                  05460022
+     if substr(cs_desc(j),1,1)=even_ft then leave;                      05470022
+     end; /* do while */                                                05480022
+   sf_code = substr(cs_desc(j),2,4);                                    05490022
+ %IF DEBUG='Y' %THEN %DO;                                               05500022
+   if P_text then do;                                                   05510022
+     if sf_code = 'TRN ' then do;                                       05520022
+       put string(err_msg) edit( '  ', 'TRN  ''',                       05530022
+                substr( addr(csi_data)->b, 1, csi_len-2), '''' )        05540022
+                (a);                                                    05550022
+       call write_error_message;                                        05560022
+       end; /* TRN */                                                   05570022
+     else do;                                                           05580022
+       put string(err_msg) edit( '  ', sf_code, ' ',                    05590022
+                      hex( csip, csi_len ) )(a);                        05600022
+       call write_error_message;                                        05610022
+       end; /* ªTRN */                                                  05620022
+     end; /* P_text */                                                  05630022
+ %END;                                                                  05640022
+                                                                        05650022
+   /* ------------------------------- */                                05660022
+   /* Process Control                 */                                05670022
+   /* ------------------------------- */                                05680022
+   select( sf_code );                                                   05690022
+                                                                        05700022
+     /*---------------------------------*/                              05710022
+     /* Absolute Move Baseline          */                              05720022
+     /*---------------------------------*/                              05730022
+     when( 'AMB ' ) do;                                                 05740022
+       devdep_parm = adjt( decipoint( addr(csi_data)->hword) );/*0203*/ 05750036
+       call DEVDEP( aparm, 'AMB     ',                                  05760022
+                addr(devdep_parm),                                      05770022
+                0, null() );                                            05780022
+       end; /* AMB */                                                   05790022
+                                                                        05800022
+     /*---------------------------------*/                              05810022
+     /* Absolute Move Inline            */                              05820022
+     /*---------------------------------*/                              05830022
+     when( 'AMI ' ) do;                                                 05840022
+       call check_underline('AMI');                                     05850022
+       devdep_parm = adjl( decipoint( addr(csi_data)->hword) );/*0203*/ 05860036
+       call DEVDEP( aparm, 'AMI     ',                                  05870022
+                addr(devdep_parm),                                      05880022
+                0, null() );                                            05890022
+       end; /* AMI */                                                   05900022
+                                                                        05910022
+     /*---------------------------------*/                              05920022
+     /* Draw Baseline Rule              */                              05930022
+     /*---------------------------------*/                              05940022
+     when( 'DBR ' ) do;                                                 05950022
+       call process_rule( 'V', addr(csi_data) );                        05960022
+       end; /* DBR */                                                   05970022
+                                                                        05980022
+     /*---------------------------------*/                              05990022
+     /* Begin Line                      */                              06000022
+     /*---------------------------------*/                              06010022
+     when( 'BLN ' ) do;                                                 06020022
+       put string(err_msg) edit( 'AFP999E Deferred feature - ',         06030022
+                      '''BLN'' not implemented.')(a);                   06040022
+       call write_error_message;                                        06050022
+       a2p_return_code = 8;                                             06060022
+       end; /* BLN */                                                   06070022
+                                                                        06080022
+     /*---------------------------------*/                              06090022
+     /* Begin Suppression               */                              06100022
+     /*---------------------------------*/                              06110022
+     when( 'BSU ' ) do;                                                 06120022
+       G_su='1'b;                                                       06130022
+       put string(err_msg) edit( 'AFP999E Deferred feature - ',         06140022
+                      '''BSU'' not implemented.')(a);                   06150022
+       call write_error_message;                                        06160022
+       a2p_return_code = 8;                                             06170022
+       end; /* BSU */                                                   06180022
+                                                                        06190022
+     /*---------------------------------*/                              06200022
+     /* Draw Inline Rule                */                              06210022
+     /*---------------------------------*/                              06220022
+     when( 'DIR ' ) do;                                                 06230022
+       call process_rule( 'H', addr(csi_data) );                        06240022
+       end; /* DIR */                                                   06250022
+                                                                        06260022
+     /*---------------------------------*/                              06270022
+     /* End Suppression                 */                              06280022
+     /*---------------------------------*/                              06290022
+     when( 'ESU ' ) do;                                                 06300022
+       G_su='0'b;                                                       06310022
+       end; /* ESU */                                                   06320022
+                                                                        06330022
+     /*---------------------------------*/                              06340022
+     /* No Operation                    */                              06350022
+     /* (may be .VT command)            */                              06360022
+     /*---------------------------------*/                              06370022
+     when( 'NOP ' ) begin;                                              06380022
+       dcl    t              char(1);                                   06390022
+                                                                        06400022
+       if csi_len=22 then do;                                           06410022
+         t =  select_tray( substr( addr(csi_data)->zovl, 1, 8 ) );      06420022
+                                                                        06430022
+         G_tray = t;                                                    06440022
+         call DEVDEP( aparm, 'TRAY    ', addr(G_tray), 0, null() );     06450022
+                                                                        06460022
+         end; /* csi_len=22 */                                          06470022
+                                                                        06480022
+       end; /* NOP */                                                   06490022
+                                                                        06500022
+     /*---------------------------------*/                              06510022
+     /* OVerStrike                      */                              06520022
+     /*---------------------------------*/                              06530022
+     when( 'OVS ' ) do;                                                 06540022
+       G_os='1'b;                                                       06550022
+       put string(err_msg) edit( 'AFP999E Deferred feature - ',         06560022
+                      '''OVS'' not implemented.')(a);                   06570022
+       call write_error_message;                                        06580022
+       a2p_return_code = 8;                                             06590022
+       end; /* OVS */                                                   06600022
+                                                                        06610022
+     /*---------------------------------*/                              06620022
+     /* Relative Move Baseline          */                              06630022
+     /*---------------------------------*/                              06640022
+     when( 'RMB ' ) do;                                                 06650022
+       devdep_parm = decipoint( addr(csi_data)->hword);    /*PF000203*/ 06660036
+       call DEVDEP( aparm, 'RMB     ',                                  06670022
+                addr(devdep_parm),                                      06680022
+                0, null() );                                            06690022
+       end; /* RMB */                                                   06700022
+                                                                        06710022
+     /*---------------------------------*/                              06720022
+     /* Relative Move Inline            */                              06730022
+     /*---------------------------------*/                              06740022
+     when( 'RMI ' ) do;                                                 06750022
+       call check_underline('RMI');                                     06760022
+       devdep_parm = addr(csi_data)->hword;                /*PF000202*/ 06770034
+       call DEVDEP( aparm, 'RMI     ',                                  06780022
+                addr(devdep_parm),                                      06790022
+                0, null() );                                            06800022
+       end; /* RMI */                                                   06810022
+                                                                        06820022
+     /*---------------------------------*/                              06830022
+     /* Repeat String                   */                              06840022
+     /*---------------------------------*/                              06850022
+     when( 'RPS ' ) begin;                                              06860022
+       dcl 1  rps_control    unaligned based(csip),                     06870022
+              5 rps_len      bit(8),                                    06880022
+              5 rps_ft       char(1),                                   06890022
+              5 rps_rlength  fixed bin(15),                             06900022
+              5 rps_rptdata  char(0);                                   06910022
+       dcl   (rptl,txtl)     fixed bin(15);                             06920022
+       dcl    i              fixed bin(15);                             06930022
+       dcl   (rpta,txta)     ptr;                          /*PF990614*/ 06940025
+       dcl    rptbuf         char(*)             ctl;      /*PF990614*/ 06950025
+                                                                        06960022
+       text_on_page = '1'b;            /* Text on this page          */ 06970022
+       rptl = rps_rlength;                       /* Repeat length    */ 06980022
+       txtl = csi_len - cstg(rps_control);       /* Len of rpt'd txt */ 06990022
+       txta = addr(rps_rptdata);                 /* Addr of rpt'd txt*/ 07000022
+ %IF DEBUG='Y' %THEN %DO;                                               07010022
+       put string(err_msg) edit( '  ', 'Repeat length ',rptl,           07020022
+                      ', Text=''',substr(txta->zovl,1,txtl),'''')       07030022
+                     (a,a,p'zzz9',a,a,a);                               07040022
+       call write_error_message;                                        07050022
+ %END;                                                                  07060022
+       call check_underline('TXT');              /* Turn on u'line?  */ 07070022
+       if rptl>0 & txtl>0 then do;                         /*PF990614*/ 07080025
+         allocate rptbuf char(rptl);                       /*PF990614*/ 07090025
+         rpta = addr(rptbuf);                              /*PF990614*/ 07100025
+                                                                        07110025
+         /* NOTE: This will have a problem if the repeated   PF990614*/ 07120025
+         /*       text contains imbedded spaces.  The width  PF990614*/ 07130025
+         /*       of the variable space character will not   PF990614*/ 07140025
+         /*       be handled correctly and the default       PF990614*/ 07150025
+         /*       width of the space character will be used. PF990614*/ 07160025
+                                                                        07170025
+         do i=1 to rptl by txtl;                 /* Repeat the string*/ 07180025
+           if txtl>rptl-i+1 then txtl=rptl-i+1;                         07190025
+           substr( rpta->zovl, 1, txtl ) =                 /*PF990614*/ 07200025
+             substr( txta->zovl, 1, txtl );                /*PF990614*/ 07210025
+           rpta = rpta + txtl;                             /*PF990614*/ 07220025
+           end; /* do i */                                              07230025
+         rpta = addr(rptbuf);                              /*PF990614*/ 07240025
+         call DEVDEP( aparm, 'WRITE/TX', rpta, rptl, addr(G_trtab) );   07250025
+         free rptbuf;                                      /*PF990614*/ 07260025
+         end; /* lengths>0 */                              /*PF990614*/ 07270025
+       end; /* RPS */                                                   07280022
+                                                                        07290022
+     /*---------------------------------*/                              07300022
+     /* Set Baseline Increment          */                              07310022
+     /*---------------------------------*/                              07320022
+     when( 'SBI ' ) do;                                                 07330022
+       put string(err_msg) edit( 'AFP999E Deferred feature - ',         07340022
+                      '''SBI'' not implemented.')(a);                   07350022
+       call write_error_message;                                        07360022
+       a2p_return_code = 8;                                             07370022
+       end; /* SBI */                                                   07380022
+                                                                        07390022
+     /*---------------------------------*/                              07400022
+     /* Set Coded Font Local            */                              07410022
+     /*---------------------------------*/                              07420022
+     when( 'SCFL' ) do;                                                 07430022
+       call select_font( addr(csi_data)->oneb );                        07440022
+       end; /* SCFL */                                                  07450022
+                                                                        07460022
+     /*---------------------------------*/                              07470022
+     /* Set Inline Adjustment           */                              07480022
+     /*---------------------------------*/                              07490022
+     when( 'SIA ' ) do;                                                 07500022
+       put string(err_msg) edit( 'AFP999E Deferred feature - ',         07510022
+                      '''SIA'' not implemented.')(a);                   07520022
+       call write_error_message;                                        07530022
+       a2p_return_code = 8;                                             07540022
+       end; /* SIA */                                                   07550022
+                                                                        07560022
+     /*---------------------------------*/                              07570022
+     /* Set Text Color                  */                              07580022
+     /*---------------------------------*/                              07590022
+     when( 'STC ' ) do;                                                 07600022
+       put string(err_msg) edit( 'AFP999E Deferred feature - ',         07610022
+                      '''STC'' not implemented.')(a);                   07620022
+       call write_error_message;                                        07630022
+       a2p_return_code = 8;                                             07640022
+       end; /* STC */                                                   07650022
+                                                                        07660022
+     /*---------------------------------*/                              07670022
+     /* Set Text Origin                 */                              07680022
+     /*---------------------------------*/                              07690022
+     when( 'STO ' ) do;                                                 07700022
+       call process_sto( addr(csi_data) );                              07710022
+       end; /* STO */                                                   07720022
+                                                                        07730022
+     /*---------------------------------*/                              07740022
+     /* Set Variable Space Increment    */                              07750022
+     /*---------------------------------*/                              07760022
+     when( 'SVI ' ) do;                                                 07770022
+       G_vsi = addr(csi_data)->twob;                                    07780022
+     %IF DEBUG='Y' %THEN %DO;                                           07790022
+       if P_text then do;                                               07800022
+         put string(err_msg) edit('  VSI=',G_vsi)(a,p'zzz9');           07810022
+         call write_error_message;                                      07820022
+         end; /* P_text */                                              07830022
+     %END;                                                              07840022
+       end; /* SVI */                                                   07850022
+                                                                        07860022
+     /*---------------------------------*/                              07870022
+     /* Temporary Baseline Move         */                              07880022
+     /*---------------------------------*/                              07890022
+     when( 'TBM ' ) do;                                                 07900022
+       put string(err_msg) edit( 'AFP999E Deferred feature - ',         07910022
+                      '''TBM'' not implemented.')(a);                   07920022
+       call write_error_message;                                        07930022
+       a2p_return_code = 8;                                             07940022
+       end; /* TBM */                                                   07950022
+                                                                        07960022
+     /*---------------------------------*/                              07970022
+     /* Underscore                      */                              07980022
+     /*---------------------------------*/                              07990022
+     when( 'USC ' ) do;                                                 08000022
+       call check_underline('END');                                     08010022
+       G_us = addr(csi_data)->oneb;                                     08020022
+       substr(G_us,1,4)='0000'b;                                        08030022
+       end; /* USC */                                                   08040022
+                                                                        08050022
+     /*---------------------------------*/                              08060022
+     /* Transparent Text                */                              08070022
+     /*---------------------------------*/                              08080022
+     when( 'TRN ' ) do;                                                 08090022
+       text_on_page = '1'b;            /* Text on this page          */ 08100022
+       call process_text( addr(csi_data), csi_len-2 );                  08110022
+       end; /* TRN */                                                   08120022
+                                                                        08130022
+     /*---------------------------------*/                              08140022
+     /* (otherwise should not occur)    */                              08150022
+     /*---------------------------------*/                              08160022
+     otherwise do;                                                      08170022
+       put string(err_msg) edit( 'AFP010E Page ',toc( (G_page) ),       08180022
+                      ', Unrecognized PTX function ',                   08190022
+                       hex( addr(csi_ft), 1 ) )(a);                     08200022
+       call write_error_message;                                        08210022
+       a2p_return_code = 8;                                             08220022
+       text_len=0;           /* ** stop processing invalid text **   */ 08230022
+       return;                                                          08240022
+       end; /* otherwise */                                             08250022
+                                                                        08260022
+   end; /* select */                                                    08270022
+                                                                        08280022
+   end; /* do until */                                                  08290022
+                                                                        08300022
+ return;                                                                08310022
+                                                                        08320022
+ end text_control;                                                      08330022
+                                                                        08340022
+ /*-----------------------------------*/                                08350022
+ /*    Process text data              */                                08360022
+ /*-----------------------------------*/                                08370022
+ process_text: procedure(p,l) options( reentrant );                     08380022
+ dcl     p                   ptr;                                       08390022
+ dcl     l                   fixed bin(15);                             08400022
+ dcl     i                   fixed bin(15);                             08410022
+ dcl     m                   fixed bin(15);                             08420022
+ dcl     devdep_parm         fixed bin(31);                             08430022
+ dcl     q                   ptr,                                       08440022
+         t                   char(32767) based(q);                      08450022
+                                                                        08460022
+ q = p;                                                                 08470022
+ m = l;                                                                 08480022
+                                                                        08490022
+ do while( m>0 );                                                       08500022
+   i = index( substr(t,1,m), G_vsc );  /* Variable space character   */ 08510022
+   if i=0 then do;           /* no spaces in text                    */ 08520022
+     call check_underline('TXT');                                       08530022
+     call DEVDEP( aparm, 'WRITE/TX', q, m, addr(G_trtab) );             08540022
+     call check_underline('END');                                       08550022
+     return;                                                            08560022
+     end; /* i=0 */                                                     08570022
+   if i>1 then do;           /* Write text to next space             */ 08580022
+     call check_underline('TXT');                                       08590022
+     call DEVDEP( aparm, 'WRITE/TX', q, i-1, addr(G_trtab) );           08600022
+     q = q + i - 1;                                                     08610022
+     m = m - i + 1;                                                     08620022
+     end; /* i>1 */                                                     08630022
+   else do;                                                             08640022
+     /*---------------------------------*/                              08650022
+     /* Generate a relative move for    */                              08660022
+     /* the variable space increment.   */                              08670022
+     /*---------------------------------*/                              08680022
+     call check_underline('VSI');                                       08690022
+     devdep_parm = G_vsi;                                  /*PF000202*/ 08700034
+     call DEVDEP( aparm, 'RMI     ',                                    08710022
+                  addr(devdep_parm),                                    08720022
+                  0,                                                    08730022
+                  null()                                                08740022
+                );                                                      08750022
+     q = q + 1;                                                         08760022
+     m = m - 1;                                                         08770022
+     end; /* else */                                                    08780022
+   end; /* do while */                                                  08790022
+                                                                        08800022
+   call check_underline('END');                                         08810022
+                                                                        08820022
+ return;                                                                08830022
+                                                                        08840022
+ end process_text;                                                      08850022
+                                                                        08860022
+ /*-----------------------------------*/                                08870022
+ /*    Check underline options        */                                08880022
+ /*-----------------------------------*/                                08890022
+ check_underline: procedure(type) options( reentrant );                 08900022
+ dcl     type                char(3);                                   08910022
+                                                                        08920022
+ if G_us='00000000'b      then return; /* No underlining             */ 08930022
+ if substr(G_us,8,1)='1'b then return; /* No bypass - always u'line  */ 08940022
+                                                                        08950022
+ select( type );                                                        08960022
+                                                                        08970022
+   /*----------------------------------------------------------------*/ 08980022
+   /* Check type of whitespace/data being processed against bypass   */ 08990022
+   /*  options from 'USC' control.  If we are processing whitespace, */ 09000022
+   /*  the corresponding bypass option is not set, and underlining   */ 09010022
+   /*  is on, turn off underlining.  If processing text, turn        */ 09020022
+   /*  underlining on if any options are active.  'END' signals end  */ 09030022
+   /*  of text object, which turns off underlining.                  */ 09040022
+   /*                                                                */ 09050022
+   /* Psuedocode:                                                    */ 09060022
+   /*   If not bypassing_this_type_of_whitespace                     */ 09070022
+   /*     If underline_already_on return                             */ 09080022
+   /*     Otherwise Turn_underline_on                                */ 09090022
+   /*   Else Turn_underline_off                                      */ 09100022
+   /*                                                                */ 09110022
+   /*----------------------------------------------------------------*/ 09120022
+   when( 'AMI' ) do;                                                    09130022
+     if substr(G_us,6,1)='0'b then do;                                  09140022
+       if substr(G_us,1,1)='1'b then return;                            09150022
+       call DEVDEP( aparm, 'US ON   ', null(), 0, null() );             09160022
+       substr(G_us,1,1)='1'b;                                           09170022
+       end; /* then */                                                  09180022
+     else do;                                                           09190022
+       call DEVDEP( aparm, 'US OFF  ', null(), 0, null() );             09200022
+       substr(G_us,1,1)='0'b;                                           09210022
+       end; /* else */                                                  09220022
+     end; /* AMI */                                                     09230022
+                                                                        09240022
+   when( 'RMI' ) do;                                                    09250022
+     if substr(G_us,5,1)='0'b then do;                                  09260022
+       if substr(G_us,1,1)='1'b then return;                            09270022
+       call DEVDEP( aparm, 'US ON   ', null(), 0, null() );             09280022
+       substr(G_us,1,1)='1'b;                                           09290022
+       end; /* then */                                                  09300022
+     else do;                                                           09310022
+       call DEVDEP( aparm, 'US OFF  ', null(), 0, null() );             09320022
+       substr(G_us,1,1)='0'b;                                           09330022
+       end; /* else */                                                  09340022
+     end; /* RMI */                                                     09350022
+                                                                        09360022
+   when( 'VSI' ) do;                                                    09370022
+     if substr(G_us,7,1)='0'b then do;                                  09380022
+       if substr(G_us,1,1)='1'b then return;                            09390022
+       call DEVDEP( aparm, 'US ON   ', null(), 0, null() );             09400022
+       substr(G_us,1,1)='1'b;                                           09410022
+       end; /* then */                                                  09420022
+     else do;                                                           09430022
+       call DEVDEP( aparm, 'US OFF  ', null(), 0, null() );             09440022
+       substr(G_us,1,1)='0'b;                                           09450022
+       end; /* else */                                                  09460022
+     end; /* VSI */                                                     09470022
+                                                                        09480022
+   when( 'TXT' ) do;                                                    09490022
+     if substr(G_us,1,1)='1'b then return;                              09500022
+     call DEVDEP( aparm, 'US ON   ', null(), 0, null() );               09510022
+     substr(G_us,1,1)='1'b;                                             09520022
+     end; /* TXT */                                                     09530022
+                                                                        09540022
+   when( 'END' ) do;                                                    09550022
+     if substr(G_us,1,1)='1'b then do;                                  09560022
+       call DEVDEP( aparm, 'US ON   ', null(), 0, null() );             09570022
+       end; /* G_us */                                                  09580022
+     G_us='00000000'b;                                                  09590022
+     end; /* END */                                                     09600022
+                                                                        09610022
+   otherwise do;                                                        09620022
+     end; /* otherwise */                                               09630022
+                                                                        09640022
+   end; /* select */                                                    09650022
+                                                                        09660022
+ end check_underline;                                                   09670022
+                                                                        09680022
+ %page;                                                                 09690022
+ /*-----------------------------------*/                                09700022
+ /*    Select the font                */                                09710022
+ /*-----------------------------------*/                                09720022
+ select_font: procedure(b) options( reentrant );                        09730022
+ dcl     b                   bit(8);                                    09740022
+ dcl     id                  fixed bin(15);                             09750022
+ dcl     i                   fixed bin(15);                             09760022
+                                                                        09770022
+ id = b;                                                                09780022
+ if id<1 | id>hbound(l_pclid,1) then do;                                09790022
+   put string(err_msg) edit('AFP011E Page ',toc( (G_page) ),            09800022
+                 ', Local font ',id,' not found.')                      09810022
+                (a,a,a,p'zzz9',a);                                      09820022
+   call write_error_message;                                            09830022
+   a2p_return_code = 8;                                                 09840022
+   return;                                                              09850022
+   end;                                                                 09860022
+                                                                        09870022
+ if L_pclid(id)=0 then do;                                              09880022
+   put string(err_msg) edit('AFP012E Page ',toc( (G_page) ),            09890022
+                 ', Local font ',id,' not found.')                      09900022
+                (a,a,a,p'zzz9',a);                                      09910022
+   call write_error_message;                                            09920022
+   a2p_return_code = 8;                                                 09930022
+   return;                                                              09940022
+   end;                                                                 09950022
+                                                                        09960022
+ call DEVDEP( aparm, 'FONT    ', addr( L_pclid(id) ), id, null() );     09970022
+                                                                        09980022
+ end select_font;                                                       09990022
+                                                                        10000022
+ /*-----------------------------------*/                                10010022
+ /*    Process horiz/vertical rule    */                                10020022
+ /*-----------------------------------*/                                10030022
+ process_rule: procedure(dir,p) options( reentrant );                   10040022
+ dcl     dir                 char(1);                                   10050022
+ dcl     p                   ptr;                                       10060022
+ dcl   1 metrics             unaligned           based(p),              10070022
+         5 rlength           fixed bin(15),                             10080022
+         5 rwidth            fixed bin(15),                             10090022
+         5 rwidth_frac       bit(8);                                    10100022
+ dcl     rule_parms       (2)fixed bin(31);                             10110022
+ dcl     rule_fun            char(8);                                   10120022
+                                                                        10130022
+ text_on_page = '1'b;                  /* Text on this page          */ 10140022
+ if dir='H' then rule_fun = 'HRULE   ';/* Draw Inline Rule (DIR)     */ 10150022
+ else            rule_fun = 'VRULE   ';                                 10160022
+ rule_parms(1) = decipoint( (rwidth)  );                                10170050
+ rule_parms(2) = decipoint( (rlength) );                                10180022
+ call DEVDEP( aparm, rule_fun, addr(rule_parms(1)), 0, null() );        10190022
+                                                                        10200022
+ end process_rule;                                                      10210022
+                                                                        10220022
+ /*-----------------------------------*/                                10230022
+ /*  Process 'set text orientation'   */                                10240022
+ /*  Limitations:                     */                                10250022
+ /*  1. Only angles in multiples of   */                                10260022
+ /*     90 degrees currently supported*/                                10270022
+ /*  2. No support for B-axis         */                                10280022
+ /*     different from I-axis.        */                                10290022
+ /*-----------------------------------*/                                10300022
+ process_sto: procedure(p) options( reentrant );                        10310022
+ dcl     p                   ptr;                                       10320022
+ dcl   1 orien               unaligned           based(p),              10330022
+         5 iorien            bit(16),                                   10340022
+         5 borien            bit(16);                                   10350022
+ dcl     rot                 fixed bin(15);                             10360022
+                                                                        10370022
+ rot = substr(iorien,1,9);   /* Extract and validate rotation        */ 10380022
+ if      rot<90  then rot=0;                                            10390022
+ else if rot<180 then rot=90;                                           10400022
+ else if rot<270 then rot=180;                                          10410022
+ else    rot=270;                                                       10420022
+ %IF DEBUG='Y' %THEN %DO;                                               10430022
+ /*                                                                     10440022
+  .put string(err_msg) edit('STO: ',rot,' curr ',G_orien,' chg ',xrot)  10450022
+  .             ((3)(a,p'zz9'));                                        10460022
+  .call write_error_message;                                            10470022
+  */                                                                    10480022
+ %END;                                                                  10490022
+                                                                        10500022
+ if rotª=G_orien                                                        10510022
+ then call DEVDEP( aparm, 'STO     ', addr(rot), 0, null() );           10520022
+ G_orien = rot;              /* Save absolute rotation               */ 10530022
+                                                                        10540022
+ end process_sto;                                                       10550022
+                                                                        10560022
+ end process_ptx;                                                       10570022
+                                                                        10580022
+ %page;                                                                 10590022
+ /********************************************************************/ 10600022
+ /*   Process Map Coded Font format 1 (MCF-1) Data                   */ 10610022
+ /********************************************************************/ 10620022
+                                                                        10630022
+ process_mcf1: procedure options( reentrant );                          10640022
+                                                                        10650022
+ dcl     f                   char(8);                                   10660022
+ dcl     rc                  fixed bin(31);                             10670022
+ dcl     rg_len              fixed bin(15);                             10680022
+ dcl     text_len            fixed bin(15);                             10690022
+ dcl     i                   fixed bin(15);                             10700022
+ dcl     pclid               fixed bin(15);                             10710022
+ dcl     cenid               fixed bin(15);                             10720022
+ dcl     font_index          fixed bin(15);                             10730022
+ dcl     font_already_loaded bit(1);                                    10740022
+ dcl     font_on_printer     bit(1);                                    10750022
+ dcl     temp_or_perm        char(1);                                   10760022
+ dcl     rot                 char(1);                                   10770022
+                                                                        10780022
+ L_pclid = 0;                          /* No local fonts             */ 10790022
+ L_font_count = 0;                     /* ditto              PF111297*/ 10800022
+ L_cenid = '        ';                 /* ditto              PF013098*/ 10810022
+                                                                        10820022
+ text_len = xe-xs-cstg(sff);           /* Total length of rptng grps */ 10830022
+ rg_len   = mcf1_rgl;                  /* Length of each rptng grp   */ 10840022
+ sfp = addr(mcf1_rg_data);             /* Point to first group       */ 10850022
+                                                                        10860022
+ /*----------------------------*/                                       10870022
+ /* Process each font in MCF-1 */                                       10880022
+ /*----------------------------*/                                       10890022
+ do while( text_len>=rg_len );                                          10900022
+   font_already_loaded='0'b;                                            10910022
+   font_on_printer    ='0'b;                                            10920022
+                                                                        10930022
+   dummy: do;                    /* Dummy DO for structuring         */ 10940022
+     f  = mcf1_csn;                                                     10950022
+     rot=substr(f,2,1);          /* Save orientation of font         */ 10960022
+     rot = translate(rot,'PLIJ','1432');                                10970022
+     substr(f,2,1)='0';          /* Change Cn -> C0 in font name     */ 10980022
+     font_index = find_font(f);  /* Search the font table            */ 10990022
+                                                                        11000022
+     if font_index=0 then do;    /* font is invalid */                  11010022
+        put string(err_msg) edit( 'AFP014E Page ', toc( (G_page) ),     11020022
+                       ', Unknown Font ', mcf1_csn )(a);                11030022
+        call write_error_message;                                       11040022
+        a2p_return_code = 8;                                            11050022
+        leave dummy;             /* Nothing more we can do here...   */ 11060022
+        end; /* font is invalid */                                      11070022
+      else pclid = G_pclid(font_index);                                 11080022
+                                                                        11090022
+     /*---------------------------------------------------*/            11100022
+     /* Load width table if required                      */            11110022
+     /*---------------------------------------------------*/            11120022
+     if G_width_tab(font_index) = null() then do;                       11130022
+       G_width_tab(font_index) = WIDTAB(aparm,f);                       11140022
+       if G_width_tab(font_index) = null() then do;                     11150022
+         put string(err_msg) edit( 'AFP014E Page ', toc( (G_page) ),    11160022
+                        ', Unknown Font ', mcf1_csn )(a);               11170022
+         call write_error_message;                                      11180022
+         a2p_return_code = 8;                                           11190022
+         leave dummy;             /* Nothing more we can do here...   */11200022
+         end; /* still null */                                          11210022
+ /*    call Kludge_Font(font_index); */   /* Experimental Feb 6 2001 */ 11211054
+       end; /* G_width_tab */                                           11220022
+                                                                        11230022
+     /*---------------------------------------------------*/            11240022
+     /* Have we encountered this font in this document?   */            11250022
+     /*   Yes: Set don't download flag.                   */            11260022
+     /*   No:  Increment font usage count.                */            11270022
+     /*---------------------------------------------------*/            11280022
+     do i=1 to D_font_count;                                            11290022
+       if pclid = D_pclid(i) then leave;                                11300022
+       end; /* do i */                                                  11310022
+     if i<=D_font_count                                                 11320022
+     then font_already_loaded='1'b;                                     11330022
+     else call incr( addr(G_font_used(font_index)), 1 );                11340022
+                                                                        11350022
+     /*---------------------------------------------------*/            11360022
+     /* Is this a permanent printer font?                 */            11370022
+     /*---------------------------------------------------*/            11380022
+     do i=1 to prt_fcnt;                                                11390022
+       if pclid = prt_fid(i)                                            11400022
+       then font_on_printer='1'b;                                       11410022
+       end; /* do i */                                                  11420022
+                                                                        11430022
+     /*---------------------------------------------------*/            11440022
+     /* Make entry in page font table                     */            11450022
+     /*---------------------------------------------------*/            11460022
+     if mcf1_fid>=1 & mcf1_fid<=hbound(L_pclid,1)                       11470022
+     then do;                                              /*PF111297*/ 11480022
+       if mcf1_fid>L_font_count then L_font_count=mcf1_fid;/*PF111297*/ 11490022
+       L_cenid(mcf1_fid) = G_cen_fname(font_index);        /*PF111297*/ 11500022
+       L_widthtab(mcf1_fid) = G_width_tab(font_index);     /*PF020298*/ 11510022
+       substr(L_cenid(mcf1_fid),6,1)=rot;                  /*PF111297*/ 11520022
+       L_pclid(mcf1_fid) = pclid;                                       11530022
+       end;                                                /*PF111297*/ 11540022
+                                                                        11550022
+     /*---------------------------------------------------*/            11560022
+     /* Exit if font has been downloaded                  */            11570022
+     /*---------------------------------------------------*/            11580022
+     if font_already_loaded='1'b then leave dummy;                      11590022
+                                                                        11600022
+     /*---------------------------------------------------*/            11610022
+     /* Make entry in document font table                 */            11620022
+     /*---------------------------------------------------*/            11630022
+     if D_font_count>=hbound(D_pclid,1) then do;                        11640022
+       put string(err_msg) edit('AFP016W Page ',toc( (G_page) ),        11650022
+                     ', too many fonts for this document.')             11660022
+                    (a);                                                11670022
+       call write_error_message;                                        11680022
+       a2p_return_code = 4;                                             11690022
+       end; /* D_font_count */                                          11700022
+     else do;                                                           11710022
+       D_font_count = D_font_count+1;                                   11720022
+       D_pclid(D_font_count) = pclid;                                   11730022
+       end; /* else */                                                  11740022
+                                                                        11750022
+     /*---------------------------------------------------*/            11760022
+     /* Exit if font is already on the printer            */            11770022
+     /*---------------------------------------------------*/            11780022
+     if font_on_printer='1'b then leave dummy;                          11790022
+                                                                        11800022
+     /*---------------------------------------------------*/            11810022
+     /* Download the font                                 */            11820022
+     /*---------------------------------------------------*/            11830022
+      %IF DEBUG='Y' %THEN  %DO;                                         11840022
+       put string(err_msg) edit(                                        11850022
+                      'Downloading font ', mcf1_csn,                    11860022
+                      '(',mcf1_fid,')',                                 11870022
+                      '(T)',                                            11880022
+                      ' id=',pclid )                                    11890022
+                    (a,a,a,p'zz9',a,a,a,p'zz9');                        11900022
+       call write_error_message;                                        11910022
+      %END;                                                             11920022
+       i = pclid;                                                       11930022
+       temp_or_perm = 'T';                                              11940022
+       call DEVDEP( aparm, 'FONT/ADD', addr(f), i, addr(temp_or_perm) );11950022
+       rc = i;                                                          11960022
+       if rcª=0 then do;                                                11970022
+         put string(err_msg) edit('AFP013E Page ',toc( (G_page) ),      11980022
+                       ', Download unsuccessful for font ',             11990022
+                       mcf1_csn,' rc=',rc)                              12000022
+                      (a,a,a,a,a,p'z9');                                12010022
+         call write_error_message;                                      12020022
+         a2p_return_code = 8;                                           12030022
+         end; /* rcª=0 */                                               12040022
+                                                                        12050022
+     end dummy;                                                         12060022
+                                                                        12070022
+     sfp = sfp + rg_len;                                                12080022
+     text_len = text_len - rg_len;                                      12090022
+                                                                        12100022
+   end; /* do while */                                                  12110022
+                                                                        12120022
+ end process_mcf1;                                                      12130022
+                                                                        12140022
+ %page;                                                                 12150022
+ /********************************************************************/ 12150152
+ /*   Kludge font width table entries for Xerox centralized fonts    */ 12150253
+ /*   that don't agree with PCL character widths.                    */ 12150353
+ /*   6 Feb 2001                                                     */ 12150453
+ /********************************************************************/ 12150553
+ kludge_font: proc(i);                                                  12150653
+   dcl   i                   fixed bin(15);                             12150753
+   dcl   j                   fixed bin(15);                             12150853
+   dcl   p                   ptr;                                       12150953
+   dcl   debug               fixed bin(15);                             12151053
+   if G_fname(i)ª='C0HEL09M' then return;                               12151153
+   p=G_width_tab(i);                                                    12151253
+   do j = 1 to p->w_num;                                                12151353
+     if j=1 then do;                                                    12151453
+       debug=123*256;                                                   12151553
+       put skip edit( 'Font ', G_fname(i),                              12151653
+                      ' Char ', HEX(addr(debug),1),                     12151753
+                      ' width changed from ',p->width(j,123),           12151853
+                      ' to ', 37 )                                      12151953
+                    (a,a,a,a,a,p'zz9',a,p'zz9');                        12152053
+       end; /* j=1 */                                                   12152153
+     p->width(j,123)=37;                                                12152253
+     end; /* do j */                                                    12152353
+   end kludge_font;                                                     12152453
+ %page;                                                                 12153052
+ /********************************************************************/ 12160022
+ /*   Load initial fonts for printer                                 */ 12170022
+ /********************************************************************/ 12180022
+ load_initial_fonts: procedure options( reentrant );                    12190022
+                                                                        12200022
+ dcl    (i,j)                fixed bin(15);                             12210022
+ dcl     rc                  fixed bin(31);                             12220022
+ dcl     temp_or_perm        char(1);                                   12230022
+ dcl     p                   fixed bin(15);                             12240022
+ do i=1 to prt_fcnt;                                                    12250022
+   do j=1 to G_fonts;                                                   12260022
+     if prt_fid(i)=G_pclid(j) then leave /* do j */;                    12270022
+     end; /* do j */                                                    12280022
+   if j>G_fonts then do;                                                12290022
+     put string(err_msg) edit( 'AFP020E Initial printer font ',         12300022
+                    prt_fid(i), ' not found.')(a,p'zzzz9',a);           12310022
+     call write_error_message;                                          12320022
+     a2p_return_code = 8;                                               12330022
+     end; /* j>G_fonts */                                               12340022
+   else do;                                                             12350022
+   %IF DEBUG='Y' %THEN %DO;                                             12360022
+     put string(err_msg) edit(                                          12370022
+                    'Downloading font ', G_fname(j),                    12380022
+                    '(P) id=',G_pclid(j) )                              12390022
+                  (a,a,a,p'zzzz9');                                     12400022
+     call write_error_message;                                          12410022
+   %END;                                                                12420022
+     call incr( addr(G_font_used(j)), 1 );                              12430022
+     temp_or_perm = 'P';                                                12440022
+     p = G_pclid(j);                                                    12450022
+     call DEVDEP( aparm, 'FONT/ADD',                                    12460022
+                  addr( G_fname(j) ), p, addr(temp_or_perm) );          12470022
+     rc = p;                                                            12480022
+     if rcª=0 then do;                                                  12490022
+       put string(err_msg) edit('AFP021E ',                             12500022
+                     'Download unsuccessful for permanent font ',       12510022
+                     G_fname(j),' rc=',rc)                              12520022
+                    (a,a,a,a,p'z9');                                    12530022
+       call write_error_message;                                        12540022
+       a2p_return_code = 8;                                             12550022
+       end; /* rcª=0 */                                                 12560022
+     end; /* else */                                                    12570022
+   end; /* do i */                                                      12580022
+                                                                        12590022
+ end load_initial_fonts;                                                12600022
+                                                                        12610022
+ %page;                                                                 12620022
+ /********************************************************************/ 12630022
+ /*   Process NOP data (may be $PRINT command)                       */ 12640022
+ /********************************************************************/ 12650022
+                                                                        12660022
+ process_nop: procedure options( reentrant );                           12670022
+ dcl     nop_text            char(32760)    based(sfp);                 12680022
+ dcl     nop_len             fixed bin(15);                             12690022
+ dcl     command_text        char(80)       varying;                    12700022
+ dcl     this_command        char(80)       varying;                    12710022
+ dcl     command             char(8)        varying;                    12720022
+ dcl     i                   fixed bin(15);                             12730022
+                                                                        12740022
+ dcl     command_list    (15)char(9)        varying                     12750090
+           init(                                                        12760022
+                 '1DEST',    '2COPIES',  '3DUPLEX',  '4TRAY',           12770022
+                 '5DOWNLOAD','6FONTADD', '7FONTDEL', '8CLASS', /*0522*/ 12780038
+                 '9STAPLE',  'APUNCH',                   /*PF20050621*/ 12781089
+                 /* Need to find another system when we reach 9!     */ 12790022
+                 '0*****'                                               12800022
+               );                                                       12810022
+                                                                        12820022
+ nop_len = save_sf_len - 8;                                             12830022
+ /*                                                                     12840022
+  . put string(err_msg) edit( substr(nop_text,1,nop_len) )(a);          12850022
+  . call write_error_message;                                           12860022
+  */                                                                    12870022
+ if nop_len<8 then return;                       /* Can't be '$PRINT'*/ 12880022
+ if substr(nop_text,1,7)ª='$PRINT ' then return; /* Isn't '$PRINT'   */ 12890022
+ command_text = substr(nop_text,8,nop_len-7);                           12900022
+ command_text=translate(command_text,upper_case,lower_case);            12910022
+                                                                        12920022
+ do while( length(command_text)>0 );                                    12930022
+                                                                        12940022
+   i = index(command_text,',');                                         12950022
+   if i=0 then do;                                                      12960022
+     this_command=command_text;                                         12970022
+     command_text='';                                                   12980022
+     end; /* i=0 */                                                     12990022
+   else if i=length(command_text) then do;                              13000022
+     this_command=substr(command_text,1,length(command_text-1));        13010022
+     command_text='';                                                   13020022
+     end; /* i=length */                                                13030022
+   else if i=1 then do;                                                 13040022
+     this_command='';                                                   13050022
+     command_text=substr(command_text,2);                               13060022
+     end; /* i=length */                                                13070022
+   else do;                                                             13080022
+     this_command=substr(command_text,1,i-1);                           13090022
+     command_text=substr(command_text,i+1);                             13100022
+     end; /* else */                                                    13110022
+                                                                        13120022
+   i = index(this_command,'=');                                         13130022
+   if i>0 then substr(this_command,i,1)=' ';                            13140022
+   command = word(this_command,1);                                      13150022
+   i = wordpos(this_command,2);                                         13160022
+   if i=0 then this_command='';                                         13170022
+   else this_command = substr(this_command,i);                          13180022
+   do i=1 by 1;                                                         13190022
+     if substr(command_list(i),2,1)='*'   then return;                  13200022
+     if substr(command_list(i),2)=command then leave; /* do i */        13210022
+     end; /* do i */                                                    13220022
+   if substr(command_list(i),1,1)='A'                      /*20050621*/ 13230091
+   then i = 10;                                            /*20050621*/ 13230191
+   else i = substr(command_list(i),1,1);                                13231091
+                                                                        13240022
+   select(i);                                                           13250022
+                                                                        13260022
+     when(1) do;             /* DEST=                                */ 13270022
+       D_dest = this_command;                                           13280022
+       dest = D_dest;        /* Pass back DEST to main task          */ 13290022
+       end; /* 1 */                                                     13300022
+                                                                        13310022
+     when(2) do;             /* COPIES=                              */ 13320022
+       if length(this_command)=0                           /*PF990615*/ 13330028
+       then this_command = '  ';                           /*PF990615*/ 13340028
+       else if length(this_command)=1                      /*PF990615*/ 13350028
+       then this_command = '0'||this_command;              /*PF990615*/ 13360028
+       else this_command = substr(this_command,1,2);       /*PF990615*/ 13370028
+       if verify(this_command,numeric)=0 then do;                       13380022
+         D_cpys = this_command;                            /*PF990615*/ 13390028
+         end; /* numeric */                                             13400022
+       end; /* 2 */                                                     13410022
+                                                                        13420022
+     when(3) do;             /* DUPLEX=         */                      13430022
+       this_command=substr(this_command,1,1);                           13440022
+       if this_command = 'Y'                                            13450022
+       then D_dupl = this_command;                                      13460022
+       end; /* 3 */                                                     13470022
+                                                                        13480022
+     when(4) do;             /* TRAY=           */                      13490022
+       D_tray = select_tray( (this_command) );                          13500022
+       end; /* 4 */                                                     13510022
+                                                                        13520022
+     when(5) do;             /* DOWNLOAD=       */                      13530022
+       this_command=substr(this_command,1,1);                           13540022
+       if this_command='Y' | this_command='A' | this_command = 'N'      13550022
+       then D_dwnld = this_command;                                     13560022
+       end; /* 5 */                                                     13570022
+                                                                        13580022
+     when(6) do;             /* FONTADD=        */                      13590022
+       call proc_perm_font('A',this_command);                           13600022
+       end; /* 6 */                                                     13610022
+                                                                        13620022
+     when(7) do;             /* FONTDEL=        */                      13630022
+       call proc_perm_font('D',this_command);                           13640022
+       end; /* 7 */                                                     13650022
+                                                                        13651038
+     when(8) do;             /* CLASS=                       PF000522*/ 13652038
+       D_class = this_command;                             /*PF000522*/ 13653038
+       P_class = D_class;    /* Pass back DEST to main task  PF000522*/ 13654038
+       end; /* 8 */                                        /*PF000522*/ 13655038
+                                                                        13656073
+     when(9) do;             /* STAPLE=                    PF20050127*/ 13657073
+       if this_command = 'Y'                             /*PF20050127*/ 13657173
+       then D_stapl = this_command;                      /*PF20050127*/ 13657273
+       end; /* 9 */                                      /*PF20050127*/ 13659173
+                                                                        13659289
+     when(10) do;            /* PUNCH=                     PF20050621*/ 13659389
+       if this_command = 'Y'                             /*PF20050621*/ 13659489
+       then D_punch = this_command;                      /*PF20050621*/ 13659589
+       end; /* 10 */                                     /*PF20050621*/ 13659689
+                                                                        13660022
+     otherwise /* null */ ;                                             13670022
+                                                                        13680022
+     end; /* select */                                                  13690022
+                                                                        13700022
+   end; /* do while */                                                  13710022
+                                                                        13720022
+ end process_nop;                                                       13730022
+                                                                        13740022
+ %page;                                                                 13750022
+ /********************************************************************/ 13760022
+ /*   Process Page Descriptor (PGD) Data                             */ 13770022
+ /********************************************************************/ 13780022
+                                                                        13790022
+ process_pgd: procedure options( reentrant );                           13800022
+                                                                        13810022
+ dcl    (xsize,ysize)        fixed bin(31);                             13820022
+ dcl     i                   fixed bin(15);                             13830022
+                                                                        13840022
+ dcl     psz              (5)char(16) varying    static                 13850022
+              init( 'Executive','Letter','Legal','Ledger','Letter' );   13860022
+ dcl     ps_c             (5)char(1)             static                 13870022
+              init( '1', '2', '3', '6', '2' );                          13880022
+ dcl     ps_w             (5)fixed bin(15)       static                 13890022
+                              /* !!! <== nark kludge */                 13900022
+              init(  725,  850,  900, 1100, 9999 );                     13910022
+ dcl     ps_h             (5)fixed bin(15)       static                 13920022
+              init( 1050, 1100, 1400, 1700, 9999 );                     13930022
+                                                                        13940022
+ xsize = ceil( 1000*pgd_xext / pgd_xunits); /* Page width in * 100   */ 13950022
+ ysize = ceil( 1000*pgd_yext / pgd_yunits); /* Page depth in * 100   */ 13960022
+                                                                        13970022
+                                                                        13980022
+ /*-----------------------------------*/                                13990022
+ /*    Match Paper sizes              */                                14000022
+ /*-----------------------------------*/                                14010022
+ do i=1 to hbound( ps_c, 1 )-1;                                         14020022
+   if xsize<=ps_w(i) & ysize<=ps_h(i) then leave;                       14030022
+   end; /* do i */                                                      14040022
+ %IF DEBUG='Y' %THEN %DO;                                               14050022
+   /*                                                                   14060022
+    .put string(err_msg) edit( 'Page size ', xsize/100, ' ', ysize/100 )14070022
+    .             (a,p'z9v.99',a,p'z9v.99');                            14080022
+    .call write_error_message;                                          14090022
+    .put string(err_msg) edit( psz(i), ' selected.' )(a);               14100022
+    .call write_error_message;                                          14110022
+    */                                                                  14120022
+ %END;                                                                  14130022
+                                                                        14140022
+ /*-----------------------------------*/                                14150022
+ /*    Select paper size              */                                14160022
+ /*-----------------------------------*/                                14170022
+                                                                        14180022
+ call DEVDEP( aparm, 'SIZE    ', addr(ps_c(i)), 0, null() );            14190022
+                                                                        14200022
+ end process_pgd;                                                       14210022
+                                                                        14220022
+ %page;                                                                 14230022
+ /********************************************************************/ 14240022
+ /*   Select output tray                                             */ 14250022
+ /*   Returns current tray if requested tray is invalid.             */ 14260022
+ /********************************************************************/ 14270022
+                                                                        14280022
+ select_tray: proc(tray) returns( char(1) ) options( reentrant );       14290022
+ dcl     tray                char(8) varying;                           14300022
+ dcl     trays           (12)char(9) static      init(                  14310022
+         '1TOP',     '1MAIN',    '4BOTTOM',  '5LARGE',   '7AUTO',       14320022
+         '2MANUAL',  '3ENVELOPE','4MIDDLE',  '0*DUMMY**'                14330022
+         );                                                             14340022
+ dcl    (i,j)                fixed bin;                                 14350022
+                                                                        14360022
+ i = index(tray,' ');                                                   14370022
+ if i>0 then tray=substr(tray,1,i-1);                                   14380022
+ j=length(tray);                                                        14390022
+ if j=0 then return( G_tray );                                          14400022
+ if substr(prt_device,3,1)='1'b then do;    /* Savin printer 20030425*/ 14401067
+   if tray='4'      then return('8');                      /*20030425*/ 14401167
+   if tray='BOTTOM' then return('8');                      /*20030425*/ 14401267
+   end; /* Savin */                                        /*20030425*/ 14402067
+ if verify(tray,numeric)=0 & j=1                                        14410022
+ then return( substr(tray,1,1) );                                       14420022
+ do i=1 by 1;                                                           14430022
+   if substr(trays(i),2,1)='*' |                                        14440022
+      substr(trays(i),2)=tray                                           14450022
+   then leave;                                                          14460022
+   end; /* do i */                                                      14470022
+                                                                        14480022
+ return( substr(trays(i),1,1) );                                        14490022
+                                                                        14500022
+ end select_tray;                                                       14510022
+                                                                        14520022
+ /********************************************************************/ 14530022
+ /*   Add/Delete a permanent printer font                            */ 14540022
+ /********************************************************************/ 14550022
+                                                                        14560022
+ proc_perm_font: proc(fun,fname) options( reentrant );                  14570022
+   dcl   fun                 char(1);                                   14580022
+   dcl   fname               char(*)   varying;                         14590022
+   dcl   f                   char(8);                                   14600022
+   dcl   pclid               fixed bin(15);                             14610022
+   dcl   font_index          fixed bin(15);                             14620022
+   dcl  (i,j)                fixed bin(15);                             14630022
+   dcl   rc                  fixed bin(31);                             14640022
+   dcl   perm                char(1);                                   14650022
+                                                                        14660022
+   f = fname;                                                           14670022
+   substr(f,1,2) = 'C0';                                                14680022
+   font_index = find_font(f);          /* Search font table          */ 14690022
+                                                                        14700022
+   if font_index=0 then do;            /* font is invalid */            14710022
+      put string(err_msg) edit( 'AFP022E Requested permanent font ',    14720022
+                     fname, ' is invalid')(a);                          14730022
+      call write_error_message;                                         14740022
+      a2p_return_code = 8;                                              14750022
+      return;                                                           14760022
+      end; /* font is invalid */                                        14770022
+    else pclid = G_pclid(font_index);                                   14780022
+                                                                        14790022
+   /*-------------------------------------------*/                      14800022
+   /* Is this font already on the printer?      */                      14810022
+   /*-------------------------------------------*/                      14820022
+   do i=1 to prt_fcnt;                                                  14830022
+     if pclid = prt_fid(i) then leave;                                  14840022
+     end; /* do i */                                                    14850022
+                                                                        14860022
+   /*-------------------------------------------*/                      14870022
+   /* Delete a permanent font                   */                      14880022
+   /*-------------------------------------------*/                      14890022
+   if fun='D' then do;                                                  14900022
+     if i>prt_fcnt then return;        /* Font not on printer        */ 14910022
+     call DEVDEP( aparm, 'FONT/DEL', addr(font_index), 0, null() );     14920022
+     do j=font_index+1 to prt_fcnt;    /* Delete prt font tbl entry  */ 14930022
+       prt_fid(j-1) = prt_fid(j);                                       14940022
+       end; /* do j */                                                  14950022
+     prt_fcnt = prt_fcnt - 1;                                           14960022
+     return;                                                            14970022
+     end; /* fun='D' */                                                 14980022
+                                                                        14990022
+   /*-------------------------------------------*/                      15000022
+   /* Add a permanent font                      */                      15010022
+   /*-------------------------------------------*/                      15020022
+   if i<=prt_fcnt then return;         /* Font already on printer    */ 15030022
+                                                                        15040022
+   /*-------------------------------------------*/                      15050022
+   /* Are maximum fonts loaded?                 */                      15060022
+   /*-------------------------------------------*/                      15070022
+   if prt_fcnt >= hbound(prt_fid,1) then do;                            15080022
+      put string(err_msg) edit( 'AFP023E Too many permanent fonts,',    15090022
+                     fname, ' not loaded')(a);                          15100022
+      call write_error_message;                                         15110022
+      a2p_return_code = 8;                                              15120022
+      return;                                                           15130022
+     end; /* prt_fcnt */                                                15140022
+                                                                        15150022
+   /*-------------------------------------------*/                      15160022
+   /* Load the font                             */                      15170022
+   /*-------------------------------------------*/                      15180022
+   %IF DEBUG='Y' %THEN %DO;                                             15190022
+     put string(err_msg) edit(                                          15200022
+                    'Downloading font ', fname,                         15210022
+                    '(P) id=',pclid )                                   15220022
+                  (a,a,a,p'zzzz9');                                     15230022
+     call write_error_message;                                          15240022
+   %END;                                                                15250022
+   call incr( addr(G_font_used(font_index)), 1 );                       15260022
+   i = pclid;                                                           15270022
+   perm = 'P';                                                          15280022
+   call DEVDEP( aparm, 'FONT/ADD', addr(f), i, addr(perm) );            15290022
+   rc = i;                                                              15300022
+   if rcª=0 then do;                                                    15310022
+     put string(err_msg) edit('AFP024E ',                               15320022
+                   'Download unsuccessful for new permanent font ',     15330022
+                   fname,' rc=',rc)                                     15340022
+                  (a,a,a,a,p'z9');                                      15350022
+     call write_error_message;                                          15360022
+     a2p_return_code = 8;                                               15370022
+     end; /* rcª=0 */                                                   15380022
+                                                                        15390022
+   /*-------------------------------------------*/                      15400022
+   /* Add font to printer table                 */                      15410022
+   /*-------------------------------------------*/                      15420022
+   prt_fcnt = prt_fcnt+1;                                               15430022
+   prt_fid(prt_fcnt) = pclid;                                           15440022
+                                                                        15450022
+   end proc_perm_font;                                                  15460022
+                                                                        15470022
+ /********************************************************************/ 15480022
+ /*   Binary search the font id table                                */ 15490022
+ /********************************************************************/ 15500022
+                                                                        15510022
+ find_font: proc(fname) returns( fixed bin(15) )                        15520022
+                         options( reentrant );                          15530022
+   dcl   fname               char(8);                                   15540022
+   dcl  (hi,lo,mid)          fixed bin(15);                             15550022
+                                                                        15560022
+   /*--------------------------*/                                       15570022
+   /* Binary search font table */                                       15580022
+   /*--------------------------*/                                       15590022
+   lo=0;                                                                15600022
+   hi=G_fonts+1;                                                        15610022
+   do while( (hi-lo)>=2 );                                              15620022
+     mid=(lo+hi+1)/2;                                                   15630022
+     if      fname<G_fname(mid) then hi=mid;                            15640022
+     else if fname>G_fname(mid) then lo=mid;                            15650022
+     else leave; /* do while */                                         15660022
+     end; /* do while */                                                15670022
+                                                                        15680022
+   if fnameª=G_fname(mid) then return(0);                               15690022
+   return(mid);                                                         15700022
+                                                                        15710022
+   end find_font;                                                       15720022
+                                                                        15730022
+ %page;                                                                 15740022
+ /********************************************************************/ 15750022
+ /*             I/O Routines                                         */ 15760022
+ /********************************************************************/ 15770022
+                                                                        15780022
+ /*-----------------------------------*/                                15790022
+ /*    Write an error message         */                                15800022
+ /*-----------------------------------*/                                15810022
+ write_error_message: procedure options( reentrant );                   15820022
+   dcl   em                  char(120);                                 15830022
+   em = err_msg;                       /* Changed var ti fixed string*/ 15840022
+   call print_routine(em);             /* Write message to SYSPRINT  */ 15850022
+   err_msg_count = err_msg_count + 1;                                   15860022
+   if err_msg_count <= hbound(err_msg_tbl,1) then do;                   15870022
+     err_msg_tbl(err_msg_count) = err_msg;                              15880022
+     end; /* err_msg_count */                                           15890022
+   end write_error_message;                                             15900022
+                                                                        15910022
+ /*-----------------------------------*/                                15920022
+ /*    Read record from AFPIN         */                                15930022
+ /*-----------------------------------*/                                15940022
+ read_afpin: procedure options( reentrant );                            15950022
+ dcl     cc                  char(1)             based(xs);             15960022
+                                                                        15970022
+ rec_length = read_routine( xs );                                       15980022
+ if rec_length < 0 then return;                                         15990022
+ if cc ª= '5A'x then do;                                                16000022
+   put string(err_msg) edit('AFP015S Page ',toc( (G_page) ),            16010022
+                 ', Data not in valid AFP format')(a);                  16020022
+   call write_error_message;                                            16030022
+   a2p_return_code = 12;                                                16040022
+   rec_length = 0;                                                      16050022
+   return;                                                              16060022
+   end; /* do */                                                        16070022
+ re = xs + rec_length - 1;                                              16080022
+ xc = xs;                                                               16090022
+ sfp = xs + 1;                                                          16100022
+                                                                        16110022
+ end read_afpin;                                                        16120022
+                                                                        16130022
+ %page;                                                                 16140022
+ /********************************************************************/ 16150022
+ /*             Conversion Routines                                  */ 16160022
+ /********************************************************************/ 16170022
+                                                                        16180022
+ /********************************************************************/ 16190022
+ /*    Convert Number to Varying Character String                    */ 16200022
+ /********************************************************************/ 16210022
+ toc: procedure(n) options( reentrant )                                 16220022
+                   returns( char(5) varying );                          16230022
+ dcl     n                   fixed bin(15);                             16240022
+ dcl     c                   char(5) varying;                           16250022
+                                                                        16260022
+ select;                                                                16270022
+   when( n>9999 ) put string(c) edit(n)(p'(5)9');                       16280022
+   when( n>999  ) put string(c) edit(n)(p'(4)9');                       16290022
+   when( n>99   ) put string(c) edit(n)(p'(3)9');                       16300022
+   when( n>9    ) put string(c) edit(n)(p'(2)9');                       16310022
+   otherwise      put string(c) edit(n)(p'(1)9');                       16320022
+   end; /* select */                                                    16330022
+                                                                        16340022
+ return(c);                                                             16350022
+                                                                        16360022
+ end toc;                                                               16370022
+                                                                        16380022
+ /********************************************************************/ 16390022
+ /*    Convert AFP measurement units to decipoints (1/720 in.)       */ 16400022
+ /********************************************************************/ 16410022
+ decipoint: procedure(mu) options( reentrant )                          16420022
+                          returns( fixed bin(31) );                     16430022
+ dcl     mu                  fixed bin(31);                             16440022
+                                                                        16450022
+ return( mu/2 );                                                        16460022
+                                                                        16470022
+ end decipoint;                                                         16480022
+ %page;                                                                 16490022
+                                                                        16500022
+ /********************************************************************/ 16510022
+ /*    Adjust PCL Top Margin by -- 1/2"                              */ 16520022
+ /*      (1/4" = 180 decipoints)                                     */ 16530022
+ /*    <necessary because 4028 page origin is 1/2" down from         */ 16540022
+ /*     PCL page origin>                                             */ 16550022
+ /********************************************************************/ 16560022
+ adjt: procedure(d) options( reentrant )                                16570022
+                    returns( fixed bin(31) );                           16580022
+ dcl     d                   fixed bin(31);                             16590022
+                                                                        16600022
+ return( d-360 );                                                       16610022
+                                                                        16620022
+ end adjt;                                                              16630022
+                                                                        16640022
+ /********************************************************************/ 16650022
+ /*    Adjust PCL Left Margin by -- 1/4"                             */ 16660022
+ /*      (1/4" = 180 decipoints)                                     */ 16670022
+ /*    <necessary because 4028 page origin is 1/4" in from           */ 16680022
+ /*     PCL page origin>                                             */ 16690022
+ /********************************************************************/ 16700022
+ adjl: procedure(d) options( reentrant )                                16710022
+                    returns( fixed bin(31) );                           16720022
+ dcl     d                   fixed bin(31);                             16730022
+                                                                        16740022
+ return( d-180 );                                                       16750022
+                                                                        16760022
+ end adjl;                                                              16770022
+                                                                        16780022
+ %page;                                                                 16790022
+ /********************************************************************/ 16800022
+ /*   Hexadecimal to character conversion                            */ 16810022
+ /********************************************************************/ 16820022
+                                                                        16830022
+ hex: proc(sp,n) options( reentrant )                                   16840022
+                 returns( char(256) varying );                          16850022
+ dcl  sp                     ptr,                                       16860022
+      s                      char(4096) based(sp);                      16870022
+ dcl  n                      fixed bin(15);                             16880022
+ dcl  j                      fixed bin(15);                             16890022
+ dcl  ret                    char(256) varying   init('');              16900022
+ do j=1 to n;                                                           16910022
+   ret=ret||hexone( substr(s,j,1) );                                    16920022
+   end;                                                                 16930022
+ return(ret);                                                           16940022
+ end hex;                                                               16950022
+                                                                        16960022
+ hexone: proc(c) options( reentrant )                                   16970022
+                 returns( char(2) );                                    16980022
+ dcl  c                      char;                                      16990022
+ dcl  hextabs                char(16) static     init                   17000022
+                       ('0123456789ABCDEF'),                            17010022
+      hextab           (0:15)char(1) defined hextabs;                   17020022
+ dcl  p                      ptr,                                       17030022
+      x                      bit(8) based(p);                           17040022
+ p = addr(c);                                                           17050022
+ return(                                                                17060022
+        hextab( substr(x,1,4) ) || hextab( substr(x,5,4) )              17070022
+       );                                                               17080022
+ end hexone;                                                            17090022
+                                                                        17100022
+ quothex: proc(s) options( reentrant )                                  17110022
+                  returns( char(256) varying );                         17120022
+ dcl  s                      char(*) varying;                           17130022
+ return( 'X''' || s || '''' );                                          17140022
+ end quothex;                                                           17150022
+                                                                        17160022
+ %include word;                                                         17170022
+ %include wordpos;                                                      17180022
+ dcl     numeric             char(10)  static                           17190022
+              init('0123456789');                                       17200022
+ %include ebcasc;                                                       17210022
+ %include lowercas;                                                     17220022
+                                                                        17230022
+ end AFP2PCL2;                                                          17240022
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 17250022
+//LKED.SYSLIB DD                                                        17260022
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    17270022
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        17280022
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      17290022
+//*LKED.SYSLMOD  DD DISP=SHR,DSN=SYSTEMS.LINKLIB                        17310090
+//LKED.SYSLMOD  DD DISP=SHR,DSN=SYSTEMS.AUTHLIB                         17311090
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  17320022
+//LKED.SYSIN DD *                                                       17330022
+ MODE AMODE(31)                                                         17340022
+ MODE RMODE(ANY)                                                        17350022
+ SETCODE AC(1)                                                          17360022
+ ALIAS AFP2PCV                                                          17370022
+ NAME AFP2PCL2(R)                                                       17380022
+//* -------------- END OF LINKEDIT STEP ------------------------------* 17390022

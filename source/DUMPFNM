@@ -1,0 +1,98 @@
+//FLASSF   JOB  (),'DUMPFNM',CLASS=J,MSGCLASS=Z,                        00001000
+//         NOTIFY=$                                                     00002000
+//********************************************************************* 00003000
+//*                PL/I COMPILE AND LINK                              * 00004000
+//********************************************************************* 00005000
+// EXEC PLIXCL,                                                         00006000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00007000
+//   PARM.LKED='LIST,MAP,XREF'                                          00008000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00009000
+//PLI.SYSLIB   DD DSN=FLASS.PF.PLIMAC,DISP=SHR                          00009100
+//PLI.SYSIN    DD *                                                     00009200
+ /********************************************************************/ 00010200
+ /*                                                                  */ 00011000
+ /* Module: DUMPFNM                                                  */ 00011100
+ /* Author: Peter Flass -- NYS LBDC                                  */ 00011200
+ /*         Nov, 1999                                                */ 00011300
+ /* Function: Formatted dump of AFP 'Font Patterns Map (FNM) record. */ 00011400
+ /*         (ID=D3A289)                                              */ 00011500
+ /********************************************************************/ 00012000
+                                                                        00020000
+ dumpfnm: proc(parm) options(main);                                     00021000
+ dcl     parm                char(100)   varying;                       00022000
+                                                                        00023000
+ dcl     SYSPRINT            print;                                     00030000
+ dcl     AFPFONT             input record                               00031000
+                             env(VB);                                   00040000
+ dcl     afp_rec             char(32760) varying;                       00050000
+ dcl     eof                 bit(1)              init( '0'b );          00070000
+ dcl     FNM_Offset          fixed bin(31)       init(9);               00070103
+ dcl     FNM_Num             fixed bin(31)       init(0);               00070203
+                                                                        00071000
+ %include builtins;                                                     00072000
+                                                                        00073000
+ on endfile(AFPFONT) eof='1'b;                                          00080000
+ open file(AFPFONT) input;                                              00090000
+ read file(AFPFONT) into(afp_rec);                                      00091000
+                                                                        00091100
+ do while(ªeof);                                                        00092000
+   if substr(afp_rec,4,3)='D3A289'x then call dump_fnm;                 00092100
+   read file(AFPFONT) into(afp_rec);                                    00093000
+   end; /* do while */                                                  00094000
+                                                                        00095000
+ close file(AFPFONT);                                                   00100000
+                                                                        00100100
+ %page;                                                                 00100200
+ dump_fnm: proc;                                                        00100300
+   dcl   p                   ptr;                                       00100400
+   dcl   p_end               ptr;                                       00100500
+   dcl   len                 fixed bin(15);                             00100600
+   dcl 1 FNM_repeating_grp   unaligned           based(p),              00100700
+         5 FNM_x_extent      fixed bin(15),                             00100800
+         5 FNM_y_extent      fixed bin(15),                             00100900
+         5 FNM_pat_data_addr fixed bin(31),                             00101000
+         5 FNM_next          char(0);                                   00101100
+   dcl   map_size            fixed bin(31);                             00101200
+                                                                        00101403
+   len = length(afp_rec)-11;                                            00101503
+   p = addr(afp_rec)+11;                                                00101603
+   p_end = p+len;                                                       00101703
+   put skip edit( '     Num' ) ( X(1), A(8) );                          00101803
+   put      edit( '  Offset' ) ( X(1), A(8) );                          00101903
+   put      edit( 'X_extent' ) ( X(1), A(8) );                          00102003
+   put      edit( 'Y_extent' ) ( X(1), A(8) );                          00102103
+   put      edit( 'D Offset' ) ( X(1), A(8) );                          00102203
+   put      edit( 'Patt Len' ) ( X(1), A(8) );                          00102303
+   put      edit( 'Next Pat')  ( X(1), A(8) );                          00102403
+   do while(p<p_end);                                                   00102503
+     put skip edit( FNM_Num ) ( x(1),f(8) );                            00102603
+     put      edit( hex( addr(FNM_Offset),4) ) ( x(1),a(8) );           00102703
+     FNM_Offset = FNM_Offset+8;                                         00102803
+     FNM_Num    = FNM_Num+1;                                            00102903
+     map_size = (FNM_x_extent+8)/8;                                     00103003
+     map_size = map_size*8 * (FNM_y_extent + 1);                        00103103
+     FNM_x_extent = FNM_x_extent+1;                                     00103203
+     FNM_y_extent = FNM_y_extent+1;                                     00103303
+     put      edit( FNM_x_extent, FNM_y_extent ) ( x(1),f(8) );         00103403
+     put      edit( hex( addr(FNM_pat_data_addr),4) ) ( x(1),a(8) );    00103503
+     map_size = map_size/8;                                             00103603
+     put      edit( map_size) ( x(1),f(8) );                            00103703
+     map_size = FNM_pat_data_addr + map_size;                           00103803
+     put      edit( hex(addr(map_size),4) ) ( x(1),a(8) );              00103903
+     p = addr(FNM_next);                                                00104003
+     end; /* do while */                                                00104103
+                                                                        00104203
+   end dump_fnm;                                                        00104303
+                                                                        00104403
+ %include hex;                                                          00105003
+                                                                        00106003
+ end dumpfnm;                                                           00110000
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00120000
+//LKED.SYSLIB DD                                                        00130000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        00140000
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      00150000
+//LKED.SYSLMOD  DD DSN=FLASS.PF.LOAD,DISP=SHR                           00160000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00170000
+//LKED.SYSIN DD *                                                       00180000
+ NAME DUMPFNM(R)                                                        00190000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00200000

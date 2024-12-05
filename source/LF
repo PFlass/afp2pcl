@@ -1,0 +1,113 @@
+//FLASSP   JOB  (),'LOADFONT',CLASS=J,MSGCLASS=Z,                       00010000
+//         NOTIFY=$                                                     00020000
+//********************************************************************* 00030000
+//*                PL/I COMPILE AND LINK                              * 00040000
+//********************************************************************* 00050000
+// EXEC PLIXCL,                                                         00060000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00070000
+//   PARM.LKED='LIST,MAP,XREF,RENT,NCAL'                                00080004
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00090000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00100013
+//PLI.SYSIN    DD *                                                     00110000
+ /*      LF - Load HP font for AFP2PCL                               */ 00120001
+                                                                        00130000
+ /********************************************************************/ 00140000
+ /*                                                                  */ 00150000
+ /*      Module ID:   LF                                             */ 00160001
+ /*      Author:      Peter Flass -- NYS LBDC -- Mar, 1997           */ 00170001
+ /*      Function:    Load PCL font to HP Printer for AFP2PCL        */ 00180002
+ /*      Modifications:                                              */ 00190002
+ /*        12 Mar 1997 - Modified from 'LOADFONT'                 PRF*/ 00210002
+ /*        16 May 1997 - Call external procedures for I/O         PRF*/ 00210106
+ /*                                                                  */ 00211002
+ /********************************************************************/ 00220000
+                                                                        00230000
+ lf: procedure(read_fontlib,write_pcl,type,fname,fnum)                  00240006
+              options(reentrant)                                        00240106
+                             returns( fixed bin(15) );                  00241002
+                                                                        00250000
+ dcl     read_fontlib        entry( char(1), ptr )                      00260006
+                             returns( fixed bin(31) )                   00260106
+                             variable;                                  00260202
+                                                                        00260306
+ dcl     write_pcl           entry( ptr, fixed bin(15), ptr )           00260406
+                             variable;                                  00260506
+                                                                        00260606
+ dcl     type                char(1);                                   00261004
+ dcl     fname               char(8);                                   00261104
+ dcl     fnum                fixed bin(15);                             00262002
+                                                                        00270000
+ dcl     fontlib             record input;                              00280003
+                                                                        00330000
+ dcl     rc                  fixed bin(31);                             00340002
+ dcl     card_addr           ptr,                                       00341007
+         cardin              char(80)  based(card_addr);                00350007
+ dcl     var_txt             char(80)  varying;                         00360006
+ dcl     font_num            pic'99999';                                00400002
+ dcl     font_name           char(8);                                   00420002
+ dcl     font_descript       char(16);                                  00430002
+ dcl     ESC                 char(1) static      init( '27'x );         00481002
+                                                                        00490000
+ %include builtins;                                                     00500000
+ %page;                                                                 00501002
+                                                                        00540000
+ if type='N' then return(0);                                            00550005
+ font_num  = fnum;                                                      00680002
+ font_name = fname;                                                     00680102
+                                                                        00680202
+ substr(font_name,1,2)='F1';                                            00680302
+ rc = read_fontlib('F', addr(font_name) );                              00680406
+ if rcª=0 then return(8);                                               00680502
+                                                                        00820000
+ /*-----------------------------------*/                                00900000
+ /* <esc>*c<font_num>D                */                                00910000
+ /* FONT ID <font_num>                */                                00920000
+ /*-----------------------------------*/                                00930000
+ var_txt = ESC || '*c' || font_num || 'D';                              00940006
+ call write_pcl( addr(var_txt)+2, length(var_txt), addr(ascii) );       00950006
+                                                                        00960000
+ rc = read_fontlib( 'R', card_addr );                                   00970007
+ if rcª=0 then return(8);                                               00971009
+ fp = addr(cardin) + 6 + 2;            /* Point to font hdr          */ 00980000
+ font_descript = font_desc.font_name;  /* Font name (ASCII)          */ 00990002
+ do while( rc=0 );                                                      01000012
+   call write_pcl(                                                      01001004
+                  addr(cardin),                                         01002006
+                  length(cardin),                                       01003012
+                  null()               /* Don't translate fonts      */ 01004002
+                );                                                      01005002
+   rc = read_fontlib( 'R', card_addr );                                 01006008
+   end; /* do while */                                                  01030000
+                                                                        01060000
+ if rcª=-1 then return(8);                                              01061010
+                                                                        01062010
+ /*-----------------------------------*/                                01070000
+ /* <esc>*c5F                         */                                01080000
+ /* FONT CONTROL 4 (=temporary)       */                                01090002
+ /*              5 (=permanent)       */                                01091002
+ /*-----------------------------------*/                                01100000
+ if type='T'                                                            01101004
+ then var_txt = ESC || '*c4F';                                          01110006
+ else var_txt = ESC || '*c5F';                                          01110106
+                                                                        01110204
+ call write_pcl( addr(var_txt)+2, length(var_txt), addr(ascii) );       01111006
+                                                                        01530000
+ return(0);                                                             01560002
+                                                                        01570000
+ %include ebcasc;                                                       01870002
+                                                                        01880000
+ %include pclfdesc;                                                     01890000
+                                                                        01900000
+ end lf;                                                                01910002
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 01920000
+//LKED.SYSLIB DD                                                        01930000
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    01950013
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        01951013
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      01960000
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       01970013
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  01980000
+//LKED.SYSIN DD *                                                       01990000
+ MODE AMODE(31)                                                         02000000
+ MODE RMODE(ANY)                                                        02010000
+ NAME LF(R)                                                             02020002
+//* -------------- END OF LINKEDIT STEP ------------------------------* 02030002

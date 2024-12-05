@@ -1,0 +1,316 @@
+//FLASS0   JOB  (),'FONTPCL',CLASS=J,MSGCLASS=Z,                        00010000
+//         NOTIFY=$                                                     00020000
+//*                                                                     00030000
+//*                                                                     00040000
+//********************************************************************* 00050000
+//*                PL/I COMPILE AND LINK                              * 00060000
+//********************************************************************* 00070000
+// EXEC PLIXCL,                                                         00080000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00090000
+//   PARM.LKED='LIST,MAP,XREF'                                          00100000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00110000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00120000
+//PLI.SYSIN    DD *                                                     00123000
+ /* FONTPCL - Download fonts to PCL printer hard drive               */ 00124000
+                                                                        00125000
+ /********************************************************************/ 00126000
+ /*                                                                  */ 00127000
+ /*    Module ID: FONTPCL                                            */ 00128000
+ /*                                                                  */ 00129000
+ /*    Author:    Peter Flass                                        */ 00130000
+ /*               NYS LBDC                                           */ 00140000
+ /*               Mar, 1999                                          */ 00150000
+ /*                                                                  */ 00160000
+ /*    Function:  Download list of fonts to PCL printer hard drive.  */ 00170000
+ /*                                                                  */ 00190000
+ /*    Modifications:                                                */ 00200000
+ /*                                                                  */ 00240000
+ /********************************************************************/ 00250000
+                                                                        00260000
+ %DCL   (TRUE,FALSE)         CHAR;                                      00261200
+ %TRUE  = '''1''b';                                                     00261500
+ %FALSE = '''0''b';                                                     00261600
+                                                                        00261700
+ FONTPCL: proc(parm) options( main reentrant );                         00261800
+                                                                        00261900
+ dcl     parm                char(100)           varying;               00262000
+                                                                        00263000
+ dcl     SYSPRINT            print;                                     00264000
+ dcl     PCLOUT              record output                              00266000
+                             env(FB recsize(80) );                      00267000
+ dcl     FONTLIB             record input;                              00270000
+                                                                        00282000
+ dcl     rc                  fixed bin(31);                             00283000
+ dcl     rcx                 fixed bin(31)       based;                 00284000
+ dcl     zero                fixed bin(31)       init(0);               00285000
+ dcl     i                   fixed bin(15);                             00286000
+ dcl    (fname,fnamex)       char(8);                                   00287000
+ dcl     pcl_work            char(80)  varying;                         00288000
+ dcl     fnt_eof             bit(1)              init('0'b);            00289000
+ dcl     f_p                 ptr;                                       00290000
+                                                                        00340000
+ dcl   1 alloc_status        unaligned,                                 00350000
+         5 al_dsorg          char(4),                                   00360000
+         5 al_rc             fixed bin(31),                             00370000
+         5 al_s99rc          fixed bin(31),                             00380000
+         5 al_s99rsc         fixed bin(31),                             00390000
+         5 fil               char(32);                                  00400000
+                                                                        00400100
+ /*-----------------------------------*/                                00400200
+ /* 'Static' data                     */                                00400300
+ /*-----------------------------------*/                                00400400
+ dcl     pcl_rec             char(80);                                  00401000
+ dcl     pclo                fixed bin(15)                 init(-1);    00410000
+                                                                        00430000
+ %page;                                                                 00470000
+                                                                        00480000
+ dcl     numeric             char(10)  static                           00490000
+              init('0123456789');                                       00500000
+ dcl     ESC                 char(1) static      init( '27'x );         00500100
+ dcl     CRLF                char(2) static      init( '0D0A'x );       00501000
+ dcl     BS                  char(1) static      init( 'E0'x );         00502000
+                                                                        00510000
+ dcl     FONTTAB             entry returns( ptr )                       00530000
+                             options( asm retcode );                    00540000
+ dcl     GETSYSI             entry( char(*), char(*) )                  00550000
+                             returns( fixed bin(31) );                  00560000
+ dcl     PDSMEM              entry( char(8), char(8), char(8) )         00570000
+                             returns( fixed bin(31) );                  00580000
+ dcl     RECL                entry( * )                                 00590000
+                             returns( fixed bin(31) );                  00600000
+ dcl     TOKEN               entry( char(8), ptr )                      00610000
+                             returns( fixed bin(31) );                  00620000
+ dcl     AJFCB               entry(*)                                   00630000
+                             returns( ptr );                            00640000
+ dcl     ALLOC               entry( char(*) varying , )                 00650000
+                             options( asm inter retcode );              00660000
+ dcl     HEXDUMP             entry( ptr, fixed bin(15), char(*) );      00670000
+                                                                        00680000
+ %include builtins;                                                     00690000
+                                                                        00691000
+ %page;                                                                 00692000
+ %include pclincl;                                                      00692100
+ %page;                                                                 00692200
+                                                                        00692300
+ on endfile(fontlib) fnt_eof='1'b;                                      00692400
+                                                                        00693000
+ allocate parmarea set(aparm);                                          00693200
+ allocate statarea set(stat_addr);                                      00693301
+ stat_cards      = 0;                                                   00693501
+                                                                        00695000
+ call process_parm;                                                     00696000
+                                                                        00911000
+ /* --------------------------------- */                                00911100
+ /* Read Font Table                   */                                00911200
+ /* --------------------------------- */                                00911300
+ fetch FONTTAB;                                                         00911400
+ call FONTTAB();                                                        00911500
+ addr(font_addr)->rcx = pliretv();                                      00911600
+ call pliretc(0);                                                       00911700
+                                                                        00911800
+ /* --------------------------------- */                                00911900
+ /* Write job header                  */                                00912000
+ /* --------------------------------- */                                00913000
+ open file(pclout) output;                                              00913100
+ pcl_work = ESC || '%-12345X@PJL JOB NAME="FONTLOAD"';                  00914000
+ call write_pcl( addr(pcl_work)+2,                                      00914100
+                 length(pcl_work),                                      00914200
+                 addr(ascii)                                            00914300
+               );                                                       00915000
+ pcl_work = CRLF;                                                       00916000
+ call write_pcl( addr(pcl_work)+2,                                      00917000
+                 length(pcl_work),                                      00918000
+                 null()                                                 00919000
+               );                                                       00920000
+                                                                        01260000
+ /* --------------------------------- */                                01270000
+ /* Process Fonts                     */                                01280000
+ /* --------------------------------- */                                01290000
+                                                                        01330000
+ do i=1 to G_fonts;                                                     01331000
+ dummy: do;                                                             01331100
+   fname = G_fname(i);                                                  01331200
+   fnamex = 'F1' || substr(fname,3);                                    01331300
+   fnt_eof='0'b;                                                        01331400
+   rc = pdsmem( 'READ', 'FONTLIB', fnamex );                            01331500
+   if rcª=0 then do;                                                    01331600
+     put skip edit('Font ' || fname || ' not found.')(a);               01331700
+     leave dummy;                                                       01331800
+     end; /* rcª=0 */                                                   01331900
+   /* ............................... */                                01332000
+   /* Write font header               */                                01332100
+   /* ............................... */                                01332200
+   pcl_work = '@PJL RDYMSG DISPLAY="' || fname || '"';                  01332300
+   call write_pcl( addr(pcl_work)+2,                                    01332400
+                   length(pcl_work),                                    01332500
+                   addr(ascii)                                          01332600
+                 );                                                     01332700
+   pcl_work = CRLF;                                                     01332800
+   call write_pcl( addr(pcl_work)+2,                                    01332900
+                   length(pcl_work),                                    01333000
+                   null()                                               01333100
+                 );                                                     01333200
+   pcl_work = '@PJL FSDOWNLOAD FORMAT:BINARY ' ||                       01333300
+              'NAME="0:' || BS || 'pcl' || BS || 'fonts' || BS ||       01333400
+              fname || '"';                                             01333500
+   call write_pcl( addr(pcl_work)+2,                                    01333600
+                   length(pcl_work),                                    01333700
+                   addr(ascii)                                          01333800
+                 );                                                     01333900
+   pcl_work = CRLF;                                                     01334000
+   call write_pcl( addr(pcl_work)+2,                                    01334100
+                   length(pcl_work),                                    01334200
+                   null()                                               01334300
+                 );                                                     01334400
+   /* ............................... */                                01334500
+   /* Write font data                 */                                01334600
+   /* ............................... */                                01334700
+   open file(fontlib) input;                                            01334800
+   read file(fontlib) set(f_p);                                         01334900
+   do while(ªfnt_eof);                                                  01335000
+     call write_pcl( f_p, 80, null() );                                 01335100
+     read file(fontlib) set(f_p);                                       01335200
+     end; /* ªfnt_eof */                                                01335300
+   close file(fontlib);                                                 01335400
+   /* ............................... */                                01335500
+   /* Write font trailer              */                                01335600
+   /* ............................... */                                01335700
+   pcl_work = ESC || '%-12345X';                                        01335800
+   call write_pcl( addr(pcl_work)+2,                                    01335900
+                   length(pcl_work),                                    01336000
+                   addr(ascii)                                          01336100
+                 );                                                     01336200
+   put skip edit('Font ' || fname || ' successfully processed.')(a);    01336800
+   end dummy;                                                           01336900
+   end; /* do i */                                                      01337000
+                                                                        01340000
+ /* --------------------------------- */                                01341000
+ /* Write job trailer                 */                                01342000
+ /* --------------------------------- */                                01343000
+ pcl_work = '@PJL RDYMSG DISPLAY=""';            /* Reset oper dsply */ 01344000
+ call write_pcl( addr(pcl_work)+2,                                      01345000
+                 length(pcl_work),                                      01346000
+                 addr(ascii)                                            01347000
+               );                                                       01348000
+ pcl_work = CRLF;                                                       01349000
+ call write_pcl( addr(pcl_work)+2,                                      01349100
+                 length(pcl_work),                                      01349200
+                 null()                                                 01349300
+               );                                                       01349400
+ call write_pcl( null(), -1, null() );           /* Flush last card  */ 01350000
+ close file(pclout);                                                    01382000
+                                                                        01383000
+ return;                                                                01384000
+                                                                        01385000
+ %page;                                                                 01920000
+ /*-----------------------------------------*/                          01930000
+ /*     Parse PARM information              */                          01940000
+ /*-----------------------------------------*/                          01950000
+ process_parm: procedure;                                               01960000
+ dcl     command_text        char(80)       varying;                    01970000
+ dcl     w                   char(80)       varying;                    01980000
+ dcl     command             char(8)        varying;                    01990000
+ dcl     i                   fixed bin(15);                             02000000
+                                                                        02010000
+   /*===============================*/                                  02020000
+   /* No parm information currently */                                  02030000
+   /*===============================*/                                  02040000
+                                                                        02560000
+   end process_parm;                                                    02570000
+                                                                        02580000
+ %page;                                                                 02590000
+ /********************************************************************/ 03260300
+ /*    Write data to pclout                                          */ 03260400
+ /********************************************************************/ 03260500
+ write_pcl: procedure(p,len,t) options( reentrant );                    03261000
+ dcl     p                   ptr;                                       03261100
+ dcl     len                 fixed bin(15);                             03261200
+ dcl     t                   ptr;                                       03261300
+                                                                        03261400
+ dcl     pcl_hdr             char(80)  static                           03261500
+              init( ('5A'x || 'JES328X' || '01DA'x || (70)'FF'x) );     03261600
+ dcl     buffer_init         char(3)   static                           03261700
+              init( '5A354D'x );                                        03261800
+                                                                        03262100
+ /*-------------------------*/                                          03262200
+ /* First time thru         */                                          03262300
+ /*-------------------------*/                                          03262400
+ if pclo<=0 then do;                                                    03262500
+   pcl_rec = buffer_init || (80)'00'x;                                  03263200
+   pclo=length(buffer_init)+1;                                          03263300
+   end; /* pclo=0 */                                                    03263700
+                                                                        03263800
+ /*-------------------------*/                                          03263900
+ /* Flush out last card(s)  */                                          03264000
+ /*-------------------------*/                                          03264100
+ if len<0 then do;                                                      03264200
+   if pclo>4 then call punch_one_card;                                  03264300
+   do while( mod(stat_cards,6)ª=0 );                                    03264400
+     call punch_one_card; /* punch empty cards */                       03264500
+     end; /* do while */                                                03264600
+   return;                                                              03264700
+   end; /* len<0 */                                                     03264800
+                                                                        03264900
+ call move_data( (p), (len), (t) );    /* All parms called by value  */ 03267000
+                                                                        03267200
+ return;                                                                03267300
+                                                                        03267400
+ /*-------------------------*/                                          03267500
+ /* Data mover              */                                          03267600
+ /*-------------------------*/                                          03267700
+ move_data: procedure(atext,count,atab) options( reentrant );           03267800
+   dcl   atext               ptr,                                       03267900
+         text                char(32767)         based(atext);          03268000
+   dcl   count               fixed bin(15);                             03268100
+   dcl   atab                ptr,                                       03268200
+         ttab                char(256)           based(atab);           03268300
+   dcl  (char_in,char_out)   fixed bin(15);                             03268400
+   dcl   n                   fixed bin(15);                             03268500
+                                                                        03268600
+   char_in  = count;                                                    03268700
+   do while(char_in>0);                                                 03268800
+     char_out = 80-pclo+1;                                              03268900
+     n = min(char_in,char_out);                                         03269000
+     substr(pcl_rec,pclo,n) = substr(text,1,n);                         03269100
+     if atabª=null() then substr(pcl_rec,pclo,n) =                      03269200
+           translate( substr(pcl_rec,pclo,n), ttab );                   03269300
+     atext   = atext+n;                                                 03269400
+     char_in = char_in-n;                                               03269500
+     if n = char_out then call punch_one_card;                          03269600
+     else pclo=pclo+n;                                                  03269700
+     end; /* do while */                                                03269800
+                                                                        03269900
+   end move_data;                                                       03270000
+                                                                        03270100
+ punch_one_card: procedure options( reentrant );                        03270200
+   if mod(stat_cards,6) = 0                                             03270900
+   then write file(pclout) from(pcl_hdr);                               03271100
+   stat_cards = stat_cards + 1;                                         03271200
+   write file(pclout) from(pcl_rec);                                    03271300
+   pcl_rec = buffer_init || (80)'00'x;                                  03271800
+   pclo=length(buffer_init)+1;                                          03271900
+   end punch_one_card;                                                  03272100
+                                                                        03272200
+ end write_pcl;                                                         03272300
+                                                                        03273000
+ %page;                                                                 03280000
+                                                                        03443100
+ %include word;                                                         03443200
+ %include wordpos;                                                      03443300
+ %include ebcasc;                                                       03443400
+ %include lowercas;                                                     03443500
+                                                                        03443600
+ end FONTPCL;                                                           03443700
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 03443800
+//LKED.SYSLIB DD                                                        03443900
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    03444000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        03444100
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      03444200
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       03444300
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  03444400
+//LKED.SYSIN DD *                                                       03444500
+ LIBRARY (FONTTAB)                                                      03444601
+ MODE AMODE(31)                                                         03444700
+ MODE RMODE(24)                                                         03444800
+ NAME FONTPCL(R)                                                        03444900
+//* -------------- END OF LINKEDIT STEP ------------------------------* 03445000

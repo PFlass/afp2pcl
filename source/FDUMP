@@ -1,0 +1,179 @@
+//FLASSX   JOB  (),'FDUMP',CLASS=J,MSGCLASS=Z,                          00001000
+//         NOTIFY=$                                                     00002000
+//********************************************************************* 00003000
+//*                PL/I COMPILE AND LINK                              * 00004000
+//********************************************************************* 00005000
+// EXEC PLIXCL,                                                         00006000
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00007000
+//   PARM.LKED='LIST,MAP,XREF'                                          00008000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00009000
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00009102
+//PLI.SYSIN    DD *                                                     00009200
+ /*      FDUMP: Dump Metacode Font                                   */ 00011000
+                                                                        00020000
+ /********************************************************************/ 00030000
+ /*                                                                  */ 00040000
+ /* Program:       FDUMP                                             */ 00050000
+ /*                                                                  */ 00060000
+ /* Function:      Metacode Font Dump                                */ 00070000
+ /*                                                                  */ 00080000
+ /* Author:        Peter Flass -- NYS LBDC -- Aug, 1998              */ 00090001
+ /*                                                                  */ 00100000
+ /********************************************************************/ 00101000
+                                                                        00102000
+ fdump: proc options(main);                                             00103000
+   dcl   font                record input                               00103100
+                             env( FB recsize(128) );                    00103300
+   dcl   sysprint            print;                                     00103400
+   dcl   ip                  ptr,                                       00103500
+         ir                  char(128)           based(ip);             00103600
+   dcl   rc                  fixed bin(15)       init(0);               00103700
+   dcl   i                   fixed bin(15);                             00103800
+   dcl   c                   char(1);                                   00103900
+   dcl   eof                 bit(1)              init('0'b);            00104000
+   dcl   fdata            (*)char(128)           controlled;            00104100
+                                                                        00104201
+ %include builtins;                                                     00104300
+                                                                        00104401
+ %page;                                                                 00104500
+ /********************************************************************/ 00105200
+ /*      Metacode font information                                   */ 00105300
+ /********************************************************************/ 00105400
+ %dcl byte character;                                                   00105500
+ %byte = 'char(1)';                                                     00105600
+ %dcl word character;                                                   00105700
+ %word = 'char(2)';                                                     00105800
+ %dcl dwrd character;                                                   00105900
+ %dwrd = 'char(4)';                                                     00106000
+ %dcl astr character;                                                   00106100
+ %astr = 'char';                                                        00106200
+ dcl     fp                  ptr;                                       00106300
+ dcl   1 meta_font           unaligned based(fp),                       00106400
+         5 mf_orientation    byte,                                      00106500
+         5 mf_spacing        byte,                                      00106600
+         5 mf_points         word,                                      00106700
+         5 mf_line_space     word,                                      00106800
+         5 mf_char_space     word,                                      00106900
+         5 mf_bot_offset     word,                                      00107000
+         5 mf_top_offset     word,                                      00107100
+         5 mf_leading        word,                                      00107200
+         5 mf_char_align     word,                                      00107300
+         5 mf_hcc            byte,                                      00107400
+         5 mf_scc            byte,                                      00107500
+         5 mf_lfmb           word,                                      00107600
+         5 mf_lfmf           dwrd,                                      00107700
+         5 mf_name           astr(6),                                   00107800
+         5 fil1              word,                                      00107900
+         5 mf_cdi            word,                                      00108000
+         5 mf_ver            word,                                      00108100
+         5 mf_fcn            astr(10),                                  00108200
+         5 mf_type           word,                                      00108300
+         5 fil2              astr(194),                                 00108400
+         5 mf_mrk            word,                                      00108500
+         5 mf_mlk            word,                                      00108600
+         5 mf_sec            astr(10),                                  00108700
+         5 mf_cwt            astr(256),          /* Char. width tab.  */00108801
+         5 mf_end            char(0);                                   00108900
+                                                                        00109000
+   on endfile(font) eof='1'b;                                           00109100
+ %page;                                                                 00109200
+   /*---------------------------------*/                                00109300
+   /* Count font records              */                                00109400
+   /*---------------------------------*/                                00109500
+   open file(font) input;                                               00109600
+   read file(font) set(ip);                                             00109700
+   do while(eof='0'b);                                                  00109800
+     rc = rc+1;                                                         00109900
+     read file(font) set(ip);                                           00110000
+     end; /* do while */                                                00110100
+   eof='0'b;                                                            00110200
+   close file(font);                                                    00110300
+                                                                        00110400
+   /*---------------------------------*/                                00110500
+   /* Read font file                  */                                00110600
+   /*---------------------------------*/                                00110700
+   rc = rc-1;                                                           00110800
+   allocate fdata(rc);                                                  00110900
+   fp = addr(fdata);                                                    00111000
+   open file(font) input;                                               00111100
+   read file(font) set(ip);  /* Ignore font header                   */ 00111200
+   do i=1 to rc;                                                        00111300
+     read file(font) set(ip);                                           00111400
+     fp->ir = ir;                                                       00111500
+     fp = fp + cstg(ir);                                                00111600
+     end; /* do while */                                                00111700
+   eof='0'b;                                                            00111800
+   close file(font);                                                    00111900
+                                                                        00112000
+   /*---------------------------------*/                                00112100
+   /* Print font data                 */                                00112200
+   /*---------------------------------*/                                00112300
+   fp = addr(fdata);                                                    00112400
+   put skip edit( ebcdic(mf_name) )(a);                                 00112500
+   c = ebcdic(mf_spacing);                                              00112600
+   if c='F' then put skip edit('Fixed')(a);                             00112700
+   else          put skip edit('Proportional')(a);                      00112800
+   c = ebcdic(mf_orientation);                                          00112900
+   if      c='P' then put skip edit('Portrait')(a);                     00113000
+   else if c='L' then put skip edit('Landscape')(a);                    00113100
+   else if c='I' then put skip edit('Inverse Portrait')(a);             00113200
+   else if c='J' then put skip edit('Inverse Landscape')(a);            00113300
+   put skip edit('point size(bits):',swap(mf_points))(a,p'zzz9');       00113400
+   put skip edit('line space(bits):',swap(mf_line_space))(a,p'zzz9');   00113500
+   put skip edit('bot offset(bits):',swap(mf_bot_offset))(a,p'zzz9');   00113600
+   put skip edit('top offset(bits):',swap(mf_top_offset))(a,p'zzz9');   00113700
+   put skip edit('leading   (bits):',swap(mf_leading))(a,p'zzz9');      00113800
+   call dump_width( addr(mf_cwt) );                                     00113901
+   return;                                                              00114000
+                                                                        00114100
+ /*-----------------------------------*/                                00114201
+ /* Dump width table                  */                                00114301
+ /*-----------------------------------*/                                00114401
+ dump_width: proc(p);                                                   00114501
+ dcl     p                   ptr;                                       00114601
+ dcl     w            (0:255)bit(8) based(p);                           00114701
+ dcl     i                   fixed bin(15);                             00114801
+                                                                        00114901
+ do i=0 to 255;                                                         00115001
+   if mod(i,16)=0 then put skip;                                        00115101
+   put      edit( hex(addr(i)+1,1), ':', w(i) )                         00115201
+                 (x(1),a(2),a(1),p'zz9');                               00115301
+   end; /* do i */                                                      00115401
+                                                                        00115501
+ end dump_width;                                                        00115601
+                                                                        00115701
+ %page;                                                                 00115800
+ /*-----------------------------------*/                                00115900
+ /* Subroutines                       */                                00116000
+ /*-----------------------------------*/                                00116100
+ ebcdic: proc(a) returns( char(256) varying );                          00116200
+ dcl     a                   char(*)   varying;                         00116300
+ return( translate(a,ebcdic) );                                         00116400
+ %include ascebc;                                                       00116500
+ end ebcdic;                                                            00116600
+                                                                        00116700
+ swap: proc(w) returns( fixed bin(15) );                                00116800
+ dcl     w                   char(2);                                   00116900
+ dcl     p                   ptr;                                       00117000
+ dcl   1 x                   unaligned based(p),                        00117100
+         5 xhob              char(1),                                   00117200
+         5 xlob              char(1);                                   00117300
+ dcl     b                   fixed bin(15) based(p);                    00117400
+ dcl     t                   char(1);                                   00117500
+ p=addr(w);                                                             00117600
+ t=xhob; xhob=xlob; xlob=t;                                             00117700
+ return(b);                                                             00117800
+ end swap;                                                              00117900
+                                                                        00118000
+ %include hex;                                                          00118101
+                                                                        00119000
+   end fdump;                                                           00120000
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00130000
+//LKED.SYSLIB DD                                                        00140000
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        00150000
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      00160000
+//LKED.SYSLMOD  DD DSN=FLASS.PF.LOAD,DISP=SHR                           00170000
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00180000
+//LKED.SYSIN DD *                                                       00190000
+ NAME FDUMP(R)                                                          00200000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00210000

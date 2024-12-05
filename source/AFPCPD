@@ -1,0 +1,64 @@
+ /********************************************************************/ 00010000
+ /*                                                                  */ 00020000
+ /*      A D V A N C E D   F U N C T I O N   P R I N T I N G         */ 00021000
+ /*                      C O D E   P A G E                           */ 00021100
+ /*    S T R U C T U R E D   F I E L D   D E F I N I T I O N S       */ 00021200
+ /*                                                                  */ 00021300
+ /*    P.FLASS - NYS LBDC.                                           */ 00021400
+ /*    VERSION 1.0 - MAY,'95                                         */ 00021500
+ /*                                                                  */ 00021600
+ /********************************************************************/ 00021700
+                                                                        00021800
+ DCL   CPP                   PTR;                                       00021900
+                                                                        00022000
+ /*    BEGIN CODE PAGE (BCP)                                         */ 00023000
+ DCL 1 BCP                   UNALIGNED BASED(CPP),                      00024000
+       5 BCP_TOK             CHAR(8),       /* TOKEN NAME (OPT)      */ 00025000
+       5 BCP_EXT             CHAR(0);       /* START OF TRIPLETS     */ 00026000
+                                                                        00027000
+ /*    CODE PAGE CONTROL (CPC)                                       */ 00028000
+ DCL 1 CPC                   UNALIGNED BASED(CPP),                      00029000
+       5 CPC_DEF_GCID        CHAR(8),       /* DEFAULT GCID          */ 00030000
+       5 CPC_FLAGS1          BIT(8),        /* FLAGS                 */ 00040000
+       /* '0... ....'B - DEFAULT CHAR VALID                          */ 00050000
+       /* '1... ....'B - DEFAULT CHAR INVALID                        */ 00060000
+       /* '.0.. ....'B - DEFAULT CHAR TO BE PRINTED                  */ 00061000
+       /* '.1.. ....'B - DEFAULT CHAR NOT TO BE PRINTED              */ 00062000
+       /* '..0. ....'B - POS INCREMENTED BY DEFAULT CHAR INCR        */ 00063000
+       /* '..1. ....'B - POS NOT INCREMENTED                         */ 00064000
+       /* '...X XXXX'B - RESERVED ('0'B)                             */ 00064100
+       5 CPC_CPI_LEN         BIT(8),        /* CPI RPT GRP LEN '0A'X'*/ 00064200
+       5 CPC_VAR_SPACE       BIT(16),       /* VARIABLE SPACE CHAR   */ 00064300
+       5 CPC_FLAGS2          BIT(8);        /* FLAGS                 */ 00064400
+       /* 'XXXX ....'B - RESERVED ('0'B)                             */ 00064500
+       /* '.... 0...'B - VARIABLE SPACING NOT ENABLED                */ 00064600
+       /* '.... 1...'B - VARIABLE SPACING ENABLED                    */ 00064700
+       /* '.... .XXX'B - RESERVED ('0'B)                             */ 00064800
+                                                                        00064900
+ /*    CODE PAGE DESCRIPTOR (CPD)                                    */ 00065000
+ DCL 1 CPD                   UNALIGNED BASED(CPP),                      00066000
+       5 CPD_DESC            CHAR(32),      /* DESCRIPTION           */ 00067000
+       5 CPD_CON1            FIXED BIN(15), /* '0008'X               */ 00068000
+       5 CPD_NCP             FIXED BIN(31), /* NUMBER OF CODE POINTS */ 00069000
+       5 CPD_CON2            FIXED BIN(15), /* 'FFFF'X = '-1'        */ 00069100
+       5 CPD_RES1            FIXED BIN(15); /* '0000'X               */ 00069200
+                                                                        00069300
+ /*    CODE PAGE INDEX (CPI)                                         */ 00069400
+ /*    (REPEATS UP TO 256 TIMES)                                     */ 00069500
+ DCL 1 CPI                   UNALIGNED BASED(CPP),                      00069600
+       5 CPI_GCID            CHAR(8),       /* GRAPHIC CHAR ID       */ 00069700
+       5 CPI_FLAGS           BIT(8),        /* FLAGS                 */ 00069800
+       /* '0... ....'B - CHARACTER IS VALID                          */ 00069900
+       /* '1... ....'B - CHARACTER IS INVALID                        */ 00070000
+       /* '.0.. ....'B - CHARACTER TO BE PRINTED                     */ 00071000
+       /* '.1.. ....'B - CHARACTER NOT TO BE PRINTED                 */ 00072000
+       /* '..0. ....'B - PRINT POSITION TO BE INCREMENTED            */ 00073000
+       /* '..1. ....'B - PRINT POSITION NOT TO BE INCREMENTED        */ 00073100
+       /* '...X XXXX'B - RESERVED ('0'B)                             */ 00073200
+       5 CPI_CP              BIT(8),        /* CODE_POINT            */ 00073300
+       5 CPI_NEXT            CHAR(0);       /* A(NEXT_CPI ENTRY)     */ 00073400
+                                                                        00073500
+ /*    END CODE PAGE (ECP)                                           */ 00073600
+ DCL 1 ECP                   UNALIGNED BASED(CPP),                      00073700
+       5 ECP_TOK             CHAR(8);       /* TOKEN NAME (OPT)      */ 00073800
+                                                                        00073900

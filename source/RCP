@@ -1,0 +1,113 @@
+//FLASSR   JOB  (),'RCP',CLASS=J,MSGCLASS=Z,                            00000100
+//         NOTIFY=$                                                     00000200
+//*                                                                     00000300
+//*                                                                     00000400
+//********************************************************************* 00000500
+//*                PL/I COMPILE AND LINK                              * 00000600
+//********************************************************************* 00000700
+// EXEC PLIXCL,                                                         00000800
+//   PARM.PLI='M,NIS,STMT,XREF,GS,AG,LANGLVL(SPROG)',                   00000900
+//   PARM.LKED='LIST,MAP,XREF,LET,NCAL'                                 00001000
+//PLI.SYSPRINT DD SYSOUT=X,CHARS=GT12                                   00001100
+//PLI.SYSLIB   DD DSN=FLASS.PCL.SOURCE,DISP=SHR                         00001201
+//PLI.SYSIN    DD *                                                     00001400
+ /* FONTS - Font Library Process                                     */ 00001500
+                                                                        00001600
+ /********************************************************************/ 00001700
+ /*                                                                  */ 00001800
+ /*    Module ID: rcp                                                */ 00001900
+ /*                                                                  */ 00002000
+ /*    Author:    Peter Flass                                        */ 00002100
+ /*               NYS LBDC                                           */ 00002200
+ /*               Sep 1996                                           */ 00002300
+ /*                                                                  */ 00002400
+ /*    Function:  Read an external 'code page' file.                 */ 00002500
+ /*               (doesn't seem to be currently used).               */ 00002603
+ /*                                                                  */ 00002703
+ /********************************************************************/ 00002803
+                                                                        00002903
+ rcp: proc(cpage) returns(ptr);                                         00003003
+                                                                        00003103
+ dcl     cpage               char(8);                                   00003203
+                                                                        00003303
+ dcl     cpp                 ptr;                                       00003403
+ dcl   1 codepg       (0:255)char(8)             based(cpp);            00003503
+                                                                        00107100
+ dcl     codepage            record input;                              00107300
+ dcl     sysprint            print;                                     00107400
+                                                                        00107500
+ dcl     card                char(80)  varying;                         00107600
+ dcl     gcid                char(8);                                   00107700
+ dcl     cp                  char(2);                                   00107800
+ dcl   1 cpb                 unaligned based,                           00107900
+         5 cpb1              bit(8),                                    00108000
+         5 cpb2              bit(8);                                    00108100
+ dcl     j                   fixed bin(15);                             00108200
+ dcl     cpeof               bit(1)    init('0'b);                      00108300
+ dcl    (                                                               00108400
+         addr,                                                          00108500
+         length,                                                        00108600
+         substr,                                                        00108700
+         translate,                                                     00108800
+         verify                                                         00108900
+        )                    builtin;                                   00109000
+                                                                        00109100
+ dcl     hexchar             char(16)  static init                      00109200
+        ('0123456789ABCDEF');                                           00109300
+ dcl     hexdig              char(16)  static init                      00109400
+        ('000102030405060708090A0B0C0D0E0F'x);                          00109500
+ dcl     lc                  char(26)  static init                      00109600
+        ('abcdefghijklmnopqrstuvwxyz');                                 00109700
+ dcl     uc                  char(26)  static init                      00109800
+        ('ABCDEFGHIJKLMNOPQRSTUVWXYZ');                                 00109900
+                                                                        00110000
+ on endfile(codepage) cpeof='1'b;                                       00110100
+                                                                        00110200
+ allocate codepg set(cpp);                                              00110300
+                                                                        00110400
+ do j=0 to 255;                                                         00110500
+   codepg(j) = '        ';                                              00110600
+   end; /* do j */                                                      00110700
+                                                                        00110800
+ open file(codepage) input;                                             00110900
+ read file(codepage) into(card);                                        00111000
+                                                                        00111100
+ do while(ªcpeof);                                                      00111200
+   if substr(card,1,1)ª='*' &                                           00111300
+      substr(card,1,72)ª=' ' then do;                                   00111400
+     gcid = word(card,1);                                               00111500
+     gcid = translate(gcid,uc,lc);                                      00111600
+     cp   = word(card,2);                                               00111700
+     cp   = translate(cp,uc,lc);                                        00111800
+     if verify(cp,hexchar)ª=0 then do;                                  00111900
+       put skip edit('Invalid character in codepage: ',                 00112000
+                     gcid,' ',cp)(a);                                   00112100
+       gcid = '        ';                                               00112200
+       cp   = '00';                                                     00112300
+       end; /* verify */                                                00112400
+     cp   = translate(cp,hexdig,hexchar);                               00112500
+     j = (addr(cp)->cpb.cpb1)*16 + addr(cp)->cpb.cpb2;                  00112600
+     codepg(j) = gcid;                                                  00112700
+     end; /* then */                                                    00112800
+                                                                        00112900
+   read file(codepage) into(card);                                      00113000
+   end; /* do while */                                                  00113100
+                                                                        00113200
+ close file(codepage);                                                  00113300
+ return(cpp);                                                           00113400
+                                                                        00113500
+ %include word;                                                         00113600
+                                                                        00113700
+ end rcp;                                                               00113800
+//* -------------- SOURCE PROGRAM GOES BEFORE HERE -------------------* 00113900
+//LKED.SYSLIB DD                                                        00114000
+// DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                                    00114201
+// DD DSN=FLASS.PF.LOAD,DISP=SHR                                        00114301
+// DD DSN=SYSTEMS.LINKLIB,DISP=SHR                                      00114400
+//LKED.SYSLMOD  DD DSN=FLASS.PCL.LINKLIB,DISP=SHR                       00114501
+//LKED.SYSPRINT DD SYSOUT=X,CHARS=GT12                                  00114600
+//LKED.SYSIN DD *                                                       00114700
+ MODE AMODE(31)                                                         00114800
+ MODE RMODE(ANY)                                                        00114900
+ NAME RCP(R)                                                            00115000
+//* -------------- END OF LINKEDIT STEP ------------------------------* 00116000
